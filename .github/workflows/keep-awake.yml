@@ -2,7 +2,7 @@ name: Keep Render API Awake
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/14 * * * *'
   workflow_dispatch:
 
 jobs:
