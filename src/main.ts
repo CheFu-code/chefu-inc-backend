@@ -2,12 +2,37 @@ import { NestFactory } from '@nestjs/core';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 
+function getAllowedOrigins() {
+  const configuredOrigins =
+    process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN;
+  const defaults = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://chefuinc.com',
+    'https://academy.chefuinc.com',
+  ];
+
+  return (configuredOrigins ? configuredOrigins.split(',') : defaults)
+    .map(origin => origin.trim())
+    .filter(Boolean);
+}
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  const frontendOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:3000';
+  const allowedOrigins = getAllowedOrigins();
 
   app.enableCors({
-    origin: frontendOrigin.split(',').map(origin => origin.trim()),
+    origin(
+      origin: string | undefined,
+      callback: (error: Error | null, allow?: boolean) => void,
+    ) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error(`Origin ${origin} is not allowed by CORS.`));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
