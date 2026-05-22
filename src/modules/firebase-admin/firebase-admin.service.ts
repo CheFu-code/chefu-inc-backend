@@ -19,11 +19,11 @@ export class FirebaseAdminService {
     return this.app;
   }
 
-  auth() {
+  auth(): admin.auth.Auth {
     return admin.auth(this.getApp());
   }
 
-  db() {
+  db(): admin.firestore.Firestore {
     return admin.firestore(this.getApp());
   }
 

@@ -7,7 +7,6 @@ import {
   Body,
   UseGuards,
 } from '@nestjs/common';
-import { Content, GoogleGenAI } from '@google/genai';
 import { AuthGuard } from '../auth/auth.guard';
 
 type AIContent = {
@@ -30,11 +29,11 @@ export class AiController {
     }
 
     try {
-      const ai = this.getAIClient();
+      const ai = await this.getAIClient();
       const response = await ai.models.generateContent({
         model,
         config,
-        contents: body.contents,
+        contents: body.contents as never,
       });
       const text = response.candidates?.[0]?.content?.parts?.[0]?.text || '';
       const result = this.extractJsonFromText(text);
@@ -51,13 +50,14 @@ export class AiController {
     }
   }
 
-  private getAIClient() {
+  private async getAIClient() {
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
       throw new InternalServerErrorException('GEMINI_API_KEY is not configured.');
     }
 
+    const { GoogleGenAI } = await import('@google/genai');
     return new GoogleGenAI({ apiKey });
   }
 
@@ -66,7 +66,7 @@ export class AiController {
     return text.replace(/^```json[\r\n]+|```$/gi, '').trim();
   }
 
-  private isValidContent(contents: unknown): contents is Content[] {
+  private isValidContent(contents: unknown): contents is AIContent[] {
     return (
       Array.isArray(contents) &&
       contents.every(
@@ -74,6 +74,7 @@ export class AiController {
           item &&
           typeof item === 'object' &&
           'role' in item &&
+          typeof (item as AIContent).role === 'string' &&
           'parts' in item &&
           Array.isArray((item as AIContent).parts),
       )
