@@ -6,6 +6,7 @@ import {
   Headers,
   HttpCode,
   InternalServerErrorException,
+  Logger,
   Post,
   Req,
   Res,
@@ -23,6 +24,7 @@ import { SessionSignerService } from './session-signer.service';
 
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
   private readonly otpAttempts = new Map<string, number[]>();
 
   constructor(
@@ -33,6 +35,7 @@ export class AuthController {
   @Post('session')
   async createSession(
     @Headers('authorization') authorization: string | undefined,
+    @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
     const idToken = authorization?.startsWith('Bearer ')
@@ -42,6 +45,14 @@ export class AuthController {
     if (!idToken) {
       throw new UnauthorizedException('Missing Firebase ID token.');
     }
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'auth_session_create_started',
+        requestId: request.headers['x-request-id'] || null,
+        hasBearerToken: Boolean(idToken),
+      }),
+    );
 
     const decodedToken = await this.firebaseAdmin.auth().verifyIdToken(idToken);
     const expiresIn = SESSION_MAX_AGE_SECONDS * 1000;
@@ -63,6 +74,15 @@ export class AuthController {
       this.getCookieOptions(),
     );
 
+    this.logger.log(
+      JSON.stringify({
+        event: 'auth_session_created',
+        uid: decodedToken.uid,
+        email: decodedToken.email || null,
+        roleCount: roles.length,
+      }),
+    );
+
     return { ok: true };
   }
 
@@ -80,6 +100,13 @@ export class AuthController {
     }
 
     this.enforceOtpThrottle(request.ip || 'unknown');
+    this.logger.log(
+      JSON.stringify({
+        event: 'otp_send_started',
+        ip: request.ip,
+        phoneLast4: to.slice(-4),
+      }),
+    );
 
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
     const token = process.env.WHATSAPP_SYSTEM_USER_TOKEN;
@@ -115,11 +142,25 @@ export class AuthController {
     };
 
     if (!upstream.ok) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'otp_send_failed',
+          statusCode: upstream.status,
+          details: data,
+        }),
+      );
       throw new InternalServerErrorException({
         error: 'Failed to send OTP template',
         details: data,
       });
     }
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'otp_send_succeeded',
+        messageId: data.messages?.[0]?.id || null,
+      }),
+    );
 
     return {
       success: true,
@@ -132,6 +173,7 @@ export class AuthController {
   clearSession(@Res({ passthrough: true }) response: Response) {
     response.clearCookie(SESSION_COOKIE_NAME, this.getClearCookieOptions());
     response.clearCookie(SESSION_META_COOKIE_NAME, this.getClearCookieOptions());
+    this.logger.log(JSON.stringify({ event: 'auth_session_cleared' }));
     return { ok: true };
   }
 

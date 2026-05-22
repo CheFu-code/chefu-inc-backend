@@ -2,6 +2,7 @@ import {
   CanActivate,
   ExecutionContext,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Request } from 'express';
@@ -16,6 +17,8 @@ type RequestWithUser = Request & {
 
 @Injectable()
 export class AuthGuard implements CanActivate {
+  private readonly logger = new Logger(AuthGuard.name);
+
   constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
 
   async canActivate(context: ExecutionContext) {
@@ -41,8 +44,28 @@ export class AuthGuard implements CanActivate {
         roles: await this.getUserRoles(email),
       };
 
+      this.logger.log(
+        JSON.stringify({
+          event: 'auth_guard_allowed',
+          path: request.originalUrl,
+          uid: decoded.uid,
+          email,
+          authSource: token ? 'bearer' : 'session_cookie',
+          roleCount: request.user.roles.length,
+        }),
+      );
+
       return true;
-    } catch {
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'auth_guard_denied',
+          path: request.originalUrl,
+          hasBearerToken: Boolean(token),
+          hasSessionCookie: Boolean(sessionCookie),
+          reason: error instanceof Error ? error.message : 'unknown',
+        }),
+      );
       throw new UnauthorizedException('Authentication required.');
     }
   }

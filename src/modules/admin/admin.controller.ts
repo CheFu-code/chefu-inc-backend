@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   InternalServerErrorException,
+  Logger,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -13,6 +14,8 @@ import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 @Controller('admin')
 @UseGuards(AuthGuard, AdminGuard)
 export class AdminController {
+  private readonly logger = new Logger(AdminController.name);
+
   constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
 
   @Post('delete-user')
@@ -24,8 +27,24 @@ export class AdminController {
       throw new BadRequestException('Email required.');
     }
 
+    this.logger.warn(
+      JSON.stringify({
+        event: 'admin_delete_user_started',
+        uid: body.uid,
+        email: body.email,
+      }),
+    );
+
     await this.firebaseAdmin.auth().deleteUser(body.uid);
     await this.firebaseAdmin.db().collection('users').doc(body.email).delete();
+
+    this.logger.warn(
+      JSON.stringify({
+        event: 'admin_delete_user_succeeded',
+        uid: body.uid,
+        email: body.email,
+      }),
+    );
 
     return { success: true };
   }
@@ -49,6 +68,13 @@ export class AdminController {
     if (!phoneNumberId || !token) {
       throw new InternalServerErrorException('Missing WhatsApp env vars.');
     }
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'admin_otp_send_started',
+        phoneLast4: to.slice(-4),
+      }),
+    );
 
     const response = await fetch(
       `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`,
@@ -77,11 +103,25 @@ export class AdminController {
     };
 
     if (!response.ok) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'admin_otp_send_failed',
+          statusCode: response.status,
+          details: data,
+        }),
+      );
       throw new InternalServerErrorException({
         error: 'Failed to send OTP template',
         details: data,
       });
     }
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'admin_otp_send_succeeded',
+        messageId: data.messages?.[0]?.id || null,
+      }),
+    );
 
     return {
       success: true,

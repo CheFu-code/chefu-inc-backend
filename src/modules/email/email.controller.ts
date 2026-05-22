@@ -3,6 +3,7 @@ import {
   Controller,
   Headers,
   InternalServerErrorException,
+  Logger,
   Post,
   Res,
 } from '@nestjs/common';
@@ -10,6 +11,8 @@ import { Response } from 'express';
 
 @Controller('email')
 export class EmailController {
+  private readonly logger = new Logger(EmailController.name);
+
   @Post('password-changed')
   async passwordChanged(
     @Body() body: unknown,
@@ -24,6 +27,13 @@ export class EmailController {
       );
     }
 
+    this.logger.log(
+      JSON.stringify({
+        event: 'password_changed_email_started',
+        hasAuthorization: Boolean(authorization),
+      }),
+    );
+
     const upstream = await fetch(endpoint, {
       method: 'POST',
       headers: {
@@ -35,6 +45,14 @@ export class EmailController {
 
     response.status(upstream.status);
     const contentType = upstream.headers.get('content-type') || '';
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'password_changed_email_finished',
+        statusCode: upstream.status,
+        contentType,
+      }),
+    );
 
     if (contentType.includes('application/json')) {
       return upstream.json().catch(() => ({}));

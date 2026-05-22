@@ -1,6 +1,8 @@
 import { NestFactory } from '@nestjs/core';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
+import { Logger } from '@nestjs/common';
+import { GlobalExceptionFilter } from './common/global-exception.filter';
 
 function getAllowedOrigins() {
   const configuredOrigins =
@@ -18,6 +20,7 @@ function getAllowedOrigins() {
 }
 
 async function bootstrap() {
+  const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
   const allowedOrigins = getAllowedOrigins();
 
@@ -38,9 +41,19 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
   app.use(cookieParser());
+  app.useGlobalFilters(new GlobalExceptionFilter());
 
   const port = Number(process.env.PORT || 4000);
   await app.listen(port);
+  logger.log(
+    JSON.stringify({
+      event: 'api_started',
+      port,
+      nodeEnv: process.env.NODE_ENV || 'development',
+      allowedOrigins,
+      authCookieDomain: process.env.AUTH_COOKIE_DOMAIN || null,
+    }),
+  );
 }
 
 void bootstrap();

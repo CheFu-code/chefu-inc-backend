@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import admin from 'firebase-admin';
 
 @Injectable()
 export class FirebaseAdminService {
+  private readonly logger = new Logger(FirebaseAdminService.name);
   private app?: admin.app.App;
 
   getApp() {
@@ -15,6 +16,14 @@ export class FirebaseAdminService {
       : admin.initializeApp({
           credential: admin.credential.cert(serviceAccount),
         });
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'firebase_admin_initialized',
+        existingAppReused: admin.apps.length > 1,
+        projectId: serviceAccount.projectId || null,
+      }),
+    );
 
     return this.app;
   }

@@ -3,6 +3,7 @@ import {
   BadRequestException,
   Controller,
   InternalServerErrorException,
+  Logger,
   Post,
   Body,
   UseGuards,
@@ -21,6 +22,8 @@ const config = {
 
 @Controller('ai')
 export class AiController {
+  private readonly logger = new Logger(AiController.name);
+
   @Post('generate')
   @UseGuards(AuthGuard)
   async generate(@Body() body: { contents?: unknown }) {
@@ -29,6 +32,13 @@ export class AiController {
     }
 
     try {
+      this.logger.log(
+        JSON.stringify({
+          event: 'ai_generate_started',
+          contentCount: body.contents.length,
+          model,
+        }),
+      );
       const ai = await this.getAIClient();
       const response = await ai.models.generateContent({
         model,
@@ -39,8 +49,16 @@ export class AiController {
       const result = this.extractJsonFromText(text);
 
       if (!result) {
+        this.logger.error(JSON.stringify({ event: 'ai_generate_empty_result' }));
         throw new BadGatewayException('No content returned from AI model.');
       }
+
+      this.logger.log(
+        JSON.stringify({
+          event: 'ai_generate_succeeded',
+          resultLength: result.length,
+        }),
+      );
 
       return { result };
     } catch (error) {
