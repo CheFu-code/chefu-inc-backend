@@ -32,17 +32,23 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           ? (payload as { message?: unknown }).message
           : 'Request failed';
 
-    this.logger.error(
-      JSON.stringify({
-        event: 'request_error',
-        requestId: getRequestId(request),
-        method: request.method,
-        path: request.originalUrl,
-        statusCode: status,
-        message,
-      }),
-      exception instanceof Error ? exception.stack : undefined,
-    );
+    const logPayload = JSON.stringify({
+      event: 'request_error',
+      requestId: getRequestId(request),
+      method: request.method,
+      path: request.originalUrl,
+      statusCode: status,
+      message,
+    });
+
+    if (status >= 500) {
+      this.logger.error(
+        logPayload,
+        exception instanceof Error ? exception.stack : undefined,
+      );
+    } else {
+      this.logger.warn(logPayload);
+    }
 
     response.status(status).json({
       error: message,
