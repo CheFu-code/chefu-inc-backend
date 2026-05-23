@@ -9,6 +9,7 @@ import { EmailModule } from './modules/email/email.module';
 import { FirebaseAdminModule } from './modules/firebase-admin/firebase-admin.module';
 import { HealthController } from './modules/health/health.controller';
 import { KeepaliveModule } from './modules/keepalive/keepalive.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { KeepaliveModule } from './modules/keepalive/keepalive.module';
     EmailModule,
     BillingModule,
     CoursesModule,
+    NotificationsModule,
     KeepaliveModule,
   ],
   controllers: [HealthController],

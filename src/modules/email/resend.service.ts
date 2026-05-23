@@ -17,6 +17,17 @@ export interface PasswordChangedNotificationData {
   timestamp: Date;
 }
 
+export interface PreferenceNotificationData {
+  email: string;
+  type: string;
+  subject: string;
+  title: string;
+  message: string;
+  userName?: string;
+  actionLabel?: string;
+  actionUrl?: string;
+}
+
 @Injectable()
 export class ResendService {
   private readonly logger = new Logger(ResendService.name);
@@ -25,6 +36,8 @@ export class ResendService {
   private readonly signInTemplateId = process.env.SIGNIN_ALERT_TEMPLATE_ID;
   private readonly passwordChangedTemplateId =
     process.env.PASSWORD_CHANGED_TEMPLATE_ID;
+  private readonly notificationTemplateId =
+    process.env.NOTIFICATION_EMAIL_TEMPLATE_ID;
   private readonly fromAddress =
     process.env.SIGNIN_ALERT_FROM ||
     process.env.SECURITY_EMAIL_FROM ||
@@ -35,6 +48,10 @@ export class ResendService {
   private readonly securityUrl =
     process.env.SIGNIN_ALERT_SECURITY_URL ||
     'https://academy.chefuinc.com/settings/account';
+  private readonly notificationFromAddress =
+    process.env.NOTIFICATION_EMAIL_FROM ||
+    process.env.SECURITY_EMAIL_FROM ||
+    this.fromAddress;
 
   async sendSignInNotification(data: SignInNotificationData): Promise<void> {
     if (!this.RESEND_API_KEY) {
@@ -90,6 +107,37 @@ export class ResendService {
       JSON.stringify({
         event: 'password_changed_notification_sent',
         email: data.email,
+      }),
+    );
+  }
+
+  async sendPreferenceNotification(
+    data: PreferenceNotificationData,
+  ): Promise<void> {
+    if (!this.RESEND_API_KEY) {
+      this.logger.warn('RESEND_API_KEY is not configured - skipping email');
+      return;
+    }
+
+    const response = await fetch(this.RESEND_API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(this.getPreferenceNotificationPayload(data)),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Resend request failed: ${response.status} ${error}`);
+    }
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'preference_notification_sent',
+        email: data.email,
+        type: data.type,
       }),
     );
   }
@@ -185,6 +233,117 @@ export class ResendService {
       html: this.getPasswordChangedEmailTemplate(data),
       text: this.getPasswordChangedEmailText(data),
     };
+  }
+
+  private getPreferenceNotificationPayload(data: PreferenceNotificationData) {
+    const details = {
+      userName: this.escapeHtml(data.userName || data.email.split('@')[0] || 'there'),
+      type: this.escapeHtml(this.formatNotificationType(data.type)),
+      title: this.escapeHtml(data.title),
+      message: this.escapeHtml(data.message),
+      actionLabel: this.escapeHtml(data.actionLabel || 'Open CheFu Academy'),
+      actionUrl: data.actionUrl || 'https://academy.chefuinc.com/dashboard',
+    };
+    const basePayload = {
+      from: this.notificationFromAddress,
+      to: [data.email],
+      subject: data.subject,
+    };
+
+    if (this.notificationTemplateId) {
+      return {
+        ...basePayload,
+        template: {
+          id: this.notificationTemplateId,
+          variables: {
+            userName: details.userName,
+            APP_NAME: 'CheFu Academy',
+            type: details.type,
+            title: details.title,
+            message: details.message,
+            actionLabel: details.actionLabel,
+            actionUrl: details.actionUrl,
+            preferencesUrl: 'https://academy.chefuinc.com/settings/account',
+            supportUrl: this.supportUrl,
+            year: new Date().getUTCFullYear().toString(),
+          },
+        },
+      };
+    }
+
+    return {
+      ...basePayload,
+      html: this.getPreferenceNotificationTemplate(details),
+      text: [
+        `Hi ${details.userName},`,
+        '',
+        data.title,
+        '',
+        data.message,
+        '',
+        `${details.actionLabel}: ${details.actionUrl}`,
+        'Manage preferences: https://academy.chefuinc.com/settings/account',
+        '',
+        'CheFu Academy',
+      ].join('\n'),
+    };
+  }
+
+  private getPreferenceNotificationTemplate(details: {
+    userName: string;
+    type: string;
+    title: string;
+    message: string;
+    actionLabel: string;
+    actionUrl: string;
+  }) {
+    return `
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${details.title}</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f5f7fb;color:#111827;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7fb;padding:24px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;">
+            <tr>
+              <td style="background:#0f172a;padding:30px 28px;color:#ffffff;">
+                <div style="display:inline-block;background:#38bdf8;color:#082f49;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;">
+                  ${details.type}
+                </div>
+                <h1 style="margin:18px 0 0;font-size:28px;line-height:1.2;font-weight:800;">
+                  ${details.title}
+                </h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:30px 28px;">
+                <p style="margin:0 0 18px;font-size:16px;line-height:1.7;">Hi ${details.userName},</p>
+                <p style="margin:0 0 22px;color:#374151;font-size:15px;line-height:1.7;">${details.message}</p>
+                <a href="${this.escapeAttribute(details.actionUrl)}" style="display:inline-block;background:#0284c7;color:#ffffff;text-decoration:none;border-radius:8px;padding:12px 18px;font-size:14px;font-weight:700;">
+                  ${details.actionLabel}
+                </a>
+                <p style="margin:24px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
+                  You can manage email preferences from your CheFu Academy account settings.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 28px;color:#6b7280;font-size:12px;line-height:1.6;">
+                <strong style="color:#374151;">CheFu Academy</strong><br>
+                Copyright ${new Date().getUTCFullYear()} CheFu Inc. All rights reserved.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
   }
 
   private getPasswordChangedEmailText(
@@ -463,6 +622,20 @@ export class ResendService {
     };
 
     return providers[provider] || provider;
+  }
+
+  private formatNotificationType(type: string): string {
+    const labels: Record<string, string> = {
+      activity: 'Activity update',
+      general: 'General update',
+      marketing: 'Marketing update',
+      security: 'Security notice',
+      courseReminders: 'Course reminder',
+      aiCourseCompletion: 'AI course update',
+      weeklyProgressSummary: 'Weekly progress',
+    };
+
+    return labels[type] || type;
   }
 
   private escapeHtml(text: string): string {
