@@ -223,8 +223,20 @@ export class AuthController {
   @Delete('session')
   @HttpCode(200)
   clearSession(@Res({ passthrough: true }) response: Response) {
-    response.clearCookie(SESSION_COOKIE_NAME, this.getClearCookieOptions());
-    response.clearCookie(SESSION_META_COOKIE_NAME, this.getClearCookieOptions());
+    for (const options of this.getClearCookieOptionsList()) {
+      response.clearCookie(SESSION_COOKIE_NAME, options);
+      response.clearCookie(SESSION_META_COOKIE_NAME, options);
+      response.cookie(SESSION_COOKIE_NAME, '', {
+        ...options,
+        expires: new Date(0),
+        maxAge: 0,
+      });
+      response.cookie(SESSION_META_COOKIE_NAME, '', {
+        ...options,
+        expires: new Date(0),
+        maxAge: 0,
+      });
+    }
     this.logger.log(JSON.stringify({ event: 'auth_session_cleared' }));
     return { ok: true };
   }
@@ -245,16 +257,21 @@ export class AuthController {
     };
   }
 
-  private getClearCookieOptions() {
+  private getClearCookieOptionsList() {
     const cookieDomain =
       process.env.NODE_ENV === 'production'
         ? process.env.AUTH_COOKIE_DOMAIN || undefined
         : undefined;
 
-    return {
-      path: '/',
-      domain: cookieDomain,
-    };
+    return [
+      {
+        path: '/',
+        domain: cookieDomain,
+      },
+      {
+        path: '/',
+      },
+    ];
   }
 
   private async getUserProfile(email?: string) {
