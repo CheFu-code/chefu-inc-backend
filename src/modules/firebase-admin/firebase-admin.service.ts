@@ -5,11 +5,13 @@ import admin from 'firebase-admin';
 export class FirebaseAdminService {
   private readonly logger = new Logger(FirebaseAdminService.name);
   private app?: admin.app.App;
+  private serviceAccountProjectId?: string;
 
   getApp() {
     if (this.app) return this.app;
 
     const serviceAccount = this.resolveServiceAccount();
+    this.serviceAccountProjectId = serviceAccount.projectId;
 
     this.app = admin.apps.length
       ? admin.app()
@@ -34,6 +36,11 @@ export class FirebaseAdminService {
 
   db(): admin.firestore.Firestore {
     return admin.firestore(this.getApp());
+  }
+
+  projectId() {
+    this.getApp();
+    return this.serviceAccountProjectId || null;
   }
 
   private resolveServiceAccount(): admin.ServiceAccount {

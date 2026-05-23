@@ -22,6 +22,27 @@ import {
 } from './session.constants';
 import { SessionSignerService } from './session-signer.service';
 
+function decodeJwtPayload(token: string) {
+  const [, payload] = token.split('.');
+  if (!payload) return null;
+
+  try {
+    return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+      aud?: string;
+      iss?: string;
+      sub?: string;
+      auth_time?: number;
+      iat?: number;
+      exp?: number;
+      firebase?: {
+        sign_in_provider?: string;
+      };
+    };
+  } catch {
+    return null;
+  }
+}
+
 @Controller('auth')
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
@@ -46,11 +67,16 @@ export class AuthController {
       throw new UnauthorizedException('Missing Firebase ID token.');
     }
 
+    const tokenPayload = decodeJwtPayload(idToken);
     this.logger.log(
       JSON.stringify({
         event: 'auth_session_create_started',
         requestId: request.headers['x-request-id'] || null,
         hasBearerToken: Boolean(idToken),
+        tokenAudience: tokenPayload?.aud || null,
+        tokenIssuer: tokenPayload?.iss || null,
+        signInProvider: tokenPayload?.firebase?.sign_in_provider || null,
+        adminProjectId: this.firebaseAdmin.projectId(),
       }),
     );
 
@@ -70,6 +96,10 @@ export class AuthController {
         JSON.stringify({
           event: 'auth_session_create_failed',
           reason: error instanceof Error ? error.message : 'unknown',
+          tokenAudience: tokenPayload?.aud || null,
+          tokenIssuer: tokenPayload?.iss || null,
+          signInProvider: tokenPayload?.firebase?.sign_in_provider || null,
+          adminProjectId: this.firebaseAdmin.projectId(),
         }),
         error instanceof Error ? error.stack : undefined,
       );
