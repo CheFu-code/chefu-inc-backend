@@ -21,3 +21,21 @@ export type FlowSendPayload = {
   testEmail?: string;
 };
 
+export type FlowMessage = {
+  id: string;
+  folder: 'inbox' | 'sent' | 'scheduled' | 'campaigns' | 'archived' | 'trash';
+  direction: 'inbound' | 'outbound';
+  from: string;
+  to: string[];
+  subject: string;
+  preview: string;
+  text?: string;
+  html?: string;
+  label?: string;
+  unread: boolean;
+  starred: boolean;
+  attachments: number;
+  receivedAt?: string;
+  sentAt?: string;
+  createdAt?: string;
+};

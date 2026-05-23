@@ -3,12 +3,14 @@ import {
   Injectable,
   InternalServerErrorException,
 } from '@nestjs/common';
+import { FieldValue } from 'firebase-admin/firestore';
+import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
   applyVariables,
   renderFlowEmailShell,
   textToHtml,
 } from './flow-email-template';
-import { FlowRecipient, FlowSendPayload } from './flow-email.types';
+import { FlowMessage, FlowRecipient, FlowSendPayload } from './flow-email.types';
 
 type ResendEmailPayload = {
   from: string;
@@ -24,15 +26,41 @@ export class FlowService {
   private readonly resendApiKey = process.env.RESEND_API_KEY;
   private readonly resendApiUrl = 'https://api.resend.com';
 
+  constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
+
   getConfig() {
+    const senders = this.senderIdentities();
+    const defaultFrom =
+      process.env.FLOW_DEFAULT_FROM ||
+      process.env.RESEND_FROM ||
+      senders[0]?.email ||
+      'Flow Mail <mail@flow.chefuinc.com>';
+
     return {
-      defaultFrom:
-        process.env.FLOW_DEFAULT_FROM ||
-        process.env.RESEND_FROM ||
-        'Flow <onboarding@resend.dev>',
+      defaultFrom,
       defaultReplyTo: process.env.FLOW_DEFAULT_REPLY_TO || '',
+      inboundAddress: process.env.FLOW_INBOUND_ADDRESS || '',
+      inboundConfigured: Boolean(process.env.FLOW_INBOUND_SECRET),
       maxRecipients: this.maxRecipients(),
       resendConfigured: Boolean(this.resendApiKey),
+      senders,
+    };
+  }
+
+  async getMessages(folder = 'inbox') {
+    const normalizedFolder = this.normalizeFolder(folder);
+    const snapshot = await this.messagesCollection()
+      .orderBy('createdAt', 'desc')
+      .limit(100)
+      .get();
+    const messages = snapshot.docs
+      .map(doc => this.toMessage(doc.id, doc.data()))
+      .filter(message => message.folder === normalizedFolder);
+
+    return {
+      folder: normalizedFolder,
+      messages,
+      counts: this.countFolders(snapshot.docs.map(doc => doc.data())),
     };
   }
 
@@ -74,13 +102,58 @@ export class FlowService {
         : await this.postToResend('/emails/batch', emails, {
             'x-batch-validation': 'permissive',
           });
+    const sentAt = new Date().toISOString();
+
+    await this.messagesCollection().add({
+      attachments: 0,
+      createdAt: FieldValue.serverTimestamp(),
+      direction: 'outbound',
+      folder: 'sent',
+      from: normalized.from,
+      html: renderFlowEmailShell({
+        body: textToHtml(normalized.html),
+        ctaLabel: normalized.ctaLabel || undefined,
+        ctaUrl: normalized.ctaUrl || undefined,
+        preheader: normalized.preheader,
+        title: normalized.subject,
+      }),
+      label: normalized.action === 'test' ? 'Test' : 'Campaign',
+      preview: this.previewFromText(normalized.html),
+      sentAt,
+      starred: false,
+      subject: normalized.subject,
+      text: normalized.html,
+      to: recipients.map(recipient => recipient.email),
+      unread: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
 
     return {
       action: normalized.action,
       audienceName: normalized.audienceName,
       count: emails.length,
       data: response,
-      sentAt: new Date().toISOString(),
+      sentAt,
+    };
+  }
+
+  async receiveInbound(payload: unknown) {
+    const message = this.normalizeInbound(payload);
+    const doc = await this.messagesCollection().add({
+      ...message,
+      attachments: message.attachments || 0,
+      createdAt: FieldValue.serverTimestamp(),
+      folder: 'inbox',
+      direction: 'inbound',
+      unread: true,
+      starred: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    return {
+      id: doc.id,
+      received: true,
+      receivedAt: message.receivedAt,
     };
   }
 
@@ -98,12 +171,25 @@ export class FlowService {
     if (!payload.from || !payload.from.includes('@')) {
       throw new BadRequestException('A valid sender is required.');
     }
+    if (!this.isAllowedSender(payload.from)) {
+      throw new BadRequestException('Sender is not allowed for Flow Mail.');
+    }
     if (!payload.subject || payload.subject.trim().length < 2) {
       throw new BadRequestException('Subject is required.');
     }
     if (!payload.html || payload.html.trim().length < 20) {
       throw new BadRequestException('Message body is required.');
     }
+    if (!recipients.length && action === 'test' && payload.testEmail) {
+      recipients.push({
+        email: payload.testEmail,
+        firstName: 'Test',
+        lastName: 'Recipient',
+        company: 'CheFu Inc',
+        tags: ['test'],
+      });
+    }
+
     if (!recipients.length) {
       throw new BadRequestException('At least one valid recipient is required.');
     }
@@ -130,7 +216,7 @@ export class FlowService {
   ): ResendEmailPayload {
     const variables = {
       audienceName: payload.audienceName,
-      company: recipient.company || 'CheFu Academy',
+      company: recipient.company || 'CheFu Inc',
       email: recipient.email,
       firstName: recipient.firstName || recipient.email.split('@')[0],
       lastName: recipient.lastName || '',
@@ -192,5 +278,179 @@ export class FlowService {
   private maxRecipients() {
     return Math.max(1, Number(process.env.FLOW_MAX_RECIPIENTS || 100));
   }
-}
 
+  private senderIdentities() {
+    const raw =
+      process.env.FLOW_SENDERS ||
+      process.env.FLOW_DEFAULT_FROM ||
+      process.env.RESEND_FROM ||
+      '';
+
+    return raw
+      .split(';')
+      .map(value => value.trim())
+      .filter(Boolean)
+      .map(value => ({
+        label: this.senderLabel(value),
+        email: value,
+      }));
+  }
+
+  private isAllowedSender(sender: string) {
+    const senders = this.senderIdentities();
+    if (!senders.length) return true;
+
+    return senders.some(
+      identity => identity.email.toLowerCase() === sender.toLowerCase(),
+    );
+  }
+
+  private senderLabel(sender: string) {
+    const match = sender.match(/^(.+?)\s*<(.+?)>$/);
+    if (!match) return sender;
+
+    return `${match[1].replace(/^"|"$/g, '').trim()} (${match[2].trim()})`;
+  }
+
+  private messagesCollection() {
+    return this.firebaseAdmin.db().collection('flowMessages');
+  }
+
+  private normalizeFolder(value?: string) {
+    const folder = String(value || 'inbox').toLowerCase();
+    if (
+      ['inbox', 'sent', 'scheduled', 'campaigns', 'archived', 'trash'].includes(
+        folder,
+      )
+    ) {
+      return folder as FlowMessage['folder'];
+    }
+
+    return 'inbox';
+  }
+
+  private countFolders(messages: Array<Record<string, unknown>>) {
+    const counts = {
+      inbox: 0,
+      sent: 0,
+      scheduled: 0,
+      campaigns: 0,
+      archived: 0,
+      trash: 0,
+    };
+
+    messages.forEach(message => {
+      const folder = this.normalizeFolder(String(message.folder || 'inbox'));
+      counts[folder] += 1;
+    });
+
+    return counts;
+  }
+
+  private toMessage(
+    id: string,
+    data: Record<string, unknown>,
+  ): FlowMessage {
+    return {
+      id,
+      attachments: Number(data.attachments) || 0,
+      createdAt: this.timestampToIso(data.createdAt),
+      direction: data.direction === 'outbound' ? 'outbound' : 'inbound',
+      folder: this.normalizeFolder(String(data.folder || 'inbox')),
+      from: String(data.from || ''),
+      html: typeof data.html === 'string' ? data.html : undefined,
+      label: typeof data.label === 'string' ? data.label : undefined,
+      preview: String(data.preview || ''),
+      receivedAt:
+        typeof data.receivedAt === 'string'
+          ? data.receivedAt
+          : this.timestampToIso(data.receivedAt),
+      sentAt:
+        typeof data.sentAt === 'string'
+          ? data.sentAt
+          : this.timestampToIso(data.sentAt),
+      starred: Boolean(data.starred),
+      subject: String(data.subject || '(no subject)'),
+      text: typeof data.text === 'string' ? data.text : undefined,
+      to: Array.isArray(data.to) ? data.to.map(String) : [],
+      unread: Boolean(data.unread),
+    };
+  }
+
+  private normalizeInbound(payload: unknown) {
+    const input =
+      payload && typeof payload === 'object'
+        ? (payload as Record<string, unknown>)
+        : {};
+    const email =
+      input.email && typeof input.email === 'object'
+        ? (input.email as Record<string, unknown>)
+        : input;
+    const from = this.normalizeAddress(email.from || input.from);
+    const to = this.normalizeAddressList(email.to || input.to);
+    const subject = String(email.subject || input.subject || '(no subject)');
+    const text = String(email.text || email.text_body || input.text || '');
+    const html =
+      typeof email.html === 'string'
+        ? email.html
+        : typeof email.html_body === 'string'
+          ? email.html_body
+          : undefined;
+    const preview = this.previewFromText(text || this.stripHtml(html || ''));
+
+    if (!from) {
+      throw new BadRequestException('Inbound email sender is required.');
+    }
+
+    return {
+      attachments: Array.isArray(email.attachments) ? email.attachments.length : 0,
+      from,
+      html,
+      label: 'Inbound',
+      preview,
+      receivedAt: new Date().toISOString(),
+      subject,
+      text,
+      to,
+    };
+  }
+
+  private normalizeAddress(value: unknown) {
+    if (typeof value === 'string') return value;
+    if (value && typeof value === 'object') {
+      const address = value as Record<string, unknown>;
+      return String(address.email || address.address || address.text || '');
+    }
+
+    return '';
+  }
+
+  private normalizeAddressList(value: unknown) {
+    if (Array.isArray(value)) {
+      return value.map(item => this.normalizeAddress(item)).filter(Boolean);
+    }
+    const address = this.normalizeAddress(value);
+    return address ? [address] : [];
+  }
+
+  private previewFromText(value: string) {
+    return value.replace(/\s+/g, ' ').trim().slice(0, 180);
+  }
+
+  private stripHtml(value: string) {
+    return value.replace(/<[^>]+>/g, ' ');
+  }
+
+  private timestampToIso(value: unknown) {
+    if (
+      value &&
+      typeof value === 'object' &&
+      'toDate' in value &&
+      typeof (value as { toDate?: unknown }).toDate === 'function'
+    ) {
+      return (value as { toDate: () => Date }).toDate().toISOString();
+    }
+
+    return undefined;
+  }
+}

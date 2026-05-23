@@ -44,7 +44,7 @@ export function renderFlowEmailShell({
 }) {
   const action =
     ctaLabel && ctaUrl
-      ? `<a href="${escapeAttribute(ctaUrl)}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;border-radius:8px;padding:12px 18px;font-size:14px;font-weight:700;">${escapeHtml(ctaLabel)}</a>`
+      ? `<a href="${escapeAttribute(ctaUrl)}" style="display:inline-block;background:#1a73e8;color:#ffffff;text-decoration:none;border-radius:999px;padding:12px 18px;font-size:14px;font-weight:700;">${escapeHtml(ctaLabel)}</a>`
       : '';
 
   return `<!doctype html>
@@ -54,27 +54,27 @@ export function renderFlowEmailShell({
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>${escapeHtml(title)}</title>
   </head>
-  <body style="margin:0;padding:0;background:#f5f7fb;color:#111827;font-family:Arial,Helvetica,sans-serif;">
+  <body style="margin:0;padding:0;background:#f5f7fb;color:#202124;font-family:Arial,Helvetica,sans-serif;">
     <div style="display:none;max-height:0;overflow:hidden;">${escapeHtml(preheader || '')}</div>
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7fb;padding:24px 12px;">
       <tr>
         <td align="center">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;background:#ffffff;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;background:#ffffff;border:1px solid #dfe4ea;border-radius:18px;overflow:hidden;">
             <tr>
-              <td style="background:#0f172a;padding:30px 30px;color:#ffffff;">
-                <div style="font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#5eead4;">Flow Mail</div>
-                <h1 style="margin:16px 0 0;font-size:28px;line-height:1.2;">${escapeHtml(title)}</h1>
+              <td style="padding:26px 30px;border-bottom:1px solid #dfe4ea;">
+                <div style="font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#1a73e8;">Flow Mail</div>
+                <h1 style="margin:12px 0 0;font-size:26px;line-height:1.25;color:#202124;">${escapeHtml(title)}</h1>
               </td>
             </tr>
             <tr>
-              <td style="padding:30px;color:#334155;font-size:15px;line-height:1.7;">
+              <td style="padding:30px;color:#3c4043;font-size:15px;line-height:1.75;">
                 ${body}
                 ${action ? `<div style="margin-top:24px;">${action}</div>` : ''}
               </td>
             </tr>
             <tr>
-              <td style="background:#f8fafc;border-top:1px solid #e5e7eb;padding:18px 30px;color:#64748b;font-size:12px;line-height:1.6;">
-                Sent with Flow using Resend. You are receiving this because you are part of this audience.
+              <td style="background:#f8fafc;border-top:1px solid #dfe4ea;padding:18px 30px;color:#5f6368;font-size:12px;line-height:1.6;">
+                Sent with Flow Mail by CheFu Inc.
               </td>
             </tr>
           </table>
@@ -100,4 +100,3 @@ function escapeHtml(value: string) {
 function escapeAttribute(value: string) {
   return escapeHtml(value).replace(/`/g, '&#096;');
 }
-
