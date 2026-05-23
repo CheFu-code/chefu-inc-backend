@@ -3,6 +3,7 @@ import { RequestLoggerMiddleware } from './common/request-logger.middleware';
 import { AdminModule } from './modules/admin/admin.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { BillingModule } from './modules/billing/billing.module';
 import { EmailModule } from './modules/email/email.module';
 import { FirebaseAdminModule } from './modules/firebase-admin/firebase-admin.module';
 import { HealthController } from './modules/health/health.controller';
@@ -14,6 +15,7 @@ import { HealthController } from './modules/health/health.controller';
     AiModule,
     AdminModule,
     EmailModule,
+    BillingModule,
   ],
   controllers: [HealthController],
 })
