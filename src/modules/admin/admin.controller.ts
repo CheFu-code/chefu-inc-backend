@@ -5,6 +5,7 @@ import {
   InternalServerErrorException,
   Logger,
   Post,
+  Patch,
   UseGuards,
 } from '@nestjs/common';
 import { AdminGuard } from '../auth/admin.guard';
@@ -47,6 +48,56 @@ export class AdminController {
     );
 
     return { success: true };
+  }
+
+  @Patch('user-roles')
+  async updateUserRoles(@Body() body: { email?: string; roles?: unknown }) {
+    if (!body.email) {
+      throw new BadRequestException('Email required.');
+    }
+
+    if (!Array.isArray(body.roles)) {
+      throw new BadRequestException('Roles must be an array.');
+    }
+
+    const roles = Array.from(
+      new Set(body.roles.map(role => String(role).trim().toLowerCase())),
+    ).filter(Boolean);
+
+    if (roles.length === 0) {
+      throw new BadRequestException('At least one role is required.');
+    }
+
+    const userRef = this.firebaseAdmin.db().collection('users').doc(body.email);
+    const snapshot = await userRef.get();
+
+    if (!snapshot.exists) {
+      throw new BadRequestException('User not found.');
+    }
+
+    const currentRoles = snapshot.data()?.roles;
+    const hadAdmin =
+      Array.isArray(currentRoles) &&
+      currentRoles.some(role => String(role).toLowerCase() === 'admin');
+
+    if (hadAdmin && !roles.includes('admin')) {
+      throw new BadRequestException('Admin role cannot be removed.');
+    }
+
+    await userRef.update({
+      roles,
+      updatedAt: new Date(),
+    });
+
+    this.logger.warn(
+      JSON.stringify({
+        event: 'admin_user_roles_updated',
+        email: body.email,
+        roles,
+      }),
+    );
+
+    return { success: true, roles };
   }
 
   @Post('send-otp')

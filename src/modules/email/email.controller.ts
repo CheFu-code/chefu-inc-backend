@@ -6,14 +6,17 @@ import {
   Logger,
   Post,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import { Response } from 'express';
+import { AuthGuard } from '../auth/auth.guard';
 
 @Controller('email')
 export class EmailController {
   private readonly logger = new Logger(EmailController.name);
 
   @Post('password-changed')
+  @UseGuards(AuthGuard)
   async passwordChanged(
     @Body() body: unknown,
     @Headers('authorization') authorization: string | undefined,

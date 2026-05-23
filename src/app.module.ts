@@ -4,9 +4,11 @@ import { AdminModule } from './modules/admin/admin.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { BillingModule } from './modules/billing/billing.module';
+import { CoursesModule } from './modules/courses/courses.module';
 import { EmailModule } from './modules/email/email.module';
 import { FirebaseAdminModule } from './modules/firebase-admin/firebase-admin.module';
 import { HealthController } from './modules/health/health.controller';
+import { KeepaliveModule } from './modules/keepalive/keepalive.module';
 
 @Module({
   imports: [
@@ -16,6 +18,8 @@ import { HealthController } from './modules/health/health.controller';
     AdminModule,
     EmailModule,
     BillingModule,
+    CoursesModule,
+    KeepaliveModule,
   ],
   controllers: [HealthController],
 })

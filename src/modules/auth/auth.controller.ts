@@ -20,7 +20,9 @@ import {
   SESSION_META_COOKIE_NAME,
   SessionMeta,
 } from './session.constants';
+import { MfaBackupCodeService } from './mfa-backup-code.service';
 import { SessionSignerService } from './session-signer.service';
+import { ResendService } from '../email/resend.service';
 
 function decodeJwtPayload(token: string) {
   const [, payload] = token.split('.');
@@ -51,6 +53,8 @@ export class AuthController {
   constructor(
     private readonly firebaseAdmin: FirebaseAdminService,
     private readonly sessionSigner: SessionSignerService,
+    private readonly mfaBackupCodes: MfaBackupCodeService,
+    private readonly resendService: ResendService,
   ) {}
 
   @Post('session')
@@ -135,7 +139,49 @@ export class AuthController {
       }),
     );
 
+    if (
+      decodedToken.email &&
+      tokenPayload?.firebase?.sign_in_provider &&
+      userProfile.securityEmailsEnabled
+    ) {
+      void this.resendService.sendSignInNotification({
+        email: decodedToken.email,
+        userName: meta.name,
+        provider: tokenPayload.firebase.sign_in_provider,
+        deviceInfo: request.headers['user-agent'] || undefined,
+        ipAddress: this.getClientIp(request),
+        timestamp: new Date(),
+      }).catch(error => {
+        this.logger.error(
+          JSON.stringify({
+            event: 'auth_sign_in_notification_failed',
+            uid: decodedToken.uid,
+            email: decodedToken.email || null,
+            reason: error instanceof Error ? error.message : 'unknown',
+          }),
+        );
+      });
+    }
+
     return { ok: true };
+  }
+
+  @Post('mfa/backup-code/session')
+  async createBackupCodeRecoverySession(
+    @Body()
+    body: {
+      email?: string;
+      code?: string;
+      mfaPendingCredential?: string;
+    },
+    @Req() request: Request,
+  ) {
+    return this.mfaBackupCodes.consumeBackupCode({
+      email: body.email,
+      code: body.code,
+      mfaPendingCredential: body.mfaPendingCredential,
+      ip: request.ip,
+    });
   }
 
   @Post('send-otp')
@@ -279,6 +325,7 @@ export class AuthController {
       return {
         name: '',
         roles: [],
+        securityEmailsEnabled: true,
       };
     }
 
@@ -299,7 +346,17 @@ export class AuthController {
     return {
       name,
       roles: Array.isArray(roles) ? roles.map(String) : [],
+      securityEmailsEnabled: data?.emailPreferences?.security !== false,
     };
+  }
+
+  private getClientIp(request: Request) {
+    const forwardedFor = request.headers['x-forwarded-for'];
+    const firstForwardedIp = Array.isArray(forwardedFor)
+      ? forwardedFor[0]
+      : forwardedFor?.split(',')[0];
+
+    return firstForwardedIp?.trim() || request.ip || undefined;
   }
 
   private normalizePhone(input: string) {

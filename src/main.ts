@@ -55,7 +55,7 @@ async function bootstrap() {
       callback(new Error(`Origin ${origin} is not allowed by CORS.`));
     },
     credentials: true,
-    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
   app.use((request: Request, response: Response, next: NextFunction) => {
@@ -70,7 +70,7 @@ async function bootstrap() {
       );
       response.setHeader(
         'Access-Control-Allow-Methods',
-        'GET,POST,DELETE,OPTIONS',
+        'GET,POST,PATCH,DELETE,OPTIONS',
       );
       response.setHeader('Vary', 'Origin');
     }
