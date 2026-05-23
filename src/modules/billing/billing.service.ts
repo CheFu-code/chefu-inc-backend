@@ -37,9 +37,8 @@ export class BillingService {
     return { billing, history };
   }
 
-  createCheckoutSession(user: BillingUser) {
-    const planId =
-      process.env.CLERK_BILLING_PLAN_ID || 'cplan_3E6vfLRRJBC9t4HfgdUWZJuLPuh';
+  createCheckoutSession(user: BillingUser, requestedPlan?: string) {
+    const planId = this.planIdFor(requestedPlan);
     const planPeriod = process.env.CLERK_BILLING_PLAN_PERIOD || 'month';
 
     return {
@@ -47,6 +46,7 @@ export class BillingService {
       email: user.email,
       planId,
       planPeriod,
+      planName: requestedPlan || 'Premium',
     };
   }
 
@@ -395,6 +395,23 @@ export class BillingService {
     } catch {
       throw new ServiceUnavailableException(`${name} must be a valid URL.`);
     }
+  }
+
+  private planIdFor(requestedPlan?: string) {
+    const normalizedPlan = requestedPlan?.trim().toLowerCase();
+
+    if (normalizedPlan === 'pro' && process.env.CLERK_BILLING_PRO_PLAN_ID) {
+      return process.env.CLERK_BILLING_PRO_PLAN_ID;
+    }
+
+    if (
+      normalizedPlan === 'premium' &&
+      process.env.CLERK_BILLING_PREMIUM_PLAN_ID
+    ) {
+      return process.env.CLERK_BILLING_PREMIUM_PLAN_ID;
+    }
+
+    return process.env.CLERK_BILLING_PLAN_ID || 'cplan_3E6vfLRRJBC9t4HfgdUWZJuLPuh';
   }
 
   private withReturnParams(url: URL, user: BillingUser) {

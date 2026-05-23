@@ -17,6 +17,10 @@ type BillingRequest = Request & {
   user?: AuthenticatedUser;
 };
 
+type CheckoutBody = {
+  plan?: string;
+};
+
 @Controller('billing')
 export class BillingController {
   constructor(private readonly billingService: BillingService) {}
@@ -29,8 +33,11 @@ export class BillingController {
 
   @UseGuards(AuthGuard)
   @Post('checkout')
-  createCheckout(@Req() request: BillingRequest) {
-    return this.billingService.createCheckoutSession(this.requireUser(request));
+  createCheckout(@Req() request: BillingRequest, @Body() body: CheckoutBody) {
+    return this.billingService.createCheckoutSession(
+      this.requireUser(request),
+      body?.plan,
+    );
   }
 
   @UseGuards(AuthGuard)
