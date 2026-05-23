@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Injectable,
   Logger,
   ServiceUnavailableException,
@@ -39,13 +38,15 @@ export class BillingService {
   }
 
   createCheckoutSession(user: BillingUser) {
-    const checkoutUrl = this.requiredUrl(
-      process.env.CLERK_BILLING_CHECKOUT_URL,
-      'CLERK_BILLING_CHECKOUT_URL',
-    );
+    const planId =
+      process.env.CLERK_BILLING_PLAN_ID || 'cplan_3E6vfLRRJBC9t4HfgdUWZJuLPuh';
+    const planPeriod = process.env.CLERK_BILLING_PLAN_PERIOD || 'month';
 
     return {
-      url: this.withReturnParams(checkoutUrl, user),
+      clientReferenceId: user.uid,
+      email: user.email,
+      planId,
+      planPeriod,
     };
   }
 
@@ -392,7 +393,7 @@ export class BillingService {
     try {
       return new URL(value);
     } catch {
-      throw new BadRequestException(`${name} must be a valid URL.`);
+      throw new ServiceUnavailableException(`${name} must be a valid URL.`);
     }
   }
 
