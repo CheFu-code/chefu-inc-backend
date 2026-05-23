@@ -56,7 +56,12 @@ async function bootstrap() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-flow-api-key',
+      'x-flow-webhook-secret',
+    ],
   });
   app.use((request: Request, response: Response, next: NextFunction) => {
     const origin = request.headers.origin;
@@ -66,7 +71,7 @@ async function bootstrap() {
       response.setHeader('Access-Control-Allow-Credentials', 'true');
       response.setHeader(
         'Access-Control-Allow-Headers',
-        'Content-Type,Authorization',
+        'Content-Type,Authorization,x-flow-api-key,x-flow-webhook-secret',
       );
       response.setHeader(
         'Access-Control-Allow-Methods',

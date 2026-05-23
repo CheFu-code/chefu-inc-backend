@@ -138,7 +138,9 @@ export class FlowService {
   }
 
   async receiveInbound(payload: unknown) {
-    const message = this.normalizeInbound(payload);
+    const message = this.normalizeInbound(
+      await this.enrichInboundPayload(payload),
+    );
     const doc = await this.messagesCollection().add({
       ...message,
       attachments: message.attachments || 0,
@@ -382,21 +384,33 @@ export class FlowService {
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
         : {};
-    const email =
-      input.email && typeof input.email === 'object'
-        ? (input.email as Record<string, unknown>)
+    const data =
+      input.data && typeof input.data === 'object'
+        ? (input.data as Record<string, unknown>)
         : input;
-    const from = this.normalizeAddress(email.from || input.from);
-    const to = this.normalizeAddressList(email.to || input.to);
-    const subject = String(email.subject || input.subject || '(no subject)');
-    const text = String(email.text || email.text_body || input.text || '');
+    const email =
+      data.email && typeof data.email === 'object'
+        ? (data.email as Record<string, unknown>)
+        : data;
+    const from = this.normalizeAddress(email.from || data.from || input.from);
+    const to = this.normalizeAddressList(email.to || data.to || input.to);
+    const subject = String(
+      email.subject || data.subject || input.subject || '(no subject)',
+    );
+    const text = String(
+      email.text || email.text_body || data.text || input.text || '',
+    );
     const html =
       typeof email.html === 'string'
         ? email.html
         : typeof email.html_body === 'string'
           ? email.html_body
-          : undefined;
-    const preview = this.previewFromText(text || this.stripHtml(html || ''));
+          : typeof data.html === 'string'
+            ? data.html
+            : undefined;
+    const preview = this.previewFromText(
+      text || this.stripHtml(html || '') || subject,
+    );
 
     if (!from) {
       throw new BadRequestException('Inbound email sender is required.');
@@ -435,6 +449,59 @@ export class FlowService {
 
   private previewFromText(value: string) {
     return value.replace(/\s+/g, ' ').trim().slice(0, 180);
+  }
+
+  private async enrichInboundPayload(payload: unknown) {
+    const input =
+      payload && typeof payload === 'object'
+        ? (payload as Record<string, unknown>)
+        : {};
+    const data =
+      input.data && typeof input.data === 'object'
+        ? (input.data as Record<string, unknown>)
+        : input;
+    const emailId =
+      typeof data.email_id === 'string'
+        ? data.email_id
+        : typeof data.id === 'string'
+          ? data.id
+          : '';
+
+    if (!emailId || !this.resendApiKey) return payload;
+
+    try {
+      const email = await this.getFromResend(`/emails/receiving/${emailId}`);
+      return {
+        ...input,
+        data: {
+          ...data,
+          ...(email && typeof email === 'object' ? email : {}),
+        },
+      };
+    } catch {
+      return payload;
+    }
+  }
+
+  private async getFromResend(path: string) {
+    const response = await fetch(`${this.resendApiUrl}${path}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${this.resendApiKey}`,
+      },
+    });
+    const data = await response.json().catch(async () => ({
+      message: await response.text().catch(() => ''),
+    }));
+
+    if (!response.ok) {
+      throw new InternalServerErrorException({
+        error: 'Resend request failed.',
+        details: data,
+      });
+    }
+
+    return data;
   }
 
   private stripHtml(value: string) {
