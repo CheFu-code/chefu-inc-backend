@@ -54,11 +54,28 @@ export class AuthController {
       }),
     );
 
-    const decodedToken = await this.firebaseAdmin.auth().verifyIdToken(idToken);
-    const expiresIn = SESSION_MAX_AGE_SECONDS * 1000;
-    const sessionCookie = await this.firebaseAdmin
-      .auth()
-      .createSessionCookie(idToken, { expiresIn });
+    let decodedToken: Awaited<
+      ReturnType<ReturnType<FirebaseAdminService['auth']>['verifyIdToken']>
+    >;
+    let sessionCookie: string;
+
+    try {
+      decodedToken = await this.firebaseAdmin.auth().verifyIdToken(idToken);
+      const expiresIn = SESSION_MAX_AGE_SECONDS * 1000;
+      sessionCookie = await this.firebaseAdmin
+        .auth()
+        .createSessionCookie(idToken, { expiresIn });
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'auth_session_create_failed',
+          reason: error instanceof Error ? error.message : 'unknown',
+        }),
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new UnauthorizedException('Failed to verify Firebase session.');
+    }
+
     const roles = await this.getUserRoles(decodedToken.email);
     const meta: SessionMeta = {
       uid: decodedToken.uid,
@@ -178,20 +195,30 @@ export class AuthController {
   }
 
   private getCookieOptions() {
+    const cookieDomain =
+      process.env.NODE_ENV === 'production'
+        ? process.env.AUTH_COOKIE_DOMAIN || undefined
+        : undefined;
+
     return {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax' as const,
       path: '/',
-      domain: process.env.AUTH_COOKIE_DOMAIN || undefined,
+      domain: cookieDomain,
       maxAge: SESSION_MAX_AGE_SECONDS * 1000,
     };
   }
 
   private getClearCookieOptions() {
+    const cookieDomain =
+      process.env.NODE_ENV === 'production'
+        ? process.env.AUTH_COOKIE_DOMAIN || undefined
+        : undefined;
+
     return {
       path: '/',
-      domain: process.env.AUTH_COOKIE_DOMAIN || undefined,
+      domain: cookieDomain,
     };
   }
 
