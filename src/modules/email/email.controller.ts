@@ -2,80 +2,75 @@ import {
   Body,
   Controller,
   Headers,
-  InternalServerErrorException,
   Logger,
   Post,
-  Res,
+  Req,
   UseGuards,
 } from '@nestjs/common';
-import { Response } from 'express';
+import { Request } from 'express';
+import { AuthenticatedUser } from '../auth/authenticated-user';
 import { AuthGuard } from '../auth/auth.guard';
+import { ResendService } from './resend.service';
+
+type RequestWithUser = Request & {
+  user?: AuthenticatedUser;
+};
 
 @Controller('email')
 export class EmailController {
   private readonly logger = new Logger(EmailController.name);
 
+  constructor(private readonly resendService: ResendService) {}
+
   @Post('password-changed')
   @UseGuards(AuthGuard)
   async passwordChanged(
-    @Body() body: unknown,
+    @Body() body: { deviceInfo?: string; userName?: string } | undefined,
     @Headers('authorization') authorization: string | undefined,
-    @Res({ passthrough: true }) response: Response,
+    @Req() request: RequestWithUser,
   ) {
-    const endpoint = this.resolvePasswordChangedEmailUrl();
-
-    if (!endpoint) {
-      throw new InternalServerErrorException(
-        'Password changed email endpoint is not configured.',
-      );
-    }
+    const email = request.user?.email;
 
     this.logger.log(
       JSON.stringify({
         event: 'password_changed_email_started',
         hasAuthorization: Boolean(authorization),
+        email,
       }),
     );
 
-    const upstream = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(authorization ? { Authorization: authorization } : {}),
-      },
-      body: JSON.stringify(body || {}),
-    });
+    if (!email) {
+      return {
+        sent: false,
+        reason: 'Authenticated user email was not available.',
+      };
+    }
 
-    response.status(upstream.status);
-    const contentType = upstream.headers.get('content-type') || '';
+    await this.resendService.sendPasswordChangedNotification({
+      email,
+      userName: body?.userName,
+      deviceInfo: body?.deviceInfo || request.headers['user-agent'],
+      ipAddress: this.getClientIp(request),
+      timestamp: new Date(),
+    });
 
     this.logger.log(
       JSON.stringify({
         event: 'password_changed_email_finished',
-        statusCode: upstream.status,
-        contentType,
+        sent: true,
+        email,
       }),
     );
 
-    if (contentType.includes('application/json')) {
-      return upstream.json().catch(() => ({}));
-    }
-
     return {
-      ok: upstream.ok,
-      message: await upstream.text().catch(() => ''),
+      sent: true,
     };
   }
 
-  private resolvePasswordChangedEmailUrl() {
-    const explicitUrl = process.env.PASSWORD_CHANGED_API_URL;
-    if (explicitUrl) return explicitUrl.replace(/\/+$/, '');
-
-    const projectId =
-      process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT;
-
-    if (!projectId) return '';
-
-    return `https://us-central1-${projectId}.cloudfunctions.net/sendPasswordChangedEmail`;
+  private getClientIp(request: Request) {
+    const forwardedFor = request.headers['x-forwarded-for'];
+    if (Array.isArray(forwardedFor)) return forwardedFor[0];
+    if (forwardedFor) return forwardedFor.split(',')[0]?.trim();
+    return request.ip;
   }
 }

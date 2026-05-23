@@ -7,10 +7,11 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { CoursesService } from './courses.service';
@@ -71,6 +72,25 @@ export class CoursesController {
       courseId,
       Number(body.chapterIndex),
     );
+  }
+
+  @Get(':courseId/export/pdf')
+  async exportPdf(
+    @Req() request: CourseRequest,
+    @Param('courseId') courseId: string,
+    @Res() response: Response,
+  ) {
+    const pdf = await this.coursesService.generateCoursePdf(
+      this.requireUser(request),
+      courseId,
+    );
+
+    response.setHeader('Content-Type', 'application/pdf');
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${pdf.fileName}"`,
+    );
+    response.send(pdf.buffer);
   }
 
   private requireUser(request: CourseRequest) {

@@ -23,11 +23,24 @@ Set these on the backend host:
 - `GEMINI_API_KEY`
 - `WHATSAPP_PHONE_NUMBER_ID`
 - `WHATSAPP_SYSTEM_USER_TOKEN`
-- `PASSWORD_CHANGED_API_URL` if using the email proxy endpoint
+- `RESEND_API_KEY` for security notification emails
+- `SIGNIN_ALERT_TEMPLATE_ID` if using a saved Resend template for sign-in alerts
+- `PASSWORD_CHANGED_TEMPLATE_ID` if using a saved Resend template for password-change alerts
+- `KEEPALIVE_PING_URL` is optional; on Render the cron defaults to `RENDER_EXTERNAL_URL/health`
 
 On the frontend host, set:
 
 - `NEXT_PUBLIC_API_BASE_URL=https://api.chefuinc.com`
+
+## Keepalive Cron
+
+The backend uses `node-cron` to ping the health endpoint every 14 minutes. Set
+`KEEPALIVE_PING_URL` if you want to force a specific public URL, for example:
+
+- `KEEPALIVE_PING_URL=https://your-render-service.onrender.com/health`
+
+If `KEEPALIVE_PING_URL` is empty, the service uses `RENDER_EXTERNAL_URL/health`
+on Render, then falls back to `http://127.0.0.1:${PORT}/health`.
 
 ## Routes
 

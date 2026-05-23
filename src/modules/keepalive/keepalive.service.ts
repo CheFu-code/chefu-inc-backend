@@ -71,7 +71,16 @@ export class KeepaliveService implements OnModuleInit, OnModuleDestroy {
     const configuredUrl = process.env.KEEPALIVE_PING_URL?.trim();
     if (configuredUrl) return configuredUrl;
 
+    const renderExternalUrl = process.env.RENDER_EXTERNAL_URL?.trim();
+    if (renderExternalUrl) {
+      return `${this.trimTrailingSlash(renderExternalUrl)}/health`;
+    }
+
     const port = process.env.PORT || '4000';
     return `http://127.0.0.1:${port}/health`;
+  }
+
+  private trimTrailingSlash(value: string) {
+    return value.replace(/\/+$/, '');
   }
 }
