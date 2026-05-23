@@ -7,6 +7,7 @@ import { BillingModule } from './modules/billing/billing.module';
 import { CoursesModule } from './modules/courses/courses.module';
 import { EmailModule } from './modules/email/email.module';
 import { FirebaseAdminModule } from './modules/firebase-admin/firebase-admin.module';
+import { FlowModule } from './modules/flow/flow.module';
 import { HealthController } from './modules/health/health.controller';
 import { KeepaliveModule } from './modules/keepalive/keepalive.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
@@ -21,6 +22,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
     BillingModule,
     CoursesModule,
     NotificationsModule,
+    FlowModule,
     KeepaliveModule,
   ],
   controllers: [HealthController],
