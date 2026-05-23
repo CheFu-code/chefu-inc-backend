@@ -106,11 +106,16 @@ export class AuthController {
       throw new UnauthorizedException('Failed to verify Firebase session.');
     }
 
-    const roles = await this.getUserRoles(decodedToken.email);
+    const userProfile = await this.getUserProfile(decodedToken.email);
     const meta: SessionMeta = {
       uid: decodedToken.uid,
       email: decodedToken.email || '',
-      roles,
+      name:
+        userProfile.name ||
+        decodedToken.name ||
+        decodedToken.email?.split('@')[0] ||
+        '',
+      roles: userProfile.roles,
       exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS,
     };
 
@@ -126,7 +131,7 @@ export class AuthController {
         event: 'auth_session_created',
         uid: decodedToken.uid,
         email: decodedToken.email || null,
-        roleCount: roles.length,
+        roleCount: userProfile.roles.length,
       }),
     );
 
@@ -252,8 +257,13 @@ export class AuthController {
     };
   }
 
-  private async getUserRoles(email?: string) {
-    if (!email) return [];
+  private async getUserProfile(email?: string) {
+    if (!email) {
+      return {
+        name: '',
+        roles: [],
+      };
+    }
 
     const snapshot = await this.firebaseAdmin
       .db()
@@ -261,8 +271,18 @@ export class AuthController {
       .doc(email)
       .get();
 
+    const data = snapshot.data();
+    const name =
+      typeof data?.fullname === 'string'
+        ? data.fullname
+        : typeof data?.name === 'string'
+          ? data.name
+          : '';
     const roles = snapshot.data()?.roles;
-    return Array.isArray(roles) ? roles.map(String) : [];
+    return {
+      name,
+      roles: Array.isArray(roles) ? roles.map(String) : [],
+    };
   }
 
   private normalizePhone(input: string) {
