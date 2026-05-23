@@ -13,10 +13,11 @@ function getAllowedOrigins() {
     'https://chefuinc.com',
     'https://academy.chefuinc.com',
   ];
+  const origins = configuredOrigins
+    ? [...defaults, ...configuredOrigins.split(',')]
+    : defaults;
 
-  return (configuredOrigins ? configuredOrigins.split(',') : defaults)
-    .map(origin => origin.trim())
-    .filter(Boolean);
+  return [...new Set(origins.map(origin => origin.trim()).filter(Boolean))];
 }
 
 async function bootstrap() {
