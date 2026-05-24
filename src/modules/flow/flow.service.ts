@@ -777,8 +777,14 @@ export class FlowService {
     }));
 
     if (response.status === 404) {
-      this.logger.warn(
-        `Resend inbound email not found for email_id=${emailId}. Storing webhook metadata only.`,
+      this.logger.log(
+        JSON.stringify({
+          event: 'flow_inbound_content_unavailable',
+          reason: 'resend_not_found',
+          emailId,
+          statusCode: response.status,
+          storedFallback: 'webhook_metadata',
+        }),
       );
       return null;
     }
