@@ -4,18 +4,24 @@ import {
   ForbiddenException,
   Get,
   Headers,
+  UnauthorizedException,
   Req,
   Query,
   Post,
 } from '@nestjs/common';
 import { Request } from 'express';
 import { Webhook } from 'svix';
+import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
+import { SESSION_COOKIE_NAME } from '../auth/session.constants';
 import { FlowSendPayload } from './flow-email.types';
 import { FlowService } from './flow.service';
 
 @Controller('flow')
 export class FlowController {
-  constructor(private readonly flowService: FlowService) {}
+  constructor(
+    private readonly flowService: FlowService,
+    private readonly firebaseAdmin: FirebaseAdminService,
+  ) {}
 
   @Get('config')
   getConfig() {
@@ -23,20 +29,22 @@ export class FlowController {
   }
 
   @Get('messages')
-  messages(
+  async messages(
     @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
     @Query('folder') folder?: string,
   ) {
-    this.assertFlowApiKey(flowApiKey);
+    await this.assertFlowAccess(flowApiKey, request);
     return this.flowService.getMessages(folder);
   }
 
   @Post('send')
-  send(
+  async send(
     @Body() body: FlowSendPayload,
     @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
   ) {
-    this.assertFlowApiKey(flowApiKey);
+    await this.assertFlowAccess(flowApiKey, request);
     return this.flowService.send(body);
   }
 
@@ -67,6 +75,26 @@ export class FlowController {
 
     if (flowApiKey !== requiredKey) {
       throw new ForbiddenException('Invalid Flow API key.');
+    }
+  }
+
+  private async assertFlowAccess(flowApiKey?: string, request?: Request) {
+    const requiredKey = process.env.FLOW_API_KEY;
+
+    if (!requiredKey || flowApiKey === requiredKey) {
+      return;
+    }
+
+    const sessionCookie = request?.cookies?.[SESSION_COOKIE_NAME];
+
+    if (!sessionCookie) {
+      throw new UnauthorizedException('Authentication required.');
+    }
+
+    try {
+      await this.firebaseAdmin.auth().verifySessionCookie(sessionCookie, true);
+    } catch {
+      throw new UnauthorizedException('Authentication required.');
     }
   }
 
