@@ -60,6 +60,7 @@ async function bootstrap() {
       'Content-Type',
       'Authorization',
       'x-flow-api-key',
+      'x-flow-session',
       'x-flow-webhook-secret',
     ],
   });
@@ -71,7 +72,7 @@ async function bootstrap() {
       response.setHeader('Access-Control-Allow-Credentials', 'true');
       response.setHeader(
         'Access-Control-Allow-Headers',
-        'Content-Type,Authorization,x-flow-api-key,x-flow-webhook-secret',
+        'Content-Type,Authorization,x-flow-api-key,x-flow-session,x-flow-webhook-secret',
       );
       response.setHeader(
         'Access-Control-Allow-Methods',

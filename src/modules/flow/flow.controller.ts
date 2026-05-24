@@ -15,6 +15,10 @@ import { Request } from 'express';
 import { Webhook } from 'svix';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { SESSION_COOKIE_NAME } from '../auth/session.constants';
+import {
+  FLOW_ACCESS_DENIED_MESSAGE,
+  isFlowAllowedEmail,
+} from './flow-access';
 import { FlowSendPayload } from './flow-email.types';
 import { FlowService } from './flow.service';
 
@@ -127,8 +131,18 @@ export class FlowController {
     }
 
     try {
-      await this.firebaseAdmin.auth().verifySessionCookie(sessionCookie, true);
-    } catch {
+      const decodedToken = await this.firebaseAdmin
+        .auth()
+        .verifySessionCookie(sessionCookie, true);
+
+      if (!isFlowAllowedEmail(decodedToken.email)) {
+        throw new ForbiddenException(FLOW_ACCESS_DENIED_MESSAGE);
+      }
+    } catch (error) {
+      if (error instanceof ForbiddenException) {
+        throw error;
+      }
+
       throw new UnauthorizedException('Authentication required.');
     }
   }

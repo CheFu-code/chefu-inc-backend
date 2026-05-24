@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Headers,
   HttpCode,
   Inject,
@@ -24,6 +25,12 @@ import {
 import { MfaBackupCodeService } from './mfa-backup-code.service';
 import { SessionSignerService } from './session-signer.service';
 import { ResendService } from '../email/resend.service';
+import {
+  FLOW_ACCESS_DENIED_MESSAGE,
+  FLOW_SESSION_HEADER,
+  isFlowAllowedEmail,
+  isFlowSessionRequest,
+} from '../flow/flow-access';
 
 function decodeJwtPayload(token: string) {
   const [, payload] = token.split('.');
@@ -65,6 +72,7 @@ export class AuthController {
   @Post('session')
   async createSession(
     @Headers('authorization') authorization: string | undefined,
+    @Headers(FLOW_SESSION_HEADER) flowSession: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
@@ -86,6 +94,7 @@ export class AuthController {
         tokenIssuer: tokenPayload?.iss || null,
         signInProvider: tokenPayload?.firebase?.sign_in_provider || null,
         adminProjectId: this.firebaseAdmin.projectId(),
+        flowSession: isFlowSessionRequest(flowSession),
       }),
     );
 
@@ -96,6 +105,37 @@ export class AuthController {
 
     try {
       decodedToken = await this.firebaseAdmin.auth().verifyIdToken(idToken);
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'auth_session_create_failed',
+          reason: error instanceof Error ? error.message : 'unknown',
+          tokenAudience: tokenPayload?.aud || null,
+          tokenIssuer: tokenPayload?.iss || null,
+          signInProvider: tokenPayload?.firebase?.sign_in_provider || null,
+          adminProjectId: this.firebaseAdmin.projectId(),
+          flowSession: isFlowSessionRequest(flowSession),
+        }),
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new UnauthorizedException('Failed to verify Firebase session.');
+    }
+
+    if (
+      isFlowSessionRequest(flowSession) &&
+      !isFlowAllowedEmail(decodedToken.email)
+    ) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'flow_session_denied',
+          uid: decodedToken.uid,
+          email: decodedToken.email || null,
+        }),
+      );
+      throw new ForbiddenException(FLOW_ACCESS_DENIED_MESSAGE);
+    }
+
+    try {
       const expiresIn = SESSION_MAX_AGE_SECONDS * 1000;
       sessionCookie = await this.firebaseAdmin
         .auth()
@@ -109,6 +149,7 @@ export class AuthController {
           tokenIssuer: tokenPayload?.iss || null,
           signInProvider: tokenPayload?.firebase?.sign_in_provider || null,
           adminProjectId: this.firebaseAdmin.projectId(),
+          flowSession: isFlowSessionRequest(flowSession),
         }),
         error instanceof Error ? error.stack : undefined,
       );
