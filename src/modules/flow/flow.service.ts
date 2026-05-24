@@ -155,22 +155,43 @@ export class FlowService {
     const message = this.normalizeInbound(
       await this.enrichInboundPayload(payload),
     );
-    const doc = await this.messagesCollection().add({
-      ...message,
-      attachments: message.attachments || 0,
-      createdAt: FieldValue.serverTimestamp(),
-      folder: 'inbox',
-      direction: 'inbound',
-      unread: true,
-      starred: false,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    const inboundData = this.withoutUndefined(message);
 
-    return {
-      id: doc.id,
-      received: true,
-      receivedAt: message.receivedAt,
-    };
+    try {
+      const doc = await this.messagesCollection().add({
+        ...inboundData,
+        attachments: message.attachments || 0,
+        createdAt: FieldValue.serverTimestamp(),
+        folder: 'inbox',
+        direction: 'inbound',
+        unread: true,
+        starred: false,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+
+      return {
+        id: doc.id,
+        received: true,
+        receivedAt: message.receivedAt,
+      };
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'flow_inbound_store_failed',
+          reason: error instanceof Error ? error.message : 'unknown',
+          from: message.from || null,
+          toCount: message.to.length,
+          subject: message.subject || null,
+          messageId: message.messageId || null,
+          resendEmailId: message.resendEmailId || null,
+          attachments: message.attachments || 0,
+          hasHtml: Boolean(message.html),
+          hasText: Boolean(message.text),
+        }),
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw error;
+    }
   }
 
   async getAttachment(messageId: string, attachmentId: string) {
@@ -685,6 +706,12 @@ export class FlowService {
         return normalized;
       })
       .filter((item): item is FlowAttachment => Boolean(item));
+  }
+
+  private withoutUndefined<T extends Record<string, unknown>>(value: T) {
+    return Object.fromEntries(
+      Object.entries(value).filter(([, entry]) => entry !== undefined),
+    ) as Partial<T>;
   }
 
   private previewFromText(value: string) {
