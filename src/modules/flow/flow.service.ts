@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import { FieldValue } from 'firebase-admin/firestore';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -23,6 +24,7 @@ type ResendEmailPayload = {
 
 @Injectable()
 export class FlowService {
+  private readonly logger = new Logger(FlowService.name);
   private readonly resendApiKey = process.env.RESEND_API_KEY;
   private readonly resendApiUrl = 'https://api.resend.com';
 
@@ -362,11 +364,23 @@ export class FlowService {
       from: String(data.from || ''),
       html: typeof data.html === 'string' ? data.html : undefined,
       label: typeof data.label === 'string' ? data.label : undefined,
+      messageId:
+        typeof data.messageId === 'string'
+          ? data.messageId
+          : typeof data.message_id === 'string'
+            ? data.message_id
+            : undefined,
       preview: String(data.preview || ''),
       receivedAt:
         typeof data.receivedAt === 'string'
           ? data.receivedAt
           : this.timestampToIso(data.receivedAt),
+      resendEmailId:
+        typeof data.resendEmailId === 'string'
+          ? data.resendEmailId
+          : typeof data.email_id === 'string'
+            ? data.email_id
+            : undefined,
       sentAt:
         typeof data.sentAt === 'string'
           ? data.sentAt
@@ -421,8 +435,25 @@ export class FlowService {
       from,
       html,
       label: 'Inbound',
+      messageId:
+        typeof email.message_id === 'string'
+          ? email.message_id
+          : typeof data.message_id === 'string'
+            ? data.message_id
+            : undefined,
       preview,
-      receivedAt: new Date().toISOString(),
+      receivedAt:
+        typeof email.created_at === 'string'
+          ? email.created_at
+          : typeof data.created_at === 'string'
+            ? data.created_at
+            : new Date().toISOString(),
+      resendEmailId:
+        typeof data.email_id === 'string'
+          ? data.email_id
+          : typeof email.email_id === 'string'
+            ? email.email_id
+            : undefined,
       subject,
       text,
       to,
@@ -460,45 +491,69 @@ export class FlowService {
       input.data && typeof input.data === 'object'
         ? (input.data as Record<string, unknown>)
         : input;
-    const emailId =
-      typeof data.email_id === 'string'
-        ? data.email_id
-        : typeof data.id === 'string'
-          ? data.id
-          : '';
+    const emailId = this.receivedEmailId(input);
 
     if (!emailId || !this.resendApiKey) return payload;
 
-    try {
-      const email = await this.getFromResend(`/emails/receiving/${emailId}`);
-      return {
-        ...input,
-        data: {
-          ...data,
-          ...(email && typeof email === 'object' ? email : {}),
-        },
-      };
-    } catch {
+    const email = await this.getReceivedEmailContent(emailId);
+    if (!email) {
       return payload;
     }
+
+    return {
+      ...input,
+      data: {
+        ...data,
+        ...(email && typeof email === 'object' ? email : {}),
+        email_id: emailId,
+      },
+    };
   }
 
-  private async getFromResend(path: string) {
-    const response = await fetch(`${this.resendApiUrl}${path}`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${this.resendApiKey}`,
+  private receivedEmailId(input: Record<string, unknown>) {
+    const data =
+      input.data && typeof input.data === 'object'
+        ? (input.data as Record<string, unknown>)
+        : input;
+    const email =
+      data.email && typeof data.email === 'object'
+        ? (data.email as Record<string, unknown>)
+        : undefined;
+
+    if (typeof data.email_id === 'string') return data.email_id;
+    if (typeof email?.email_id === 'string') return email.email_id;
+
+    return '';
+  }
+
+  private async getReceivedEmailContent(emailId: string) {
+    const response = await fetch(
+      `${this.resendApiUrl}/emails/receiving/${emailId}`,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${this.resendApiKey}`,
+        },
       },
-    });
+    );
     const data = await response.json().catch(async () => ({
       message: await response.text().catch(() => ''),
     }));
 
+    if (response.status === 404) {
+      this.logger.warn(
+        `Resend inbound email not found for email_id=${emailId}. Storing webhook metadata only.`,
+      );
+      return null;
+    }
+
     if (!response.ok) {
-      throw new InternalServerErrorException({
-        error: 'Resend request failed.',
-        details: data,
-      });
+      this.logger.warn(
+        `Resend received email lookup failed for email_id=${emailId}: ${JSON.stringify(
+          data,
+        )}`,
+      );
+      return null;
     }
 
     return data;

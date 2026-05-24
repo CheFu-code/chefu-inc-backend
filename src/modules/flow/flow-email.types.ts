@@ -32,6 +32,8 @@ export type FlowMessage = {
   text?: string;
   html?: string;
   label?: string;
+  messageId?: string;
+  resendEmailId?: string;
   unread: boolean;
   starred: boolean;
   attachments: number;
