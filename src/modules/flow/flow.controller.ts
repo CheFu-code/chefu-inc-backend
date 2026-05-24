@@ -119,8 +119,9 @@ export class FlowController {
 
   private async assertFlowAccess(flowApiKey?: string, request?: Request) {
     const requiredKey = process.env.FLOW_API_KEY;
+    const isBrowserRequest = Boolean(request?.headers.origin);
 
-    if (!requiredKey || flowApiKey === requiredKey) {
+    if (!isBrowserRequest && (!requiredKey || flowApiKey === requiredKey)) {
       return;
     }
 
