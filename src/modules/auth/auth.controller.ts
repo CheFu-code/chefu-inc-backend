@@ -5,6 +5,7 @@ import {
   Delete,
   Headers,
   HttpCode,
+  Inject,
   InternalServerErrorException,
   Logger,
   Post,
@@ -51,9 +52,13 @@ export class AuthController {
   private readonly otpAttempts = new Map<string, number[]>();
 
   constructor(
+    @Inject(FirebaseAdminService)
     private readonly firebaseAdmin: FirebaseAdminService,
+    @Inject(SessionSignerService)
     private readonly sessionSigner: SessionSignerService,
+    @Inject(MfaBackupCodeService)
     private readonly mfaBackupCodes: MfaBackupCodeService,
+    @Inject(ResendService)
     private readonly resendService: ResendService,
   ) {}
 

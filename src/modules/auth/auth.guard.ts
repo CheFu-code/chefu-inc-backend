@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  Inject,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -19,7 +20,10 @@ type RequestWithUser = Request & {
 export class AuthGuard implements CanActivate {
   private readonly logger = new Logger(AuthGuard.name);
 
-  constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
+  constructor(
+    @Inject(FirebaseAdminService)
+    private readonly firebaseAdmin: FirebaseAdminService,
+  ) {}
 
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<RequestWithUser>();

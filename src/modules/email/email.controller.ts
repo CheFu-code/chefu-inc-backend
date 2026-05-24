@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Headers,
+  Inject,
   Logger,
   Post,
   Req,
@@ -20,7 +21,10 @@ type RequestWithUser = Request & {
 export class EmailController {
   private readonly logger = new Logger(EmailController.name);
 
-  constructor(private readonly resendService: ResendService) {}
+  constructor(
+    @Inject(ResendService)
+    private readonly resendService: ResendService,
+  ) {}
 
   @Post('password-changed')
   @UseGuards(AuthGuard)

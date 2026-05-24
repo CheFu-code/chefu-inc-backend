@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Inject,
   InternalServerErrorException,
   Logger,
   Post,
@@ -17,7 +18,10 @@ import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 export class AdminController {
   private readonly logger = new Logger(AdminController.name);
 
-  constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
+  constructor(
+    @Inject(FirebaseAdminService)
+    private readonly firebaseAdmin: FirebaseAdminService,
+  ) {}
 
   @Post('delete-user')
   async deleteUser(@Body() body: { uid?: string; email?: string }) {

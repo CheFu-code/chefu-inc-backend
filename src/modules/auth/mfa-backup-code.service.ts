@@ -2,6 +2,7 @@ import {
   BadRequestException,
   HttpException,
   HttpStatus,
+  Inject,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -25,7 +26,10 @@ export class MfaBackupCodeService {
   private readonly logger = new Logger(MfaBackupCodeService.name);
   private readonly attempts = new Map<string, number[]>();
 
-  constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
+  constructor(
+    @Inject(FirebaseAdminService)
+    private readonly firebaseAdmin: FirebaseAdminService,
+  ) {}
 
   async consumeBackupCode({
     email,
