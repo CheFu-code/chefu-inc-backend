@@ -4,9 +4,11 @@ import {
   ForbiddenException,
   Get,
   Headers,
+  Inject,
   UnauthorizedException,
   Req,
   Query,
+  Param,
   Post,
 } from '@nestjs/common';
 import { Request } from 'express';
@@ -19,7 +21,9 @@ import { FlowService } from './flow.service';
 @Controller('flow')
 export class FlowController {
   constructor(
+    @Inject(FlowService)
     private readonly flowService: FlowService,
+    @Inject(FirebaseAdminService)
     private readonly firebaseAdmin: FirebaseAdminService,
   ) {}
 
@@ -36,6 +40,37 @@ export class FlowController {
   ) {
     await this.assertFlowAccess(flowApiKey, request);
     return this.flowService.getMessages(folder);
+  }
+
+  @Get('messages/:messageId/attachments')
+  async attachments(
+    @Param('messageId') messageId: string,
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    return this.flowService.listAttachments(messageId);
+  }
+
+  @Get('messages/:messageId/attachments/:attachmentId')
+  async attachment(
+    @Param('messageId') messageId: string,
+    @Param('attachmentId') attachmentId: string,
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    return this.flowService.getAttachment(messageId, attachmentId);
+  }
+
+  @Post('messages/:messageId/read')
+  async markRead(
+    @Param('messageId') messageId: string,
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    return this.flowService.markRead(messageId);
   }
 
   @Post('send')

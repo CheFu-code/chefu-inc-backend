@@ -37,7 +37,17 @@ export type FlowMessage = {
   unread: boolean;
   starred: boolean;
   attachments: number;
+  attachmentItems?: FlowAttachment[];
   receivedAt?: string;
   sentAt?: string;
   createdAt?: string;
+};
+
+export type FlowAttachment = {
+  id: string;
+  filename: string;
+  contentType?: string;
+  contentDisposition?: string | null;
+  contentId?: string | null;
+  size?: number;
 };

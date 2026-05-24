@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -11,7 +12,12 @@ import {
   renderFlowEmailShell,
   textToHtml,
 } from './flow-email-template';
-import { FlowMessage, FlowRecipient, FlowSendPayload } from './flow-email.types';
+import {
+  FlowAttachment,
+  FlowMessage,
+  FlowRecipient,
+  FlowSendPayload,
+} from './flow-email.types';
 
 type ResendEmailPayload = {
   from: string;
@@ -25,10 +31,16 @@ type ResendEmailPayload = {
 @Injectable()
 export class FlowService {
   private readonly logger = new Logger(FlowService.name);
-  private readonly resendApiKey = process.env.RESEND_API_KEY;
   private readonly resendApiUrl = 'https://api.resend.com';
 
-  constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
+  constructor(
+    @Inject(FirebaseAdminService)
+    private readonly firebaseAdmin: FirebaseAdminService,
+  ) {}
+
+  private get resendApiKey() {
+    return process.env.RESEND_API_KEY;
+  }
 
   getConfig() {
     const senders = this.senderIdentities();
@@ -158,6 +170,153 @@ export class FlowService {
       id: doc.id,
       received: true,
       receivedAt: message.receivedAt,
+    };
+  }
+
+  async getAttachment(messageId: string, attachmentId: string) {
+    const snapshot = await this.messagesCollection().doc(messageId).get();
+
+    if (!snapshot.exists) {
+      throw new BadRequestException('Message not found.');
+    }
+
+    const message = snapshot.data() || {};
+    const resendEmailId =
+      typeof message.resendEmailId === 'string'
+        ? message.resendEmailId
+        : typeof message.email_id === 'string'
+          ? message.email_id
+          : '';
+    const attachmentItems = this.normalizeAttachments(message.attachmentItems);
+    const attachment = attachmentItems.find(item => item.id === attachmentId);
+
+    if (!resendEmailId || !attachment) {
+      throw new BadRequestException('Attachment is not available.');
+    }
+
+    if (!this.resendApiKey) {
+      throw new InternalServerErrorException('RESEND_API_KEY is not configured.');
+    }
+
+    const response = await fetch(
+      `${this.resendApiUrl}/emails/receiving/${resendEmailId}/attachments/${attachmentId}`,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${this.resendApiKey}`,
+        },
+      },
+    );
+    const data = await response.json().catch(async () => ({
+      message: await response.text().catch(() => ''),
+    }));
+
+    if (!response.ok) {
+      throw new InternalServerErrorException({
+        error: 'Resend attachment request failed.',
+        details: data,
+      });
+    }
+
+    return {
+      ...attachment,
+      downloadUrl:
+        data && typeof data === 'object'
+          ? String((data as Record<string, unknown>).download_url || '')
+          : '',
+      expiresAt:
+        data && typeof data === 'object'
+          ? String((data as Record<string, unknown>).expires_at || '')
+          : '',
+    };
+  }
+
+  async listAttachments(messageId: string) {
+    const ref = this.messagesCollection().doc(messageId);
+    const snapshot = await ref.get();
+
+    if (!snapshot.exists) {
+      throw new BadRequestException('Message not found.');
+    }
+
+    const message = snapshot.data() || {};
+    const storedAttachments = this.normalizeAttachments(message.attachmentItems);
+    if (storedAttachments.length) {
+      return { attachments: storedAttachments };
+    }
+
+    const resendEmailId =
+      typeof message.resendEmailId === 'string'
+        ? message.resendEmailId
+        : typeof message.email_id === 'string'
+          ? message.email_id
+          : '';
+
+    if (!resendEmailId) {
+      return { attachments: [] };
+    }
+
+    if (!this.resendApiKey) {
+      throw new InternalServerErrorException('RESEND_API_KEY is not configured.');
+    }
+
+    const response = await fetch(
+      `${this.resendApiUrl}/emails/receiving/${resendEmailId}/attachments`,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${this.resendApiKey}`,
+        },
+      },
+    );
+    const data = await response.json().catch(async () => ({
+      message: await response.text().catch(() => ''),
+    }));
+
+    if (!response.ok) {
+      this.logger.warn(
+        `Resend attachment list failed for email_id=${resendEmailId}: ${JSON.stringify(
+          data,
+        )}`,
+      );
+      return { attachments: [] };
+    }
+
+    const rawAttachments =
+      data && typeof data === 'object'
+        ? (data as { data?: unknown; attachments?: unknown }).data ||
+          (data as { attachments?: unknown }).attachments ||
+          data
+        : data;
+    const attachments = this.normalizeAttachments(rawAttachments);
+
+    if (attachments.length) {
+      await ref.update({
+        attachmentItems: attachments,
+        attachments: attachments.length,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    return { attachments };
+  }
+
+  async markRead(messageId: string) {
+    const ref = this.messagesCollection().doc(messageId);
+    const snapshot = await ref.get();
+
+    if (!snapshot.exists) {
+      throw new BadRequestException('Message not found.');
+    }
+
+    await ref.update({
+      unread: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    return {
+      id: messageId,
+      unread: false,
     };
   }
 
@@ -358,6 +517,7 @@ export class FlowService {
     return {
       id,
       attachments: Number(data.attachments) || 0,
+      attachmentItems: this.normalizeAttachments(data.attachmentItems),
       createdAt: this.timestampToIso(data.createdAt),
       direction: data.direction === 'outbound' ? 'outbound' : 'inbound',
       folder: this.normalizeFolder(String(data.folder || 'inbox')),
@@ -430,8 +590,11 @@ export class FlowService {
       throw new BadRequestException('Inbound email sender is required.');
     }
 
+    const attachmentItems = this.normalizeAttachments(email.attachments);
+
     return {
-      attachments: Array.isArray(email.attachments) ? email.attachments.length : 0,
+      attachments: attachmentItems.length,
+      attachmentItems,
       from,
       html,
       label: 'Inbound',
@@ -476,6 +639,52 @@ export class FlowService {
     }
     const address = this.normalizeAddress(value);
     return address ? [address] : [];
+  }
+
+  private normalizeAttachments(value: unknown): FlowAttachment[] {
+    if (!Array.isArray(value)) return [];
+
+    return value
+      .map((item): FlowAttachment | null => {
+        if (!item || typeof item !== 'object') return null;
+
+        const attachment = item as Record<string, unknown>;
+        const id = String(attachment.id || '').trim();
+        if (!id) return null;
+
+        const normalized: FlowAttachment = {
+          id,
+          filename: String(attachment.filename || 'attachment').trim(),
+        };
+
+        const contentType =
+          typeof attachment.contentType === 'string'
+            ? attachment.contentType
+            : typeof attachment.content_type === 'string'
+              ? attachment.content_type
+              : undefined;
+        const contentDisposition =
+          typeof attachment.contentDisposition === 'string'
+            ? attachment.contentDisposition
+            : typeof attachment.content_disposition === 'string'
+              ? attachment.content_disposition
+              : null;
+        const contentId =
+          typeof attachment.contentId === 'string'
+            ? attachment.contentId
+            : typeof attachment.content_id === 'string'
+              ? attachment.content_id
+              : null;
+        const size = Number(attachment.size) || undefined;
+
+        if (contentType) normalized.contentType = contentType;
+        normalized.contentDisposition = contentDisposition;
+        normalized.contentId = contentId;
+        if (size) normalized.size = size;
+
+        return normalized;
+      })
+      .filter((item): item is FlowAttachment => Boolean(item));
   }
 
   private previewFromText(value: string) {
