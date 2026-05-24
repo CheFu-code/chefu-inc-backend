@@ -1,6 +1,6 @@
 export const FLOW_SESSION_HEADER = 'x-flow-session';
 export const FLOW_ACCESS_DENIED_MESSAGE =
-  'Flow access is restricted to approved sender accounts.';
+  'This account is not approved for Flow Mail. Sign in with an approved CheFu sender account to continue.';
 
 export function isFlowSessionRequest(value?: string) {
   return ['1', 'true', 'flow'].includes(String(value || '').toLowerCase());
