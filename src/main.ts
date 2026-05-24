@@ -4,16 +4,15 @@ import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
 import { GlobalExceptionFilter } from './common/global-exception.filter';
 import { NextFunction, Request, Response } from 'express';
+import {
+  CHEFU_APP_HEADER,
+  registeredAppOrigins,
+} from './modules/apps/app-registry';
 
 function getAllowedOrigins() {
   const configuredOrigins =
     process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN;
-  const defaults = [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'https://chefuinc.com',
-    'https://academy.chefuinc.com',
-  ];
+  const defaults = registeredAppOrigins();
   const origins = configuredOrigins
     ? [...defaults, ...configuredOrigins.split(',')]
     : defaults;
@@ -59,6 +58,7 @@ async function bootstrap() {
     allowedHeaders: [
       'Content-Type',
       'Authorization',
+      CHEFU_APP_HEADER,
       'x-flow-api-key',
       'x-flow-session',
       'x-flow-webhook-secret',
@@ -72,7 +72,7 @@ async function bootstrap() {
       response.setHeader('Access-Control-Allow-Credentials', 'true');
       response.setHeader(
         'Access-Control-Allow-Headers',
-        'Content-Type,Authorization,x-flow-api-key,x-flow-session,x-flow-webhook-secret',
+        `Content-Type,Authorization,${CHEFU_APP_HEADER},x-flow-api-key,x-flow-session,x-flow-webhook-secret`,
       );
       response.setHeader(
         'Access-Control-Allow-Methods',

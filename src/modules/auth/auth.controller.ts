@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   ForbiddenException,
+  Get,
   Headers,
   HttpCode,
   Inject,
@@ -12,10 +13,15 @@ import {
   Post,
   Req,
   Res,
+  UseGuards,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { AppsService } from '../apps/apps.service';
+import { CHEFU_APP_HEADER, ChefuAppId } from '../apps/app-registry';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
+import { AuthenticatedUser } from './authenticated-user';
+import { AuthGuard } from './auth.guard';
 import {
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE_SECONDS,
@@ -67,11 +73,24 @@ export class AuthController {
     private readonly mfaBackupCodes: MfaBackupCodeService,
     @Inject(ResendService)
     private readonly resendService: ResendService,
+    @Inject(AppsService)
+    private readonly appsService: AppsService,
   ) {}
+
+  @Get('me')
+  @UseGuards(AuthGuard)
+  getCurrentUser(@Req() request: Request & { user?: AuthenticatedUser }) {
+    if (!request.user) {
+      throw new UnauthorizedException('Authenticated user missing from request.');
+    }
+
+    return { user: request.user };
+  }
 
   @Post('session')
   async createSession(
     @Headers('authorization') authorization: string | undefined,
+    @Headers(CHEFU_APP_HEADER) chefuApp: string | undefined,
     @Headers(FLOW_SESSION_HEADER) flowSession: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
@@ -84,6 +103,7 @@ export class AuthController {
       throw new UnauthorizedException('Missing Firebase ID token.');
     }
 
+    const sessionAppId = this.resolveSessionAppId(chefuApp, flowSession);
     const tokenPayload = decodeJwtPayload(idToken);
     this.logger.log(
       JSON.stringify({
@@ -94,6 +114,7 @@ export class AuthController {
         tokenIssuer: tokenPayload?.iss || null,
         signInProvider: tokenPayload?.firebase?.sign_in_provider || null,
         adminProjectId: this.firebaseAdmin.projectId(),
+        app: sessionAppId,
         flowSession: isFlowSessionRequest(flowSession),
       }),
     );
@@ -114,6 +135,7 @@ export class AuthController {
           tokenIssuer: tokenPayload?.iss || null,
           signInProvider: tokenPayload?.firebase?.sign_in_provider || null,
           adminProjectId: this.firebaseAdmin.projectId(),
+          app: sessionAppId,
           flowSession: isFlowSessionRequest(flowSession),
         }),
         error instanceof Error ? error.stack : undefined,
@@ -122,7 +144,7 @@ export class AuthController {
     }
 
     if (
-      isFlowSessionRequest(flowSession) &&
+      sessionAppId === 'flow' &&
       !isFlowAllowedEmail(decodedToken.email)
     ) {
       this.logger.warn(
@@ -149,6 +171,7 @@ export class AuthController {
           tokenIssuer: tokenPayload?.iss || null,
           signInProvider: tokenPayload?.firebase?.sign_in_provider || null,
           adminProjectId: this.firebaseAdmin.projectId(),
+          app: sessionAppId,
           flowSession: isFlowSessionRequest(flowSession),
         }),
         error instanceof Error ? error.stack : undefined,
@@ -181,6 +204,7 @@ export class AuthController {
         event: 'auth_session_created',
         uid: decodedToken.uid,
         email: decodedToken.email || null,
+        app: sessionAppId,
         roleCount: userProfile.roles.length,
       }),
     );
@@ -209,7 +233,7 @@ export class AuthController {
       });
     }
 
-    return { ok: true };
+    return { ok: true, app: sessionAppId };
   }
 
   @Post('mfa/backup-code/session')
@@ -347,6 +371,26 @@ export class AuthController {
       domain: cookieDomain,
       maxAge: SESSION_MAX_AGE_SECONDS * 1000,
     };
+  }
+
+  private resolveSessionAppId(
+    chefuApp: string | undefined,
+    flowSession: string | undefined,
+  ): ChefuAppId {
+    const resolvedAppId = this.appsService.resolveId(chefuApp);
+    const isFlowRequest = isFlowSessionRequest(flowSession);
+
+    if (chefuApp && !resolvedAppId) {
+      throw new BadRequestException(`Unknown app "${chefuApp}".`);
+    }
+
+    if (isFlowRequest && resolvedAppId && resolvedAppId !== 'flow') {
+      throw new BadRequestException('Flow session header conflicts with app id.');
+    }
+
+    if (isFlowRequest) return 'flow';
+
+    return resolvedAppId || 'academy';
   }
 
   private getClearCookieOptionsList() {

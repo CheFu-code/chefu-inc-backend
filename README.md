@@ -12,6 +12,19 @@ npm run dev
 
 The API listens on `PORT` or `4000`.
 
+## Apps
+
+Shared app defaults live in `src/modules/apps/app-registry.ts`.
+Add new frontend apps there once, including local and production origins.
+Next/React frontends should send `x-chefu-app` when creating a session:
+
+- `x-chefu-app: academy`
+- `x-chefu-app: flow`
+- `x-chefu-app: music`
+
+Flow's existing `x-flow-session` header still works and still enforces the
+Flow sender allowlist.
+
 ## Production Environment
 
 Set these on the backend host:
@@ -46,6 +59,7 @@ on Render, then falls back to `http://127.0.0.1:${PORT}/health`.
 
 - `GET /health`
 - `POST /auth/session`
+- `GET /auth/me`
 - `DELETE /auth/session`
 - `POST /ai/generate`
 - `POST /admin/delete-user`

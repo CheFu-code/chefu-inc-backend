@@ -2,6 +2,7 @@ import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { RequestLoggerMiddleware } from './common/request-logger.middleware';
 import { AdminModule } from './modules/admin/admin.module';
 import { AiModule } from './modules/ai/ai.module';
+import { AppsModule } from './modules/apps/apps.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { CoursesModule } from './modules/courses/courses.module';
@@ -14,6 +15,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
 
 @Module({
   imports: [
+    AppsModule,
     FirebaseAdminModule,
     AuthModule,
     AiModule,
