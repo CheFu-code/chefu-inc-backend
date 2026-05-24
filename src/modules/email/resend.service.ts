@@ -41,7 +41,7 @@ export class ResendService {
   private readonly fromAddress =
     process.env.SIGNIN_ALERT_FROM ||
     process.env.SECURITY_EMAIL_FROM ||
-    'CheFu Academy <security@chefu.education>';
+    'CheFu Academy <security@chefuinc.com>';
   private readonly supportUrl =
     process.env.SIGNIN_ALERT_SUPPORT_URL ||
     'https://academy.chefuinc.com/support';
