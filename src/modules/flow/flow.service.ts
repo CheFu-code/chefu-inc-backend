@@ -261,6 +261,10 @@ export class FlowService {
     }
 
     const message = snapshot.data() || {};
+    if (this.isGmailReactionStoredMessage(message)) {
+      return { attachments: [] };
+    }
+
     const storedAttachments = this.normalizeAttachments(message.attachmentItems);
     if (storedAttachments.length) {
       return { attachments: storedAttachments };
@@ -535,10 +539,16 @@ export class FlowService {
     id: string,
     data: Record<string, unknown>,
   ): FlowMessage {
+    const attachmentItems = this.normalizeAttachments(data.attachmentItems);
+    const isReactionMessage = this.isGmailReactionStoredMessage(data);
+    const visibleAttachmentItems = isReactionMessage ? [] : attachmentItems;
+
     return {
       id,
-      attachments: Number(data.attachments) || 0,
-      attachmentItems: this.normalizeAttachments(data.attachmentItems),
+      attachments: isReactionMessage
+        ? visibleAttachmentItems.length
+        : Number(data.attachments) || visibleAttachmentItems.length,
+      attachmentItems: visibleAttachmentItems,
       createdAt: this.timestampToIso(data.createdAt),
       direction: data.direction === 'outbound' ? 'outbound' : 'inbound',
       folder: this.normalizeFolder(String(data.folder || 'inbox')),
@@ -611,7 +621,12 @@ export class FlowService {
       throw new BadRequestException('Inbound email sender is required.');
     }
 
-    const attachmentItems = this.normalizeAttachments(email.attachments);
+    const isReactionMessage = this.isGmailReactionText(
+      [text, this.stripHtml(html || ''), subject].join('\n'),
+    );
+    const attachmentItems = isReactionMessage
+      ? []
+      : this.normalizeAttachments(email.attachments);
 
     return {
       attachments: attachmentItems.length,
@@ -706,6 +721,22 @@ export class FlowService {
         return normalized;
       })
       .filter((item): item is FlowAttachment => Boolean(item));
+  }
+
+  private isGmailReactionStoredMessage(data: Record<string, unknown>) {
+    return this.isGmailReactionText(
+      [data.text, data.preview, data.subject, data.html]
+        .filter(value => typeof value === 'string')
+        .map(value => this.stripHtml(String(value)))
+        .join('\n'),
+    );
+  }
+
+  private isGmailReactionText(value: string) {
+    return (
+      /\breacted via\s+Gmail\b/i.test(value) ||
+      /emojiReactionEmail/i.test(value)
+    );
   }
 
   private withoutUndefined<T extends Record<string, unknown>>(value: T) {
