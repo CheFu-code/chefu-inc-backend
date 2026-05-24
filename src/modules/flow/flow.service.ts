@@ -44,11 +44,13 @@ export class FlowService {
 
   getConfig() {
     const senders = this.senderIdentities();
-    const defaultFrom =
-      process.env.FLOW_DEFAULT_FROM ||
-      process.env.RESEND_FROM ||
-      senders[0]?.email ||
-      'Flow Mail <mail@flow.chefuinc.com>';
+    const configuredDefault =
+      process.env.FLOW_DEFAULT_FROM || process.env.RESEND_FROM || '';
+    const defaultFrom = this.isConfiguredSender(configuredDefault, senders)
+      ? configuredDefault
+      : senders[0]?.email ||
+        configuredDefault ||
+        'Flow Mail <mail@flow.chefuinc.com>';
 
     return {
       defaultFrom,
@@ -67,14 +69,17 @@ export class FlowService {
       .orderBy('createdAt', 'desc')
       .limit(100)
       .get();
-    const messages = snapshot.docs
-      .map(doc => this.toMessage(doc.id, doc.data()))
-      .filter(message => message.folder === normalizedFolder);
+    const allMessages = snapshot.docs.map(doc =>
+      this.toMessage(doc.id, doc.data()),
+    );
+    const messages = allMessages.filter(
+      message => message.folder === normalizedFolder,
+    );
 
     return {
       folder: normalizedFolder,
       messages,
-      counts: this.countFolders(snapshot.docs.map(doc => doc.data())),
+      counts: this.countFolders(allMessages),
     };
   }
 
@@ -156,15 +161,20 @@ export class FlowService {
       await this.enrichInboundPayload(payload),
     );
     const inboundData = this.withoutUndefined(message);
+    const isInternalSender = this.isInternalSender(message.from);
+    const folder: FlowMessage['folder'] = isInternalSender
+      ? 'archived'
+      : 'inbox';
 
     try {
       const doc = await this.messagesCollection().add({
         ...inboundData,
         attachments: message.attachments || 0,
         createdAt: FieldValue.serverTimestamp(),
-        folder: 'inbox',
+        folder,
         direction: 'inbound',
-        unread: true,
+        label: isInternalSender ? 'Internal' : message.label,
+        unread: !isInternalSender,
         starred: false,
         updatedAt: FieldValue.serverTimestamp(),
       });
@@ -173,6 +183,7 @@ export class FlowService {
         id: doc.id,
         received: true,
         receivedAt: message.receivedAt,
+        folder,
       };
     } catch (error) {
       this.logger.error(
@@ -356,10 +367,12 @@ export class FlowService {
     if (action !== 'test' && action !== 'campaign') {
       throw new BadRequestException('Invalid Flow send action.');
     }
-    if (!payload.from || !payload.from.includes('@')) {
+    const from = this.resolveSender(payload.from || '');
+
+    if (!from) {
       throw new BadRequestException('A valid sender is required.');
     }
-    if (!this.isAllowedSender(payload.from)) {
+    if (!this.isAllowedSender(from)) {
       throw new BadRequestException('Sender is not allowed for Flow Mail.');
     }
     if (!payload.subject || payload.subject.trim().length < 2) {
@@ -387,7 +400,7 @@ export class FlowService {
       audienceName: payload.audienceName || 'Manual audience',
       ctaLabel: payload.ctaLabel || '',
       ctaUrl: payload.ctaUrl || '',
-      from: payload.from,
+      from,
       html: payload.html,
       preheader: payload.preheader || '',
       recipients,
@@ -426,10 +439,13 @@ export class FlowService {
       reply_to: payload.replyTo || undefined,
       tags: [
         { name: 'app', value: 'flow' },
-        { name: 'audience', value: payload.audienceName.slice(0, 40) },
+        {
+          name: 'audience',
+          value: this.resendTagValue(payload.audienceName, 'manual_audience'),
+        },
         ...payload.tags.slice(0, 3).map(tag => ({
           name: 'tag',
-          value: tag.slice(0, 40),
+          value: this.resendTagValue(tag, 'flow'),
         })),
       ],
     };
@@ -454,10 +470,22 @@ export class FlowService {
     }));
 
     if (!response.ok) {
-      throw new InternalServerErrorException({
-        error: 'Resend request failed.',
-        details: data,
-      });
+      const message = this.resendErrorMessage(data);
+
+      this.logger.warn(
+        JSON.stringify({
+          event: 'flow_resend_request_failed',
+          path,
+          statusCode: response.status,
+          message,
+        }),
+      );
+
+      if (response.status >= 400 && response.status < 500) {
+        throw new BadRequestException(message);
+      }
+
+      throw new InternalServerErrorException(message);
     }
 
     return data;
@@ -488,8 +516,34 @@ export class FlowService {
     const senders = this.senderIdentities();
     if (!senders.length) return true;
 
+    const senderEmail = this.emailAddress(sender);
     return senders.some(
-      identity => identity.email.toLowerCase() === sender.toLowerCase(),
+      identity => this.emailAddress(identity.email) === senderEmail,
+    );
+  }
+
+  private resolveSender(sender: string) {
+    const senderEmail = this.emailAddress(sender);
+    if (!senderEmail) return '';
+
+    const senders = this.senderIdentities();
+    if (!senders.length) return sender.trim();
+
+    return (
+      senders.find(identity => this.emailAddress(identity.email) === senderEmail)
+        ?.email || ''
+    );
+  }
+
+  private isConfiguredSender(
+    sender: string,
+    senders = this.senderIdentities(),
+  ) {
+    const senderEmail = this.emailAddress(sender);
+    if (!senderEmail) return false;
+
+    return senders.some(
+      identity => this.emailAddress(identity.email) === senderEmail,
     );
   }
 
@@ -498,6 +552,92 @@ export class FlowService {
     if (!match) return sender;
 
     return `${match[1].replace(/^"|"$/g, '').trim()} (${match[2].trim()})`;
+  }
+
+  private isInternalSender(sender: string) {
+    const senderEmail = this.emailAddress(sender);
+    if (!senderEmail) return false;
+
+    if (this.internalSenderEmails().has(senderEmail)) {
+      return true;
+    }
+
+    const senderDomain = this.emailDomain(senderEmail);
+    return Boolean(
+      senderDomain && this.internalSenderDomains().has(senderDomain),
+    );
+  }
+
+  private internalSenderEmails() {
+    return new Set(
+      [
+        ...this.senderIdentities().map(identity => identity.email),
+        process.env.FLOW_INBOUND_ADDRESS,
+        process.env.FLOW_DEFAULT_FROM,
+        process.env.RESEND_FROM,
+        process.env.FLOW_DEFAULT_REPLY_TO,
+      ]
+        .map(value => this.emailAddress(value || ''))
+        .filter(Boolean),
+    );
+  }
+
+  private internalSenderDomains() {
+    const domains = new Set<string>();
+
+    this.internalSenderEmails().forEach(email => {
+      const domain = this.emailDomain(email);
+      if (!domain) return;
+
+      domains.add(domain);
+      if (domain.endsWith('.chefuinc.com')) {
+        domains.add('chefuinc.com');
+      }
+    });
+
+    return domains;
+  }
+
+  private emailAddress(value: string) {
+    const match = value.match(/<([^>]+)>/);
+    const email = (match?.[1] || value).trim().toLowerCase();
+
+    return /^\S+@\S+\.\S+$/.test(email) ? email : '';
+  }
+
+  private emailDomain(email: string) {
+    return email.includes('@') ? email.split('@').pop() || '' : '';
+  }
+
+  private resendErrorMessage(data: unknown) {
+    if (typeof data === 'string' && data.trim()) {
+      return data;
+    }
+
+    if (!data || typeof data !== 'object') {
+      return 'Resend request failed.';
+    }
+
+    const payload = data as Record<string, unknown>;
+    if (typeof payload.message === 'string' && payload.message.trim()) {
+      return payload.message;
+    }
+    if (typeof payload.error === 'string' && payload.error.trim()) {
+      return payload.error;
+    }
+
+    return 'Resend request failed.';
+  }
+
+  private resendTagValue(value: string, fallback: string) {
+    const tag = value
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^A-Za-z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 40);
+
+    return tag || fallback;
   }
 
   private messagesCollection() {
@@ -517,7 +657,7 @@ export class FlowService {
     return 'inbox';
   }
 
-  private countFolders(messages: Array<Record<string, unknown>>) {
+  private countFolders(messages: FlowMessage[]) {
     const counts = {
       inbox: 0,
       sent: 0,
@@ -528,7 +668,7 @@ export class FlowService {
     };
 
     messages.forEach(message => {
-      const folder = this.normalizeFolder(String(message.folder || 'inbox'));
+      const folder = this.normalizeFolder(message.folder);
       counts[folder] += 1;
     });
 
@@ -542,6 +682,15 @@ export class FlowService {
     const attachmentItems = this.normalizeAttachments(data.attachmentItems);
     const isReactionMessage = this.isGmailReactionStoredMessage(data);
     const visibleAttachmentItems = isReactionMessage ? [] : attachmentItems;
+    const direction = data.direction === 'outbound' ? 'outbound' : 'inbound';
+    const from = String(data.from || '');
+    const storedFolder = this.normalizeFolder(String(data.folder || 'inbox'));
+    const folder =
+      direction === 'inbound' &&
+      storedFolder === 'inbox' &&
+      this.isInternalSender(from)
+        ? 'archived'
+        : storedFolder;
 
     return {
       id,
@@ -550,9 +699,9 @@ export class FlowService {
         : Number(data.attachments) || visibleAttachmentItems.length,
       attachmentItems: visibleAttachmentItems,
       createdAt: this.timestampToIso(data.createdAt),
-      direction: data.direction === 'outbound' ? 'outbound' : 'inbound',
-      folder: this.normalizeFolder(String(data.folder || 'inbox')),
-      from: String(data.from || ''),
+      direction,
+      folder,
+      from,
       html: typeof data.html === 'string' ? data.html : undefined,
       label: typeof data.label === 'string' ? data.label : undefined,
       messageId:
