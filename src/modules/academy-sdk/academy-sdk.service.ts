@@ -255,9 +255,11 @@ export class AcademySdkService {
     const code = errorBody.error?.message || '';
 
     if (
+      code.includes('INVALID_LOGIN_CREDENTIALS') ||
       code.includes('INVALID_PASSWORD') ||
       code.includes('EMAIL_NOT_FOUND') ||
       code.includes('INVALID_EMAIL') ||
+      code.includes('INVALID_CREDENTIALS') ||
       code.includes('USER_DISABLED')
     ) {
       throw new UnauthorizedException('Invalid email or password.');
