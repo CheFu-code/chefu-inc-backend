@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
   UnauthorizedException,
   UnprocessableEntityException,
@@ -34,6 +35,8 @@ type IdentityToolkitError = {
 
 @Injectable()
 export class AcademySdkService {
+  private readonly logger = new Logger(AcademySdkService.name);
+
   constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
 
   verifyApiKey(apiKey?: AcademySdkApiKey) {
@@ -46,11 +49,19 @@ export class AcademySdkService {
   async login(body: LoginBody) {
     const email = this.requireString(body.email, 'Email');
     const password = this.requireString(body.password, 'Password');
-    const apiKey = process.env.FIREBASE_API_KEY;
+    const apiKey =
+      process.env.FIREBASE_WEB_API_KEY || process.env.FIREBASE_API_KEY;
 
     if (!apiKey) {
-      throw new InternalServerErrorException(
-        'Failed to login. Please try again.',
+      this.logger.error(
+        JSON.stringify({
+          event: 'academy_sdk_login_misconfigured',
+          reason: 'missing_firebase_web_api_key',
+        }),
+      );
+      throw new HttpException(
+        'CheFu Academy SDK login is not configured.',
+        HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
 
@@ -68,7 +79,7 @@ export class AcademySdkService {
       const errorBody = (await response.json().catch(() => ({}))) as
         | IdentityToolkitError
         | Record<string, never>;
-      this.throwIdentityToolkitError(errorBody);
+      this.throwIdentityToolkitError(errorBody, response.status);
     }
 
     const payload = (await response.json()) as { localId?: string };
@@ -251,8 +262,19 @@ export class AcademySdkService {
     return value.trim();
   }
 
-  private throwIdentityToolkitError(errorBody: IdentityToolkitError) {
+  private throwIdentityToolkitError(
+    errorBody: IdentityToolkitError,
+    statusCode?: number,
+  ) {
     const code = errorBody.error?.message || '';
+
+    this.logger.warn(
+      JSON.stringify({
+        event: 'academy_sdk_identity_toolkit_error',
+        statusCode: statusCode || null,
+        code: code || 'unknown',
+      }),
+    );
 
     if (
       code.includes('INVALID_LOGIN_CREDENTIALS') ||
@@ -265,10 +287,37 @@ export class AcademySdkService {
       throw new UnauthorizedException('Invalid email or password.');
     }
 
+    if (
+      code.includes('API_KEY_INVALID') ||
+      code.includes('API key not valid') ||
+      code.includes('INVALID_API_KEY') ||
+      code.includes('PROJECT_NOT_FOUND') ||
+      code.includes('CONFIGURATION_NOT_FOUND') ||
+      code.includes('OPERATION_NOT_ALLOWED') ||
+      code.includes('PASSWORD_LOGIN_DISABLED') ||
+      code.includes('ADMIN_ONLY_OPERATION')
+    ) {
+      throw new HttpException(
+        'CheFu Academy SDK login is not configured.',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+
     if (code.includes('TOO_MANY_ATTEMPTS_TRY_LATER')) {
       throw new HttpException(
         'Too many attempts. Please try again later.',
         HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    if (statusCode === 400) {
+      throw new UnauthorizedException('Invalid email or password.');
+    }
+
+    if (statusCode && statusCode >= 500) {
+      throw new HttpException(
+        'CheFu Academy authentication is temporarily unavailable.',
+        HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
 
