@@ -1,12 +1,16 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { FieldValue } from 'firebase-admin/firestore';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
+
+const FREE_DAILY_COURSE_DOWNLOAD_LIMIT = 5;
 
 type CourseDocument = {
   createdBy?: string;
@@ -111,7 +115,12 @@ export class CoursesService {
   }
 
   async generateCoursePdf(user: AuthenticatedUser, courseId: string) {
-    const { course } = await this.getDownloadableCourse(user, courseId);
+    const { course, userProfile, userRef } = await this.getDownloadableCourse(
+      user,
+      courseId,
+    );
+    await this.reserveFreeCourseDownload(userProfile, userRef, courseId);
+
     const html = this.renderCourseHtml(courseId, course);
     const { default: puppeteer } = await import('puppeteer');
     const browser = await puppeteer.launch({
@@ -174,7 +183,61 @@ export class CoursesService {
       course,
       userProfile: userSnap.data() || {},
       courseRef: courseSnap.ref,
+      userRef: userSnap.ref,
     };
+  }
+
+  private async reserveFreeCourseDownload(
+    userProfile: FirebaseFirestore.DocumentData,
+    userRef: FirebaseFirestore.DocumentReference,
+    courseId: string,
+  ) {
+    if (userProfile.member === true) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const db = this.firebaseAdmin.db();
+
+    await db.runTransaction(async transaction => {
+      const userSnap = await transaction.get(userRef);
+      const latestProfile = userSnap.data() || userProfile || {};
+
+      if (latestProfile.member === true) return;
+
+      const currentUsage = this.objectValue(latestProfile.courseDownloadQuota);
+      const sameDay = String(currentUsage.date || '') === today;
+      const downloadedCourseIds = sameDay
+        ? this.stringArray(currentUsage.courseIds)
+        : [];
+      const alreadyDownloaded = downloadedCourseIds.includes(courseId);
+      if (alreadyDownloaded) return;
+
+      const currentCount = sameDay
+        ? Math.max(
+            downloadedCourseIds.length,
+            Number(currentUsage.count || 0) || 0,
+          )
+        : 0;
+
+      if (currentCount >= FREE_DAILY_COURSE_DOWNLOAD_LIMIT) {
+        throw new HttpException(
+          `Free members can download up to ${FREE_DAILY_COURSE_DOWNLOAD_LIMIT} courses per day. Try again tomorrow or upgrade for unlimited downloads.`,
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+
+      transaction.set(
+        userRef,
+        {
+          courseDownloadQuota: {
+            date: today,
+            count: currentCount + 1,
+            courseIds: Array.from(new Set([...downloadedCourseIds, courseId])),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+        },
+        { merge: true },
+      );
+    });
   }
 
   private async getDownloadableCourse(user: AuthenticatedUser, courseId: string) {
@@ -204,6 +267,7 @@ export class CoursesService {
       course,
       userProfile: userSnap.data() || {},
       courseRef: courseSnap.ref,
+      userRef: userSnap.ref,
     };
   }
 
@@ -272,6 +336,16 @@ export class CoursesService {
 
   private normalizeOwner(value?: string) {
     return String(value || '').trim().toLowerCase();
+  }
+
+  private objectValue(value: unknown) {
+    return typeof value === 'object' && value !== null
+      ? (value as Record<string, unknown>)
+      : {};
+  }
+
+  private stringArray(value: unknown) {
+    return Array.isArray(value) ? value.map(item => String(item)) : [];
   }
 
   private assertChapterExists(course: CourseDocument, chapterIndex: number) {
