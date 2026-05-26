@@ -123,6 +123,11 @@ export class AcademySdkService {
         emailVerified: false,
         disabled: false,
       });
+      await this.saveDeveloperProfile({
+        uid: userRecord.uid,
+        email: userRecord.email || email,
+        fullname,
+      });
 
       return {
         message: 'Registration successful',
@@ -170,6 +175,41 @@ export class AcademySdkService {
       apiKey: rawKey,
       warning: 'Save this key now. You will not see it again.',
     };
+  }
+
+  private async saveDeveloperProfile(user: {
+    uid: string;
+    email: string;
+    fullname: string;
+  }) {
+    const now = new Date();
+    const normalizedEmail = user.email.trim().toLowerCase();
+
+    await this.firebaseAdmin
+      .db()
+      .collection('users')
+      .doc(normalizedEmail)
+      .set(
+        {
+          uid: user.uid,
+          email: normalizedEmail,
+          fullname: user.fullname,
+          name: user.fullname,
+          roles: ['developer'],
+          accountType: 'developer',
+          developer: true,
+          sdkDeveloper: true,
+          source: 'academy-sdk',
+          createdAt: now,
+          updatedAt: now,
+          emailPreferences: {
+            activity: true,
+            marketing: false,
+            security: true,
+          },
+        },
+        { merge: true },
+      );
   }
 
   async listApiKeys(user: AcademySdkUser) {
