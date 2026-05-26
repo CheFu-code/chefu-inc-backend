@@ -9,10 +9,15 @@ import {
 } from '@nestjs/common';
 import crypto from 'crypto';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
+import { ACADEMY_SDK_API_KEY_PREFIX } from './academy-sdk.constants';
 import { AcademySdkRequest } from './academy-sdk.types';
 
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 100;
+
+type ParsedApiKey = {
+  publicId: string;
+};
 
 type RateLimitBucket = {
   resetAt: number;
@@ -33,29 +38,41 @@ export class AcademySdkApiKeyGuard implements CanActivate {
       throw new UnauthorizedException('Missing API key.');
     }
 
+    const parsedKey = this.parseApiKey(rawKey);
+    if (!parsedKey) {
+      throw new ForbiddenException('Invalid API key format.');
+    }
+
     const keyHash = this.hashKey(rawKey);
     this.enforceRateLimit(keyHash);
 
-    const snapshot = await this.firebaseAdmin
+    const apiKeyDoc = await this.firebaseAdmin
       .db()
       .collection('api_keys')
-      .where('keyHash', '==', keyHash)
-      .where('active', '==', true)
-      .limit(1)
+      .doc(parsedKey.publicId)
       .get();
 
-    if (snapshot.empty) {
+    if (!apiKeyDoc.exists) {
       throw new ForbiddenException('Invalid API key.');
     }
 
-    const apiKeyDoc = snapshot.docs[0];
+    const apiKey = apiKeyDoc.data();
+    if (
+      apiKey?.active !== true ||
+      apiKey.keyHash !== keyHash ||
+      apiKey.prefix !== ACADEMY_SDK_API_KEY_PREFIX
+    ) {
+      throw new ForbiddenException('Invalid API key.');
+    }
+
     await apiKeyDoc.ref.update({
       lastUsedAt: new Date(),
     });
 
     request.apiKey = {
       id: apiKeyDoc.id,
-      ...apiKeyDoc.data(),
+      publicId: parsedKey.publicId,
+      ...apiKey,
     };
 
     return true;
@@ -75,6 +92,21 @@ export class AcademySdkApiKeyGuard implements CanActivate {
 
   private hashKey(key: string) {
     return crypto.createHash('sha256').update(key).digest('hex');
+  }
+
+  private parseApiKey(key: string): ParsedApiKey | null {
+    const [prefix, publicId, secret, ...extraParts] = key.split('_');
+
+    if (
+      prefix !== ACADEMY_SDK_API_KEY_PREFIX ||
+      !publicId ||
+      !secret ||
+      extraParts.length > 0
+    ) {
+      return null;
+    }
+
+    return { publicId };
   }
 
   private enforceRateLimit(bucketKey: string) {

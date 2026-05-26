@@ -2,6 +2,7 @@ import { Request } from 'express';
 
 export type AcademySdkApiKey = {
   id: string;
+  publicId?: string;
   plan?: string;
   ownerUid?: string;
   active?: boolean;
@@ -16,4 +17,5 @@ export type AcademySdkRequest = Request & {
 export type AcademySdkUser = {
   uid: string;
   email?: string;
+  roles?: string[];
 };

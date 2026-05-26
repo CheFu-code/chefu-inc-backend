@@ -1,6 +1,6 @@
 export const CHEFU_APP_HEADER = 'x-chefu-app';
 
-export type ChefuAppId = 'academy' | 'flow' | 'music';
+export type ChefuAppId = 'academy' | 'flow' | 'muzalo';
 
 export type ChefuApp = {
   id: ChefuAppId;
@@ -24,9 +24,9 @@ export const CHEFU_APPS: ChefuApp[] = [
     origins: ['http://localhost:3001', 'https://flow.chefuinc.com'],
   },
   {
-    id: 'music',
-    name: 'SoundWave',
-    origins: ['http://localhost:3002', 'https://music.chefuinc.com'],
+    id: 'muzalo',
+    name: 'Muzalo',
+    origins: ['http://localhost:3002', 'https://muzalo.chefuinc.com'],
   },
 ];
 

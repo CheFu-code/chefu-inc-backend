@@ -5,6 +5,7 @@ import {
   HttpCode,
   Param,
   Post,
+  Query,
   Req,
   UnauthorizedException,
   UseGuards,
@@ -19,6 +20,12 @@ import { AcademySdkRequest } from './academy-sdk.types';
 type KeyBody = {
   name?: string;
   keyId?: string;
+};
+
+type ListQuery = {
+  query?: string;
+  category?: string;
+  limit?: string;
 };
 
 type RequestWithUser = Request & {
@@ -39,20 +46,110 @@ export class AcademySdkApiController {
   @Post('courses/list')
   @HttpCode(200)
   @UseGuards(AcademySdkApiKeyGuard)
-  listCoursesPost() {
-    return this.academySdkService.listCourses();
+  listCoursesPost(@Body() body: ListQuery) {
+    return this.academySdkService.listCourses(body);
   }
 
   @Get('courses')
   @UseGuards(AcademySdkApiKeyGuard)
-  listCourses() {
-    return this.academySdkService.listCourses();
+  listCourses(@Query() query: ListQuery) {
+    return this.academySdkService.listCourses(query);
+  }
+
+  @Get('courses/search')
+  @UseGuards(AcademySdkApiKeyGuard)
+  searchCourses(@Query() query: ListQuery) {
+    return this.academySdkService.searchCourses(query);
+  }
+
+  @Get('courses/featured')
+  @UseGuards(AcademySdkApiKeyGuard)
+  getFeaturedCourses(@Query() query: Pick<ListQuery, 'limit'>) {
+    return this.academySdkService.getFeaturedCourses(query);
+  }
+
+  @Get('courses/categories')
+  @UseGuards(AcademySdkApiKeyGuard)
+  getCourseCategories() {
+    return this.academySdkService.getCourseCategories();
   }
 
   @Get('courses/:courseId')
   @UseGuards(AcademySdkApiKeyGuard)
   getCourse(@Param('courseId') courseId: string) {
     return this.academySdkService.getCourseById(courseId);
+  }
+
+  @Get('courses/:courseId/chapters')
+  @UseGuards(AcademySdkApiKeyGuard)
+  getCourseChapters(@Param('courseId') courseId: string) {
+    return this.academySdkService.getCourseChapters(courseId);
+  }
+
+  @Get('courses/:courseId/chapters/:chapterIndex')
+  @UseGuards(AcademySdkApiKeyGuard)
+  getCourseChapter(
+    @Param('courseId') courseId: string,
+    @Param('chapterIndex') chapterIndex: string,
+  ) {
+    return this.academySdkService.getCourseChapter(
+      courseId,
+      Number(chapterIndex),
+    );
+  }
+
+  @Get('courses/:courseId/chapters/:chapterIndex/lessons')
+  @UseGuards(AcademySdkApiKeyGuard)
+  getCourseLessons(
+    @Param('courseId') courseId: string,
+    @Param('chapterIndex') chapterIndex: string,
+  ) {
+    return this.academySdkService.getCourseLessons(
+      courseId,
+      Number(chapterIndex),
+    );
+  }
+
+  @Get('courses/:courseId/quiz')
+  @UseGuards(AcademySdkApiKeyGuard)
+  getCourseQuiz(@Param('courseId') courseId: string) {
+    return this.academySdkService.getCourseQuiz(courseId);
+  }
+
+  @Get('courses/:courseId/flashcards')
+  @UseGuards(AcademySdkApiKeyGuard)
+  getCourseFlashcards(@Param('courseId') courseId: string) {
+    return this.academySdkService.getCourseFlashcards(courseId);
+  }
+
+  @Get('courses/:courseId/qa')
+  @UseGuards(AcademySdkApiKeyGuard)
+  getCourseQA(@Param('courseId') courseId: string) {
+    return this.academySdkService.getCourseQA(courseId);
+  }
+
+  @Get('videos')
+  @UseGuards(AcademySdkApiKeyGuard)
+  listVideos(@Query() query: ListQuery) {
+    return this.academySdkService.listVideos(query);
+  }
+
+  @Get('videos/search')
+  @UseGuards(AcademySdkApiKeyGuard)
+  searchVideos(@Query() query: ListQuery) {
+    return this.academySdkService.searchVideos(query);
+  }
+
+  @Get('videos/category/:category')
+  @UseGuards(AcademySdkApiKeyGuard)
+  getVideosByCategory(@Param('category') category: string) {
+    return this.academySdkService.listVideos({ category });
+  }
+
+  @Get('videos/:videoId')
+  @UseGuards(AcademySdkApiKeyGuard)
+  getVideo(@Param('videoId') videoId: string) {
+    return this.academySdkService.getVideoById(videoId);
   }
 }
 
@@ -84,6 +181,18 @@ export class AcademySdkAuthController {
     @Body() body: { email?: string; password?: string; fullname?: string },
   ) {
     return this.academySdkService.register(body);
+  }
+
+  @Post('api/auth/refresh')
+  @HttpCode(200)
+  refresh(@Body() body: { refreshToken?: string }) {
+    return this.academySdkService.refreshSession(body);
+  }
+
+  @Post('auth/refresh')
+  @HttpCode(200)
+  refreshRoot(@Body() body: { refreshToken?: string }) {
+    return this.academySdkService.refreshSession(body);
   }
 }
 
@@ -123,6 +232,7 @@ export class AcademySdkKeysController {
     return {
       uid: request.user.uid,
       email: request.user.email,
+      roles: request.user.roles,
     };
   }
 }

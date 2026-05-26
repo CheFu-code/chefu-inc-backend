@@ -9,6 +9,9 @@ import {
 } from './academy-sdk.controller';
 import { AcademySdkCleanupService } from './academy-sdk-cleanup.service';
 import { AcademySdkService } from './academy-sdk.service';
+import { AcademySdkApiKeysService } from './services/academy-sdk-api-keys.service';
+import { AcademySdkAuthService } from './services/academy-sdk-auth.service';
+import { AcademySdkCatalogService } from './services/academy-sdk-catalog.service';
 
 @Module({
   imports: [AuthModule, FirebaseAdminModule],
@@ -19,6 +22,9 @@ import { AcademySdkService } from './academy-sdk.service';
   ],
   providers: [
     AcademySdkApiKeyGuard,
+    AcademySdkApiKeysService,
+    AcademySdkAuthService,
+    AcademySdkCatalogService,
     AcademySdkCleanupService,
     AcademySdkService,
   ],

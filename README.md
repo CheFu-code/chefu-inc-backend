@@ -25,6 +25,17 @@ Next/React frontends should send `x-chefu-app` when creating a session:
 Flow's existing `x-flow-session` header still works and still enforces the
 Flow sender allowlist.
 
+## Backend Structure
+
+This backend is organized as a shared CheFu platform plus product modules:
+
+- Platform modules: app registry, Firebase Admin, auth, and health.
+- Shared service modules: admin, AI, billing, email, notifications, and keepalive.
+- Product modules: Academy SDK, Academy courses, Flow, and future apps.
+
+See `docs/backend-architecture.md` for the module pattern and the checklist for
+adding a new CheFu app.
+
 ## Production Environment
 
 Set these on the backend host:
@@ -62,8 +73,10 @@ on Render, then falls back to `http://127.0.0.1:${PORT}/health`.
 - `POST /auth/session`
 - `POST /auth/login`
 - `POST /auth/register`
+- `POST /auth/refresh`
 - `POST /api/auth/login`
 - `POST /api/auth/register`
+- `POST /api/auth/refresh`
 - `POST /api/auth/verify`
 - `GET /api/courses`
 - `GET /api/courses/:courseId`

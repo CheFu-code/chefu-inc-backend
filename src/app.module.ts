@@ -14,20 +14,32 @@ import { HealthController } from './modules/health/health.controller';
 import { KeepaliveModule } from './modules/keepalive/keepalive.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 
+const platformModules = [
+  AppsModule,
+  FirebaseAdminModule,
+  AuthModule,
+];
+
+const sharedServiceModules = [
+  AdminModule,
+  AiModule,
+  BillingModule,
+  EmailModule,
+  KeepaliveModule,
+  NotificationsModule,
+];
+
+const productModules = [
+  AcademySdkModule,
+  CoursesModule,
+  FlowModule,
+];
+
 @Module({
   imports: [
-    AppsModule,
-    FirebaseAdminModule,
-    AuthModule,
-    AcademySdkModule,
-    AiModule,
-    AdminModule,
-    EmailModule,
-    BillingModule,
-    CoursesModule,
-    NotificationsModule,
-    FlowModule,
-    KeepaliveModule,
+    ...platformModules,
+    ...sharedServiceModules,
+    ...productModules,
   ],
   controllers: [HealthController],
 })
