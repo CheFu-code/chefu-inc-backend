@@ -33,6 +33,7 @@ Set these on the backend host:
 - `AUTH_COOKIE_DOMAIN=.chefuinc.com`
 - `AUTH_SESSION_SECRET=<long random secret>`
 - Firebase Admin credentials using either `FIREBASE_SERVICE_ACCOUNT` JSON or `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`
+- `FIREBASE_API_KEY` for SDK email/password login compatibility
 - `GEMINI_API_KEY`
 - `WHATSAPP_PHONE_NUMBER_ID`
 - `WHATSAPP_SYSTEM_USER_TOKEN`
@@ -59,6 +60,17 @@ on Render, then falls back to `http://127.0.0.1:${PORT}/health`.
 
 - `GET /health`
 - `POST /auth/session`
+- `POST /auth/login`
+- `POST /auth/register`
+- `POST /api/auth/login`
+- `POST /api/auth/register`
+- `POST /api/auth/verify`
+- `GET /api/courses`
+- `GET /api/courses/:courseId`
+- `POST /api/courses/list`
+- `GET /api/keys/list`
+- `POST /api/keys/create`
+- `POST /api/keys/revoke`
 - `GET /auth/me`
 - `DELETE /auth/session`
 - `POST /ai/generate`

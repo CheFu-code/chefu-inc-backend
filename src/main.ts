@@ -59,6 +59,7 @@ async function bootstrap() {
       'Content-Type',
       'Authorization',
       CHEFU_APP_HEADER,
+      'x-api-key',
       'x-flow-api-key',
       'x-flow-session',
       'x-flow-webhook-secret',
@@ -72,7 +73,7 @@ async function bootstrap() {
       response.setHeader('Access-Control-Allow-Credentials', 'true');
       response.setHeader(
         'Access-Control-Allow-Headers',
-        `Content-Type,Authorization,${CHEFU_APP_HEADER},x-flow-api-key,x-flow-session,x-flow-webhook-secret`,
+        `Content-Type,Authorization,${CHEFU_APP_HEADER},x-api-key,x-flow-api-key,x-flow-session,x-flow-webhook-secret`,
       );
       response.setHeader(
         'Access-Control-Allow-Methods',
