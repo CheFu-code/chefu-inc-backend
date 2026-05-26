@@ -17,6 +17,20 @@ type RefreshBody = {
   refreshToken?: string;
 };
 
+type ApiKeyLeakReport = {
+  apiKey?: string;
+  leakedKey?: string;
+  source?: string;
+  url?: string;
+  repository?: string;
+  commit?: string;
+};
+
+type LeakRequestMeta = {
+  ip?: string;
+  userAgent?: string;
+};
+
 type ListQuery = {
   query?: string;
   category?: string;
@@ -57,6 +71,10 @@ export class AcademySdkService {
 
   revokeApiKey(user: AcademySdkUser, keyId?: string) {
     return this.apiKeysService.revokeApiKey(user, keyId);
+  }
+
+  reportLeakedApiKey(report: ApiKeyLeakReport, meta?: LeakRequestMeta) {
+    return this.apiKeysService.reportLeakedApiKey(report, meta);
   }
 
   listCourses(options: ListQuery = {}) {

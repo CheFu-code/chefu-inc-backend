@@ -28,6 +28,16 @@ export interface PreferenceNotificationData {
   actionUrl?: string;
 }
 
+export interface ApiKeyCompromisedNotificationData {
+  email: string;
+  userName?: string;
+  keyName?: string;
+  publicId: string;
+  source?: string;
+  url?: string;
+  timestamp: Date;
+}
+
 @Injectable()
 export class ResendService {
   private readonly logger = new Logger(ResendService.name);
@@ -138,6 +148,37 @@ export class ResendService {
         event: 'preference_notification_sent',
         email: data.email,
         type: data.type,
+      }),
+    );
+  }
+
+  async sendApiKeyCompromisedNotification(
+    data: ApiKeyCompromisedNotificationData,
+  ): Promise<void> {
+    if (!this.RESEND_API_KEY) {
+      this.logger.warn('RESEND_API_KEY is not configured - skipping email');
+      return;
+    }
+
+    const response = await fetch(this.RESEND_API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(this.getApiKeyCompromisedPayload(data)),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Resend request failed: ${response.status} ${error}`);
+    }
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'api_key_compromised_notification_sent',
+        email: data.email,
+        publicId: data.publicId,
       }),
     );
   }
@@ -287,6 +328,135 @@ export class ResendService {
         'CheFu Academy',
       ].join('\n'),
     };
+  }
+
+  private getApiKeyCompromisedPayload(
+    data: ApiKeyCompromisedNotificationData,
+  ) {
+    const details = {
+      userName: this.escapeHtml(data.userName || data.email.split('@')[0] || 'there'),
+      keyName: this.escapeHtml(data.keyName || 'Untitled key'),
+      publicId: this.escapeHtml(data.publicId),
+      source: this.escapeHtml(data.source || 'a public location'),
+      url: data.url || '',
+      time: this.escapeHtml(
+        data.timestamp.toLocaleString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          timeZoneName: 'short',
+        }),
+      ),
+    };
+    const basePayload = {
+      from: this.fromAddress,
+      to: [data.email],
+      subject: 'Security alert: CheFu API key revoked',
+    };
+
+    return {
+      ...basePayload,
+      html: this.getApiKeyCompromisedEmailTemplate(details),
+      text: [
+        `Hi ${details.userName},`,
+        '',
+        'A CheFu API key linked to your account appears to have been exposed.',
+        'For your protection, we revoked the key immediately.',
+        '',
+        `Key name: ${details.keyName}`,
+        `Public ID: ${details.publicId}`,
+        `Detected from: ${details.source}`,
+        `Time: ${details.time}`,
+        details.url ? `Reference: ${details.url}` : '',
+        '',
+        'Create a new API key from the CheFu Academy SDK CLI or dashboard if you still need access.',
+        `Security settings: ${this.securityUrl}`,
+        `Support: ${this.supportUrl}`,
+        '',
+        'CheFu Security',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    };
+  }
+
+  private getApiKeyCompromisedEmailTemplate(details: {
+    userName: string;
+    keyName: string;
+    publicId: string;
+    source: string;
+    url: string;
+    time: string;
+  }) {
+    return `
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CheFu API key revoked</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f5f7fb;color:#111827;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7fb;padding:24px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;">
+            <tr>
+              <td style="background:#7f1d1d;padding:30px 28px;color:#ffffff;">
+                <div style="display:inline-block;background:#fecaca;color:#7f1d1d;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;">
+                  Security alert
+                </div>
+                <h1 style="margin:18px 0 0;font-size:28px;line-height:1.2;font-weight:800;">
+                  API key revoked
+                </h1>
+                <p style="margin:10px 0 0;color:#fee2e2;font-size:15px;line-height:1.6;">
+                  We detected a possible public exposure and revoked the key to protect your account.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:30px 28px;">
+                <p style="margin:0 0 18px;font-size:16px;line-height:1.7;">Hi ${details.userName},</p>
+                <p style="margin:0 0 22px;color:#374151;font-size:15px;line-height:1.7;">
+                  A CheFu API key linked to your account appears to have been exposed. For your protection, we revoked it immediately.
+                </p>
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#f9fafb;">
+                  ${this.detailRow('Key name', details.keyName)}
+                  ${this.detailRow('Public ID', details.publicId)}
+                  ${this.detailRow('Detected from', details.source)}
+                  ${this.detailRow('Time', details.time)}
+                </table>
+                ${
+                  details.url
+                    ? `<p style="margin:18px 0 0;color:#374151;font-size:14px;line-height:1.6;">Reference: <a href="${this.escapeAttribute(details.url)}" style="color:#0369a1;">${this.escapeHtml(details.url)}</a></p>`
+                    : ''
+                }
+                <div style="margin:24px 0;padding:18px;border-radius:12px;background:#fef2f2;border:1px solid #fecaca;">
+                  <p style="margin:0 0 8px;color:#991b1b;font-size:15px;font-weight:800;">What to do next</p>
+                  <p style="margin:0;color:#7f1d1d;font-size:14px;line-height:1.6;">
+                    Remove the exposed key from public code or logs, then create a new API key if your app still needs access.
+                  </p>
+                </div>
+                <a href="${this.escapeAttribute(this.securityUrl)}" style="display:inline-block;background:#0284c7;color:#ffffff;text-decoration:none;border-radius:8px;padding:12px 18px;font-size:14px;font-weight:700;">
+                  Review security settings
+                </a>
+              </td>
+            </tr>
+            <tr>
+              <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 28px;color:#6b7280;font-size:12px;line-height:1.6;">
+                <strong style="color:#374151;">CheFu Security</strong><br>
+                Copyright ${new Date().getUTCFullYear()} CheFu Inc. All rights reserved.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
   }
 
   private getPreferenceNotificationTemplate(details: {

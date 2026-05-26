@@ -3,17 +3,42 @@ import {
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import crypto from 'crypto';
+import { ResendService } from '../../email/resend.service';
 import { FirebaseAdminService } from '../../firebase-admin/firebase-admin.service';
 import { ACADEMY_SDK_API_KEY_PREFIX } from '../academy-sdk.constants';
 import { AcademySdkApiKey, AcademySdkUser } from '../academy-sdk.types';
 
+const API_KEY_PATTERN = new RegExp(
+  `^${ACADEMY_SDK_API_KEY_PREFIX}_([a-f0-9]{16})_([a-f0-9]{48})$`,
+);
+
+type ApiKeyLeakReport = {
+  apiKey?: string;
+  leakedKey?: string;
+  source?: string;
+  url?: string;
+  repository?: string;
+  commit?: string;
+};
+
+type LeakRequestMeta = {
+  ip?: string;
+  userAgent?: string;
+};
+
 @Injectable()
 export class AcademySdkApiKeysService {
-  constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
+  private readonly logger = new Logger(AcademySdkApiKeysService.name);
+
+  constructor(
+    private readonly firebaseAdmin: FirebaseAdminService,
+    private readonly resendService: ResendService,
+  ) {}
 
   verifyApiKey(apiKey?: AcademySdkApiKey) {
     return {
@@ -91,6 +116,106 @@ export class AcademySdkApiKeysService {
     return { success: true };
   }
 
+  async reportLeakedApiKey(
+    report: ApiKeyLeakReport,
+    meta: LeakRequestMeta = {},
+  ) {
+    const rawKey = this.cleanLeakKey(report.apiKey || report.leakedKey);
+    const parsedKey = this.parseApiKey(rawKey);
+
+    if (!parsedKey) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'api_key_leak_report_ignored',
+          reason: 'invalid_key_format',
+          source: this.cleanText(report.source),
+          ip: meta.ip || null,
+        }),
+      );
+      return this.genericLeakReportResponse();
+    }
+
+    const keyHash = this.hashKey(rawKey);
+    const ref = this.firebaseAdmin
+      .db()
+      .collection('api_keys')
+      .doc(parsedKey.publicId);
+    const snapshot = await ref.get();
+    const keyData = snapshot.data();
+
+    if (
+      !snapshot.exists ||
+      keyData?.keyHash !== keyHash ||
+      keyData.prefix !== ACADEMY_SDK_API_KEY_PREFIX
+    ) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'api_key_leak_report_ignored',
+          reason: 'key_not_found_or_hash_mismatch',
+          publicId: parsedKey.publicId,
+          source: this.cleanText(report.source),
+          ip: meta.ip || null,
+        }),
+      );
+      return this.genericLeakReportResponse();
+    }
+
+    const now = new Date();
+    const alreadyNotified = keyData.compromiseNotifiedAt;
+    await ref.set(
+      {
+        active: false,
+        compromised: true,
+        compromisedAt: now,
+        compromisedReason: 'public_leak_detected',
+        compromisedSource: this.cleanText(report.source) || 'unknown',
+        compromisedUrl: this.cleanText(report.url),
+        compromisedRepository: this.cleanText(report.repository),
+        compromisedCommit: this.cleanText(report.commit),
+        compromisedReporterIp: meta.ip || '',
+        compromisedReporterUserAgent: meta.userAgent || '',
+        revokedAt: now,
+        revokedReason: 'api_key_leak_detected',
+      },
+      { merge: true },
+    );
+
+    this.logger.warn(
+      JSON.stringify({
+        event: 'api_key_compromised_revoked',
+        publicId: parsedKey.publicId,
+        ownerUid: keyData.ownerUid || null,
+        ownerEmail: keyData.ownerEmail || null,
+        source: this.cleanText(report.source),
+      }),
+    );
+
+    if (keyData.ownerEmail && !alreadyNotified) {
+      try {
+        await this.resendService.sendApiKeyCompromisedNotification({
+          email: String(keyData.ownerEmail),
+          userName: String(keyData.ownerEmail).split('@')[0],
+          keyName: String(keyData.name || 'Untitled key'),
+          publicId: parsedKey.publicId,
+          source: this.cleanText(report.source) || 'a public location',
+          url: this.cleanText(report.url),
+          timestamp: now,
+        });
+        await ref.set({ compromiseNotifiedAt: new Date() }, { merge: true });
+      } catch (error) {
+        this.logger.error(
+          JSON.stringify({
+            event: 'api_key_compromised_email_failed',
+            publicId: parsedKey.publicId,
+            reason: error instanceof Error ? error.message : 'unknown',
+          }),
+        );
+      }
+    }
+
+    return this.genericLeakReportResponse();
+  }
+
   private async generateUniqueApiKey() {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const key = this.generateApiKey();
@@ -119,6 +244,19 @@ export class AcademySdkApiKeysService {
     return { rawKey, hash, publicId };
   }
 
+  private parseApiKey(rawKey: string) {
+    const match = rawKey.match(API_KEY_PATTERN);
+    if (!match) return null;
+
+    return {
+      publicId: match[1],
+    };
+  }
+
+  private hashKey(rawKey: string) {
+    return crypto.createHash('sha256').update(rawKey).digest('hex');
+  }
+
   private assertDeveloper(user: AcademySdkUser, action: string) {
     if (!user.uid) {
       throw new UnauthorizedException(`Unauthorized attempt to ${action}.`);
@@ -138,5 +276,19 @@ export class AcademySdkApiKeysService {
   private cleanKeyName(name?: string) {
     const value = typeof name === 'string' ? name.trim() : '';
     return value || 'Untitled key';
+  }
+
+  private cleanLeakKey(value?: string) {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  private cleanText(value?: string) {
+    return typeof value === 'string' ? value.trim().slice(0, 500) : '';
+  }
+
+  private genericLeakReportResponse() {
+    return {
+      received: true,
+    };
   }
 }

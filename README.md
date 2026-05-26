@@ -84,6 +84,7 @@ on Render, then falls back to `http://127.0.0.1:${PORT}/health`.
 - `GET /api/keys/list`
 - `POST /api/keys/create`
 - `POST /api/keys/revoke`
+- `POST /api/keys/report-leak`
 - `GET /auth/me`
 - `DELETE /auth/session`
 - `POST /ai/generate`

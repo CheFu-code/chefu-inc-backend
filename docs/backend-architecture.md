@@ -60,6 +60,32 @@ For example, `academy-sdk` is split into:
 - `AcademySdkCatalogService`: course and video read APIs exposed to SDK users.
 - `AcademySdkService`: facade that keeps controllers thin and routes stable.
 
+## API Key Leak Reports
+
+SDK API keys use the `chf_{publicId}_{secret}` format. If a scanner detects a
+full leaked key, send it to:
+
+```txt
+POST /api/keys/report-leak
+```
+
+Example body:
+
+```json
+{
+  "apiKey": "chf_publicId_secret",
+  "source": "github",
+  "url": "https://github.com/example/repo/blob/main/file.ts",
+  "repository": "example/repo",
+  "commit": "abc123"
+}
+```
+
+The endpoint always returns a generic accepted response. If the full key hash
+matches `api_keys/{publicId}`, the backend revokes the key, marks it
+compromised, and emails the owner. Do not expose whether a reported key is valid
+in the API response.
+
 ## Adding a New CheFu App
 
 1. Add the app id and origins in `src/modules/apps/app-registry.ts`.

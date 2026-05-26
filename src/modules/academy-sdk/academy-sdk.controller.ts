@@ -22,6 +22,15 @@ type KeyBody = {
   keyId?: string;
 };
 
+type LeakReportBody = {
+  apiKey?: string;
+  leakedKey?: string;
+  source?: string;
+  url?: string;
+  repository?: string;
+  commit?: string;
+};
+
 type ListQuery = {
   query?: string;
   category?: string;
@@ -193,6 +202,20 @@ export class AcademySdkAuthController {
   @HttpCode(200)
   refreshRoot(@Body() body: { refreshToken?: string }) {
     return this.academySdkService.refreshSession(body);
+  }
+}
+
+@Controller('api/keys')
+export class AcademySdkSecurityController {
+  constructor(private readonly academySdkService: AcademySdkService) {}
+
+  @Post('report-leak')
+  @HttpCode(202)
+  reportLeakedKey(@Req() request: Request, @Body() body: LeakReportBody) {
+    return this.academySdkService.reportLeakedApiKey(body, {
+      ip: request.ip,
+      userAgent: request.headers['user-agent'],
+    });
   }
 }
 
