@@ -276,14 +276,25 @@ export class CoursesService {
     userProfile: FirebaseFirestore.DocumentData,
     chapterIndex: number,
   ) {
-    const completedChapters = Array.isArray(course.completedChapter)
-      ? course.completedChapter.map(String)
-      : [];
-    const isCompleted = completedChapters.includes(chapterIndex.toString());
+    const completedChapterSet = this.completedChapterSet(course);
+    const isCompleted = completedChapterSet.has(chapterIndex.toString());
 
     if (isCompleted && userProfile.member !== true) {
       throw new ForbiddenException(
         'Chapter completed, subscribe to revisit this chapter.',
+      );
+    }
+
+    if (this.isCourseFullyCompleted(course, completedChapterSet)) return;
+
+    const nextChapterIndex = this.nextRequiredChapterIndex(
+      course,
+      completedChapterSet,
+    );
+
+    if (chapterIndex !== nextChapterIndex) {
+      throw new ForbiddenException(
+        'Complete the next chapter before opening this one.',
       );
     }
   }
@@ -346,6 +357,40 @@ export class CoursesService {
 
   private stringArray(value: unknown) {
     return Array.isArray(value) ? value.map(item => String(item)) : [];
+  }
+
+  private completedChapterSet(course: CourseDocument) {
+    return new Set(
+      Array.isArray(course.completedChapter)
+        ? course.completedChapter.map(String)
+        : [],
+    );
+  }
+
+  private isCourseFullyCompleted(
+    course: CourseDocument,
+    completedChapterSet = this.completedChapterSet(course),
+  ) {
+    const totalChapters = course.chapters?.length || 0;
+    if (totalChapters <= 0) return false;
+
+    return course.chapters!.every((_, index) =>
+      completedChapterSet.has(index.toString()),
+    );
+  }
+
+  private nextRequiredChapterIndex(
+    course: CourseDocument,
+    completedChapterSet = this.completedChapterSet(course),
+  ) {
+    const chapters = course.chapters || [];
+    if (!chapters.length) return -1;
+
+    const nextIndex = chapters.findIndex((_, index) => {
+      return !completedChapterSet.has(index.toString());
+    });
+
+    return nextIndex === -1 ? chapters.length - 1 : nextIndex;
   }
 
   private assertChapterExists(course: CourseDocument, chapterIndex: number) {
