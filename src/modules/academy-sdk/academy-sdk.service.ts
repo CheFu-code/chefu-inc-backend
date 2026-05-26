@@ -293,9 +293,13 @@ export class AcademySdkService {
       code.includes('INVALID_API_KEY') ||
       code.includes('PROJECT_NOT_FOUND') ||
       code.includes('CONFIGURATION_NOT_FOUND') ||
+      code.includes('are blocked') ||
+      code.includes('API key restrictions') ||
+      code.includes('SignInWithPassword') ||
       code.includes('OPERATION_NOT_ALLOWED') ||
       code.includes('PASSWORD_LOGIN_DISABLED') ||
-      code.includes('ADMIN_ONLY_OPERATION')
+      code.includes('ADMIN_ONLY_OPERATION') ||
+      statusCode === 403
     ) {
       throw new HttpException(
         'CheFu Academy SDK login is not configured.',
