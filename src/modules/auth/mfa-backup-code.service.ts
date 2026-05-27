@@ -7,7 +7,7 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { createHash, timingSafeEqual } from 'crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import admin from 'firebase-admin';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 
@@ -19,6 +19,8 @@ type BackupCodeRecord = {
 type BackupCodeState = {
   codes?: unknown;
   remaining?: unknown;
+  generatedAt?: unknown;
+  lastUsedAt?: unknown;
 };
 
 @Injectable()
@@ -30,6 +32,95 @@ export class MfaBackupCodeService {
     @Inject(FirebaseAdminService)
     private readonly firebaseAdmin: FirebaseAdminService,
   ) {}
+
+  async securitySummary({
+    email,
+    uid,
+  }: {
+    email?: string;
+    uid?: string;
+  }) {
+    const normalizedEmail = email?.trim().toLowerCase();
+
+    if (!normalizedEmail || !uid) {
+      throw new UnauthorizedException('Authenticated user missing from request.');
+    }
+
+    const [userRecord, userSnapshot] = await Promise.all([
+      this.firebaseAdmin.auth().getUser(uid),
+      this.firebaseAdmin.db().collection('users').doc(normalizedEmail).get(),
+    ]);
+    const backupState = userSnapshot.data()?.mfaBackupCodes as
+      | BackupCodeState
+      | undefined;
+    const enrolledFactors = userRecord.multiFactor?.enrolledFactors || [];
+
+    return {
+      emailVerified: userRecord.emailVerified,
+      mfaEnabled: enrolledFactors.length > 0,
+      enrolledFactors: enrolledFactors.map(factor => ({
+        uid: factor.uid,
+        displayName: factor.displayName || null,
+        factorId: factor.factorId,
+        enrollmentTime: factor.enrollmentTime || null,
+      })),
+      backupCodesRemaining: Number(backupState?.remaining || 0),
+      backupCodesGeneratedAt: this.timestampToIso(backupState?.generatedAt),
+      backupCodesLastUsedAt: this.timestampToIso(backupState?.lastUsedAt),
+    };
+  }
+
+  async generateBackupCodes({
+    email,
+    uid,
+  }: {
+    email?: string;
+    uid?: string;
+  }) {
+    const normalizedEmail = email?.trim().toLowerCase();
+
+    if (!normalizedEmail || !uid) {
+      throw new UnauthorizedException('Authenticated user missing from request.');
+    }
+
+    const codes = Array.from({ length: 10 }, () => this.createBackupCode());
+    const now = admin.firestore.FieldValue.serverTimestamp();
+
+    await this.firebaseAdmin
+      .db()
+      .collection('users')
+      .doc(normalizedEmail)
+      .set(
+        {
+          mfaBackupCodes: {
+            codes: codes.map(code => ({
+              hash: this.hashBackupCode(this.normalizeBackupCode(code), uid),
+              createdAt: now,
+              usedAt: null,
+            })),
+            remaining: codes.length,
+            generatedAt: now,
+            lastUsedAt: null,
+          },
+          updatedAt: now,
+        },
+        { merge: true },
+      );
+
+    this.logger.warn(
+      JSON.stringify({
+        event: 'mfa_backup_codes_generated',
+        uid,
+        email: normalizedEmail,
+        count: codes.length,
+      }),
+    );
+
+    return {
+      codes,
+      remaining: codes.length,
+    };
+  }
 
   async consumeBackupCode({
     email,
@@ -132,6 +223,26 @@ export class MfaBackupCodeService {
 
   private hashBackupCode(code: string, salt: string) {
     return createHash('sha256').update(`${salt}:${code}`).digest('hex');
+  }
+
+  private createBackupCode() {
+    const first = randomBytes(3).toString('hex').toUpperCase();
+    const second = randomBytes(3).toString('hex').toUpperCase();
+
+    return `CHFU-${first}-${second}`;
+  }
+
+  private timestampToIso(value: unknown) {
+    if (
+      value &&
+      typeof value === 'object' &&
+      'toDate' in value &&
+      typeof (value as { toDate?: unknown }).toDate === 'function'
+    ) {
+      return (value as { toDate: () => Date }).toDate().toISOString();
+    }
+
+    return null;
   }
 
   private safeEqual(a: string, b: string) {

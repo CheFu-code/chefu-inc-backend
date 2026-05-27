@@ -112,6 +112,7 @@ export class AuthController {
       throw new UnauthorizedException('Authenticated user missing from request.');
     }
 
+    await this.recordServerDetectedCountry(request.user.email, request);
     const profile = await this.getUserProfile(request.user.email);
 
     return {
@@ -122,6 +123,17 @@ export class AuthController {
       },
       profile,
     };
+  }
+
+  @Get('security')
+  @UseGuards(AuthGuard)
+  async getSecuritySummary(
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
+    return this.mfaBackupCodes.securitySummary({
+      email: request.user?.email,
+      uid: request.user?.uid,
+    });
   }
 
   @Patch('profile')
@@ -187,6 +199,8 @@ export class AuthController {
         },
       );
     }
+
+    Object.assign(updates, this.serverDetectedCountryUpdates(request));
 
     await this.firebaseAdmin
       .db()
@@ -311,7 +325,7 @@ export class AuthController {
       throw new UnauthorizedException('Failed to verify Firebase session.');
     }
 
-    await this.ensureUserProfile(decodedToken, sessionAppId);
+    await this.ensureUserProfile(decodedToken, sessionAppId, request);
     const userProfile = await this.getUserProfile(decodedToken.email);
     const meta: SessionMeta = {
       uid: decodedToken.uid,
@@ -384,6 +398,17 @@ export class AuthController {
       code: body.code,
       mfaPendingCredential: body.mfaPendingCredential,
       ip: request.ip,
+    });
+  }
+
+  @Post('mfa/backup-codes')
+  @UseGuards(AuthGuard)
+  async generateBackupCodes(
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
+    return this.mfaBackupCodes.generateBackupCodes({
+      email: request.user?.email,
+      uid: request.user?.uid,
     });
   }
 
@@ -551,6 +576,9 @@ export class AuthController {
         bio: '',
         country: '',
         countryCode: '',
+        detectedCountryCode: '',
+        detectedCountrySource: '',
+        detectedCountryUpdatedAt: null,
         language: 'en',
         learningGoal: '',
         skillLevel: null,
@@ -595,6 +623,9 @@ export class AuthController {
       bio: this.stringValue(data.bio),
       country: this.stringValue(data.country),
       countryCode: this.stringValue(data.countryCode),
+      detectedCountryCode: this.stringValue(data.detectedCountryCode),
+      detectedCountrySource: this.stringValue(data.detectedCountrySource),
+      detectedCountryUpdatedAt: this.timestampToIso(data.detectedCountryUpdatedAt),
       language: this.stringValue(data.language) || 'en',
       learningGoal: this.stringValue(data.learningGoal),
       skillLevel: this.enumValue(data.skillLevel, [
@@ -639,14 +670,6 @@ export class AuthController {
 
     if (profile.bio !== undefined) {
       updates.bio = profile.bio.trim().slice(0, 280);
-    }
-
-    if (profile.country !== undefined) {
-      updates.country = profile.country.trim().slice(0, 80);
-    }
-
-    if (profile.countryCode !== undefined) {
-      updates.countryCode = profile.countryCode.trim().toUpperCase().slice(0, 3);
     }
 
     if (profile.language !== undefined) {
@@ -795,9 +818,75 @@ export class AuthController {
     return null;
   }
 
+  private async recordServerDetectedCountry(
+    email: string | undefined,
+    request: Request,
+  ) {
+    const normalizedEmail = email?.trim().toLowerCase();
+    const updates = this.serverDetectedCountryUpdates(request);
+
+    if (!normalizedEmail || Object.keys(updates).length === 0) return;
+
+    await this.firebaseAdmin
+      .db()
+      .collection('users')
+      .doc(normalizedEmail)
+      .set(updates, { merge: true })
+      .catch(error => {
+        this.logger.warn(
+          JSON.stringify({
+            event: 'auth_detected_country_update_failed',
+            email: normalizedEmail,
+            reason: error instanceof Error ? error.message : 'unknown',
+          }),
+        );
+      });
+  }
+
+  private serverDetectedCountryUpdates(request?: Request) {
+    const detectedCountry = this.getDetectedCountry(request);
+
+    if (!detectedCountry) return {};
+
+    return {
+      detectedCountryCode: detectedCountry.code,
+      detectedCountrySource: detectedCountry.source,
+      detectedCountryUpdatedAt: FieldValue.serverTimestamp(),
+    };
+  }
+
+  private getDetectedCountry(request?: Request) {
+    if (!request) return null;
+
+    const candidates: Array<[string, string]> = [
+      ['cf-ipcountry', 'cloudflare'],
+      ['x-vercel-ip-country', 'vercel'],
+      ['cloudfront-viewer-country', 'cloudfront'],
+      ['x-appengine-country', 'appengine'],
+      ['x-country-code', 'proxy'],
+    ];
+
+    for (const [header, source] of candidates) {
+      const code = this.normalizeCountryCode(request.header(header));
+      if (code) return { code, source };
+    }
+
+    return null;
+  }
+
+  private normalizeCountryCode(value?: string) {
+    const code = value?.trim().toUpperCase();
+
+    if (!code || code === 'XX' || code === 'T1') return null;
+    if (!/^[A-Z]{2}$/.test(code)) return null;
+
+    return code;
+  }
+
   private async ensureUserProfile(
     decodedToken: FirebaseDecodedToken,
     appId: ChefuAppId,
+    request?: Request,
   ) {
     const email = decodedToken.email?.trim().toLowerCase();
     if (!email) return;
@@ -818,6 +907,7 @@ export class AuthController {
           ? existingUser.name
           : decodedToken.name || email.split('@')[0] || '';
     const now = FieldValue.serverTimestamp();
+    const detectedCountry = this.getDetectedCountry(request);
 
     await userRef.set(
       {
@@ -831,6 +921,16 @@ export class AuthController {
             ? existingRoles.map(String)
             : ['user'],
         authProvider: decodedToken.firebase?.sign_in_provider || 'unknown',
+        ...(detectedCountry
+          ? {
+              detectedCountryCode: detectedCountry.code,
+              detectedCountrySource: detectedCountry.source,
+              detectedCountryUpdatedAt: now,
+              ...(!existingUser?.countryCode
+                ? { countryCode: detectedCountry.code }
+                : {}),
+            }
+          : {}),
         lastLoginAt: now,
         updatedAt: now,
         apps: {

@@ -24,6 +24,7 @@ export const CHEFU_APPS: ChefuApp[] = [
     origins: [
       'http://localhost:3000',
       'https://chefuinc.com',
+      'https://myaccount.chefuinc.com',
       'https://academy.chefuinc.com',
     ],
   },
@@ -59,6 +60,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
     name: 'CheFu Inc',
     redirectUris: [
       'https://chefuinc.com/auth/callback',
+      'https://myaccount.chefuinc.com/auth/callback',
       'http://localhost:3000/auth/callback',
     ],
     scopes: ['openid', 'profile', 'email', 'apps:read'],

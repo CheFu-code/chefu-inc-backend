@@ -57,7 +57,7 @@ export class ResendService {
     'https://academy.chefuinc.com/support';
   private readonly securityUrl =
     process.env.SIGNIN_ALERT_SECURITY_URL ||
-    'https://academy.chefuinc.com/settings/account';
+    'https://myaccount.chefuinc.com/account';
   private readonly notificationFromAddress =
     process.env.NOTIFICATION_EMAIL_FROM ||
     process.env.SECURITY_EMAIL_FROM ||
