@@ -10,6 +10,7 @@ import {
   Inject,
   InternalServerErrorException,
   Logger,
+  Patch,
   Post,
   Req,
   Res,
@@ -64,6 +65,28 @@ type FirebaseDecodedToken = Awaited<
   ReturnType<ReturnType<FirebaseAdminService['auth']>['verifyIdToken']>
 >;
 
+type AcademyProfileUpdate = {
+  bio?: string;
+  country?: string;
+  countryCode?: string;
+  language?: string;
+  learningGoal?: string;
+  skillLevel?: string;
+  learningInterests?: string[];
+  weeklyLearningGoal?: number;
+  lessonStyle?: string;
+  defaultCourseDifficulty?: string;
+  preferredContentFormat?: string;
+  aiTutorSuggestions?: boolean;
+  privacy?: {
+    publicProfile?: boolean;
+    showCompletedCourses?: boolean;
+    showCountry?: boolean;
+    personalizedAiRecommendations?: boolean;
+  };
+  emailPreferences?: Record<string, boolean>;
+};
+
 @Controller('auth')
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
@@ -84,12 +107,118 @@ export class AuthController {
 
   @Get('me')
   @UseGuards(AuthGuard)
-  getCurrentUser(@Req() request: Request & { user?: AuthenticatedUser }) {
+  async getCurrentUser(@Req() request: Request & { user?: AuthenticatedUser }) {
     if (!request.user) {
       throw new UnauthorizedException('Authenticated user missing from request.');
     }
 
-    return { user: request.user };
+    const profile = await this.getUserProfile(request.user.email);
+
+    return {
+      user: {
+        ...request.user,
+        displayName: profile.name,
+        photoURL: profile.profilePicture || null,
+      },
+      profile,
+    };
+  }
+
+  @Patch('profile')
+  @UseGuards(AuthGuard)
+  async updateCurrentUserProfile(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Body()
+    body: {
+      name?: string;
+      emailPreferences?: {
+        security?: boolean;
+      };
+      academyProfile?: AcademyProfileUpdate;
+    },
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const user = request.user;
+
+    if (!user?.email) {
+      throw new UnauthorizedException('Authenticated user missing from request.');
+    }
+
+    const updates: Record<string, unknown> = {
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+
+    if (body.name !== undefined) {
+      const name = body.name.trim().replace(/\s+/g, ' ');
+
+      if (name.length < 2) {
+        throw new BadRequestException('Display name must be at least 2 characters.');
+      }
+
+      if (name.length > 80) {
+        throw new BadRequestException('Display name must be 80 characters or less.');
+      }
+
+      updates.name = name;
+      updates.fullname = name;
+
+      await this.firebaseAdmin.auth().updateUser(user.uid, {
+        displayName: name,
+      });
+    }
+
+    if (body.emailPreferences?.security !== undefined) {
+      updates.emailPreferences = {
+        security: Boolean(body.emailPreferences.security),
+      };
+    }
+
+    if (body.academyProfile) {
+      Object.assign(
+        updates,
+        this.normalizeAcademyProfileUpdates(body.academyProfile),
+        {
+          apps: {
+            academy: {
+              enabled: true,
+              lastSeenAt: FieldValue.serverTimestamp(),
+            },
+          },
+        },
+      );
+    }
+
+    await this.firebaseAdmin
+      .db()
+      .collection('users')
+      .doc(user.email)
+      .set(updates, { merge: true });
+
+    const profile = await this.getUserProfile(user.email);
+    const meta: SessionMeta = {
+      uid: user.uid,
+      email: user.email,
+      name: profile.name || user.email.split('@')[0] || '',
+      roles: profile.roles,
+      exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS,
+    };
+
+    response.cookie(
+      SESSION_META_COOKIE_NAME,
+      this.sessionSigner.sign(meta),
+      this.getCookieOptions(),
+    );
+
+    return {
+      ok: true,
+      user: {
+        ...user,
+        roles: profile.roles,
+        displayName: profile.name,
+        photoURL: profile.profilePicture || null,
+      },
+      profile,
+    };
   }
 
   @Post('session')
@@ -418,8 +547,28 @@ export class AuthController {
     if (!email) {
       return {
         name: '',
+        profilePicture: '',
+        bio: '',
+        country: '',
+        countryCode: '',
+        language: 'en',
+        learningGoal: '',
+        skillLevel: null,
+        learningInterests: [],
+        weeklyLearningGoal: 3,
+        lessonStyle: null,
+        defaultCourseDifficulty: null,
+        preferredContentFormat: null,
+        aiTutorSuggestions: true,
+        privacy: this.normalizePrivacy(null),
+        onboardingComplete: false,
+        appGuideComplete: false,
+        subscriptionStatus: 'free',
+        member: false,
+        emailPreferences: this.normalizeEmailPreferences(null),
         roles: [],
         securityEmailsEnabled: true,
+        apps: {},
       };
     }
 
@@ -429,19 +578,221 @@ export class AuthController {
       .doc(email)
       .get();
 
-    const data = snapshot.data();
+    const data = snapshot.data() || {};
     const name =
       typeof data?.fullname === 'string'
         ? data.fullname
         : typeof data?.name === 'string'
           ? data.name
           : '';
-    const roles = snapshot.data()?.roles;
+    const roles = data.roles;
+    const emailPreferences = this.normalizeEmailPreferences(
+      data.emailPreferences,
+    );
     return {
       name,
+      profilePicture: this.stringValue(data.profilePicture),
+      bio: this.stringValue(data.bio),
+      country: this.stringValue(data.country),
+      countryCode: this.stringValue(data.countryCode),
+      language: this.stringValue(data.language) || 'en',
+      learningGoal: this.stringValue(data.learningGoal),
+      skillLevel: this.enumValue(data.skillLevel, [
+        'beginner',
+        'intermediate',
+        'advanced',
+      ]),
+      learningInterests: Array.isArray(data.learningInterests)
+        ? data.learningInterests.map(String).slice(0, 12)
+        : [],
+      weeklyLearningGoal: this.numberValue(data.weeklyLearningGoal, 3),
+      lessonStyle: this.enumValue(data.lessonStyle, [
+        'short',
+        'detailed',
+        'example-heavy',
+      ]),
+      defaultCourseDifficulty: this.enumValue(data.defaultCourseDifficulty, [
+        'beginner',
+        'intermediate',
+        'advanced',
+      ]),
+      preferredContentFormat: this.enumValue(data.preferredContentFormat, [
+        'text',
+        'examples',
+        'quizzes',
+      ]),
+      aiTutorSuggestions: data.aiTutorSuggestions !== false,
+      privacy: this.normalizePrivacy(data.privacy),
+      onboardingComplete: data.onboardingComplete === true,
+      appGuideComplete: data.appGuideComplete === true,
+      subscriptionStatus: this.stringValue(data.subscriptionStatus) || 'free',
+      member: data.member === true,
+      emailPreferences,
       roles: Array.isArray(roles) ? roles.map(String) : [],
-      securityEmailsEnabled: data?.emailPreferences?.security !== false,
+      securityEmailsEnabled: emailPreferences.security !== false,
+      apps: this.normalizeAppProfileSummary(data?.apps),
     };
+  }
+
+  private normalizeAcademyProfileUpdates(profile: AcademyProfileUpdate) {
+    const updates: Record<string, unknown> = {};
+
+    if (profile.bio !== undefined) {
+      updates.bio = profile.bio.trim().slice(0, 280);
+    }
+
+    if (profile.country !== undefined) {
+      updates.country = profile.country.trim().slice(0, 80);
+    }
+
+    if (profile.countryCode !== undefined) {
+      updates.countryCode = profile.countryCode.trim().toUpperCase().slice(0, 3);
+    }
+
+    if (profile.language !== undefined) {
+      updates.language = profile.language.trim().toLowerCase().slice(0, 12) || 'en';
+    }
+
+    if (profile.learningGoal !== undefined) {
+      updates.learningGoal = profile.learningGoal.trim().slice(0, 160);
+    }
+
+    const skillLevel = this.enumValue(profile.skillLevel, [
+      'beginner',
+      'intermediate',
+      'advanced',
+    ]);
+    if (skillLevel) updates.skillLevel = skillLevel;
+
+    if (Array.isArray(profile.learningInterests)) {
+      updates.learningInterests = profile.learningInterests
+        .map(interest => String(interest).trim())
+        .filter(Boolean)
+        .slice(0, 12);
+    }
+
+    if (profile.weeklyLearningGoal !== undefined) {
+      const weeklyGoal = Number(profile.weeklyLearningGoal);
+      updates.weeklyLearningGoal = Number.isFinite(weeklyGoal)
+        ? Math.min(Math.max(Math.round(weeklyGoal), 1), 21)
+        : 3;
+    }
+
+    const lessonStyle = this.enumValue(profile.lessonStyle, [
+      'short',
+      'detailed',
+      'example-heavy',
+    ]);
+    if (lessonStyle) updates.lessonStyle = lessonStyle;
+
+    const defaultCourseDifficulty = this.enumValue(
+      profile.defaultCourseDifficulty,
+      ['beginner', 'intermediate', 'advanced'],
+    );
+    if (defaultCourseDifficulty) {
+      updates.defaultCourseDifficulty = defaultCourseDifficulty;
+    }
+
+    const preferredContentFormat = this.enumValue(
+      profile.preferredContentFormat,
+      ['text', 'examples', 'quizzes'],
+    );
+    if (preferredContentFormat) {
+      updates.preferredContentFormat = preferredContentFormat;
+    }
+
+    if (profile.aiTutorSuggestions !== undefined) {
+      updates.aiTutorSuggestions = Boolean(profile.aiTutorSuggestions);
+    }
+
+    if (profile.privacy) {
+      updates.privacy = this.normalizePrivacy(profile.privacy);
+    }
+
+    if (profile.emailPreferences) {
+      updates.emailPreferences = this.normalizeEmailPreferences(
+        profile.emailPreferences,
+      );
+    }
+
+    return updates;
+  }
+
+  private normalizeEmailPreferences(value: unknown) {
+    const prefs =
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {};
+
+    return {
+      activity: prefs.activity === true,
+      general: prefs.general === true,
+      marketing: prefs.marketing === true,
+      security: prefs.security !== false,
+      courseReminders: prefs.courseReminders !== false,
+      aiCourseCompletion: prefs.aiCourseCompletion === true,
+      weeklyProgressSummary: prefs.weeklyProgressSummary === true,
+    };
+  }
+
+  private normalizePrivacy(value: unknown) {
+    const privacy =
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {};
+
+    return {
+      publicProfile: privacy.publicProfile === true,
+      showCompletedCourses: privacy.showCompletedCourses === true,
+      showCountry: privacy.showCountry !== false,
+      personalizedAiRecommendations:
+        privacy.personalizedAiRecommendations !== false,
+    };
+  }
+
+  private stringValue(value: unknown) {
+    return typeof value === 'string' ? value : '';
+  }
+
+  private numberValue(value: unknown, fallback: number) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+  }
+
+  private enumValue<T extends string>(value: unknown, allowed: T[]) {
+    return allowed.includes(value as T) ? (value as T) : null;
+  }
+
+  private normalizeAppProfileSummary(apps: unknown) {
+    if (!apps || typeof apps !== 'object' || Array.isArray(apps)) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(apps as Record<string, Record<string, unknown>>).map(
+        ([appId, app]) => [
+          appId,
+          {
+            enabled: app?.enabled !== false,
+            firstSeenAt: this.timestampToIso(app?.firstSeenAt),
+            lastSeenAt: this.timestampToIso(app?.lastSeenAt),
+          },
+        ],
+      ),
+    );
+  }
+
+  private timestampToIso(value: unknown) {
+    if (
+      value &&
+      typeof value === 'object' &&
+      'toDate' in value &&
+      typeof (value as { toDate?: unknown }).toDate === 'function'
+    ) {
+      return (value as { toDate: () => Date }).toDate().toISOString();
+    }
+
+    return null;
   }
 
   private async ensureUserProfile(
