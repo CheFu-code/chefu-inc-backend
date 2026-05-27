@@ -21,6 +21,7 @@ Next/React frontends should send `x-chefu-app` when creating a session:
 - `x-chefu-app: academy`
 - `x-chefu-app: flow`
 - `x-chefu-app: muzalo`
+- `x-chefu-app: quantum`
 
 Flow's existing `x-flow-session` header still works and still enforces the
 Flow sender allowlist.

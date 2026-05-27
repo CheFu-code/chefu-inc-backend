@@ -1,6 +1,6 @@
 export const CHEFU_APP_HEADER = 'x-chefu-app';
 
-export type ChefuAppId = 'academy' | 'flow' | 'muzalo';
+export type ChefuAppId = 'academy' | 'flow' | 'muzalo' | 'quantum';
 type ChefuAppAlias = 'music';
 
 export type ChefuApp = {
@@ -40,6 +40,11 @@ export const CHEFU_APPS: ChefuApp[] = [
       'https://muzalo.chefuinc.com',
       'https://music.chefuinc.com',
     ],
+  },
+  {
+    id: 'quantum',
+    name: 'Quantum',
+    origins: ['http://localhost:3003', 'https://quantum.chefuinc.com'],
   },
 ];
 
@@ -95,6 +100,16 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
       'http://localhost:3002/auth/callback',
     ],
     scopes: ['openid', 'profile', 'email', 'music:read'],
+  },
+  {
+    id: 'quantum-web',
+    appId: 'quantum',
+    name: 'Quantum',
+    redirectUris: [
+      'https://quantum.chefuinc.com/auth/callback',
+      'http://localhost:3003/auth/callback',
+    ],
+    scopes: ['openid', 'profile', 'email', 'quantum:chat', 'quantum:read'],
   },
 ];
 
