@@ -354,7 +354,7 @@ export class ResendService {
     const basePayload = {
       from: this.fromAddress,
       to: [data.email],
-      subject: 'Security alert: CheFu API key revoked',
+      subject: 'Security alert: CheFu Academy API key revoked',
     };
 
     return {
@@ -363,7 +363,7 @@ export class ResendService {
       text: [
         `Hi ${details.userName},`,
         '',
-        'A CheFu API key linked to your account appears to have been exposed.',
+        'A CheFu Academy API key linked to your account appears to have been exposed.',
         'For your protection, we revoked the key immediately.',
         '',
         `Key name: ${details.keyName}`,
