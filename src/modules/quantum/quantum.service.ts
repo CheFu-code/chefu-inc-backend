@@ -10,6 +10,7 @@ import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
   QuantumConversation,
+  QuantumGeneratedImage,
   QuantumMessage,
   QuantumMessageRole,
 } from './quantum.types';
@@ -17,6 +18,9 @@ import {
 const MAX_CONVERSATIONS = 100;
 const MAX_MESSAGES_PER_CONVERSATION = 100;
 const MAX_MESSAGE_LENGTH = 30000;
+const MAX_GENERATED_IMAGES_PER_MESSAGE = 4;
+const MAX_GENERATED_IMAGE_DATA_LENGTH = 700000;
+const MAX_GENERATED_IMAGE_DATA_PER_CONVERSATION = 900000;
 
 @Injectable()
 export class QuantumService {
@@ -121,9 +125,26 @@ export class QuantumService {
   private normalizeMessages(messages: QuantumMessage[] = []) {
     if (!Array.isArray(messages)) return [];
 
-    return messages
+    const normalized = messages
       .slice(-MAX_MESSAGES_PER_CONVERSATION)
       .map(message => this.normalizeMessage(message));
+
+    let remainingImageBudget = MAX_GENERATED_IMAGE_DATA_PER_CONVERSATION;
+
+    for (let index = normalized.length - 1; index >= 0; index -= 1) {
+      const message = normalized[index];
+      const keptImages = [];
+
+      for (const image of message.generatedImages || []) {
+        if (image.data.length > remainingImageBudget) continue;
+        keptImages.push(image);
+        remainingImageBudget -= image.data.length;
+      }
+
+      message.generatedImages = keptImages;
+    }
+
+    return normalized;
   }
 
   private normalizeMessage(value: QuantumMessage) {
@@ -138,7 +159,35 @@ export class QuantumService {
       id: this.cleanId(value.id) || randomUUID(),
       role,
       content: this.cleanText(value.content, MAX_MESSAGE_LENGTH),
+      generatedImages: this.normalizeGeneratedImages(value.generatedImages),
       timestamp: this.cleanDate(value.timestamp),
+    };
+  }
+
+  private normalizeGeneratedImages(images: QuantumGeneratedImage[] = []) {
+    if (!Array.isArray(images)) return [];
+
+    return images
+      .slice(0, MAX_GENERATED_IMAGES_PER_MESSAGE)
+      .map(image => this.normalizeGeneratedImage(image))
+      .filter((image): image is QuantumGeneratedImage => Boolean(image));
+  }
+
+  private normalizeGeneratedImage(
+    value: QuantumGeneratedImage,
+  ): QuantumGeneratedImage | null {
+    if (!value || typeof value !== 'object') return null;
+
+    const mimeType = this.cleanMimeType(value.mimeType);
+    const data = this.cleanBase64ImageData(value.data);
+
+    if (!mimeType || !data) return null;
+
+    return {
+      id: this.cleanId(value.id) || randomUUID(),
+      mimeType,
+      data,
+      alt: this.cleanText(value.alt, 180) || 'Generated image',
     };
   }
 
@@ -158,6 +207,17 @@ export class QuantumService {
       .replace(/\0/g, '')
       .trim()
       .slice(0, maxLength);
+  }
+
+  private cleanMimeType(value: unknown) {
+    const mimeType = String(value || '').trim().toLowerCase();
+    return /^image\/(png|jpeg|jpg|webp)$/.test(mimeType) ? mimeType : '';
+  }
+
+  private cleanBase64ImageData(value: unknown) {
+    const data = String(value || '').replace(/\s/g, '');
+    if (!data || data.length > MAX_GENERATED_IMAGE_DATA_LENGTH) return '';
+    return /^[a-zA-Z0-9+/]+={0,2}$/.test(data) ? data : '';
   }
 
   private cleanDate(value: unknown) {
@@ -185,7 +245,26 @@ export class QuantumService {
       id: String(data.id || randomUUID()),
       role: this.normalizeRole(data.role) || 'assistant',
       content: String(data.content || ''),
+      generatedImages: Array.isArray(data.generatedImages)
+        ? data.generatedImages
+            .map(image => this.toGeneratedImage(image))
+            .filter((image): image is QuantumGeneratedImage => Boolean(image))
+        : [],
       timestamp: this.serializeDate(data.timestamp),
+    };
+  }
+
+  private toGeneratedImage(data: DocumentData): QuantumGeneratedImage | null {
+    const mimeType = this.cleanMimeType(data.mimeType);
+    const imageData = this.cleanBase64ImageData(data.data);
+
+    if (!mimeType || !imageData) return null;
+
+    return {
+      id: String(data.id || randomUUID()),
+      mimeType,
+      data: imageData,
+      alt: String(data.alt || 'Generated image'),
     };
   }
 

@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { GlobalExceptionFilter } from './common/global-exception.filter';
 import { NextFunction, Request, Response } from 'express';
 import {
@@ -38,8 +39,13 @@ function isAllowedOrigin(origin: string | undefined, allowedOrigins: string[]) {
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
   const allowedOrigins = getAllowedOrigins();
+
+  app.useBodyParser('json', { limit: '8mb' });
+  app.useBodyParser('urlencoded', { extended: true, limit: '8mb' });
 
   app.enableCors({
     origin(

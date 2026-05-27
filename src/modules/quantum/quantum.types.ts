@@ -1,9 +1,17 @@
 export type QuantumMessageRole = 'user' | 'assistant';
 
+export type QuantumGeneratedImage = {
+  id: string;
+  mimeType: string;
+  data: string;
+  alt: string;
+};
+
 export type QuantumMessage = {
   id: string;
   role: QuantumMessageRole;
   content: string;
+  generatedImages?: QuantumGeneratedImage[];
   timestamp: string;
 };
 
