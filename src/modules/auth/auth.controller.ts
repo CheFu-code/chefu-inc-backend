@@ -17,6 +17,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { FieldValue } from 'firebase-admin/firestore';
 import { AppsService } from '../apps/apps.service';
 import { CHEFU_APP_HEADER, ChefuAppId } from '../apps/app-registry';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -58,6 +59,10 @@ function decodeJwtPayload(token: string) {
     return null;
   }
 }
+
+type FirebaseDecodedToken = Awaited<
+  ReturnType<ReturnType<FirebaseAdminService['auth']>['verifyIdToken']>
+>;
 
 @Controller('auth')
 export class AuthController {
@@ -119,9 +124,7 @@ export class AuthController {
       }),
     );
 
-    let decodedToken: Awaited<
-      ReturnType<ReturnType<FirebaseAdminService['auth']>['verifyIdToken']>
-    >;
+    let decodedToken: FirebaseDecodedToken;
     let sessionCookie: string;
 
     try {
@@ -179,6 +182,7 @@ export class AuthController {
       throw new UnauthorizedException('Failed to verify Firebase session.');
     }
 
+    await this.ensureUserProfile(decodedToken, sessionAppId);
     const userProfile = await this.getUserProfile(decodedToken.email);
     const meta: SessionMeta = {
       uid: decodedToken.uid,
@@ -438,6 +442,67 @@ export class AuthController {
       roles: Array.isArray(roles) ? roles.map(String) : [],
       securityEmailsEnabled: data?.emailPreferences?.security !== false,
     };
+  }
+
+  private async ensureUserProfile(
+    decodedToken: FirebaseDecodedToken,
+    appId: ChefuAppId,
+  ) {
+    const email = decodedToken.email?.trim().toLowerCase();
+    if (!email) return;
+
+    const db = this.firebaseAdmin.db();
+    const userRef = db.collection('users').doc(email);
+    const appProfileRef = userRef.collection('appProfiles').doc(appId);
+    const [userSnapshot, appProfileSnapshot] = await Promise.all([
+      userRef.get(),
+      appProfileRef.get(),
+    ]);
+    const existingUser = userSnapshot.data();
+    const existingRoles = existingUser?.roles;
+    const name =
+      typeof existingUser?.fullname === 'string'
+        ? existingUser.fullname
+        : typeof existingUser?.name === 'string'
+          ? existingUser.name
+          : decodedToken.name || email.split('@')[0] || '';
+    const now = FieldValue.serverTimestamp();
+
+    await userRef.set(
+      {
+        ...(!userSnapshot.exists ? { createdAt: now } : {}),
+        uid: decodedToken.uid,
+        email,
+        fullname: name,
+        name,
+        roles:
+          Array.isArray(existingRoles) && existingRoles.length > 0
+            ? existingRoles.map(String)
+            : ['user'],
+        authProvider: decodedToken.firebase?.sign_in_provider || 'unknown',
+        lastLoginAt: now,
+        updatedAt: now,
+        apps: {
+          [appId]: {
+            enabled: true,
+            ...(!appProfileSnapshot.exists ? { firstSeenAt: now } : {}),
+            lastSeenAt: now,
+          },
+        },
+      },
+      { merge: true },
+    );
+
+    await appProfileRef.set(
+      {
+        ...(!appProfileSnapshot.exists ? { createdAt: now } : {}),
+        appId,
+        enabled: true,
+        lastLoginAt: now,
+        updatedAt: now,
+      },
+      { merge: true },
+    );
   }
 
   private getClientIp(request: Request) {

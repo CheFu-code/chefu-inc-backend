@@ -1,16 +1,24 @@
 import { Module } from '@nestjs/common';
 import { AuthController } from './auth.controller';
+import { OAuthController, OAuthDiscoveryController } from './oauth.controller';
 import { AdminGuard } from './admin.guard';
 import { AuthGuard } from './auth.guard';
 import { MfaBackupCodeService } from './mfa-backup-code.service';
+import { OAuthService } from './oauth.service';
 import { SessionSignerService } from './session-signer.service';
 import { AppsModule } from '../apps/apps.module';
 import { EmailModule } from '../email/email.module';
 
 @Module({
   imports: [AppsModule, EmailModule],
-  controllers: [AuthController],
-  providers: [AuthGuard, AdminGuard, SessionSignerService, MfaBackupCodeService],
+  controllers: [AuthController, OAuthController, OAuthDiscoveryController],
+  providers: [
+    AuthGuard,
+    AdminGuard,
+    SessionSignerService,
+    MfaBackupCodeService,
+    OAuthService,
+  ],
   exports: [AuthGuard, AdminGuard, SessionSignerService],
 })
 export class AuthModule {}

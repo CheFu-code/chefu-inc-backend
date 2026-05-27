@@ -9,6 +9,14 @@ export type ChefuApp = {
   origins: string[];
 };
 
+export type ChefuOauthClient = {
+  id: string;
+  appId: ChefuAppId;
+  name: string;
+  redirectUris: string[];
+  scopes: string[];
+};
+
 export const CHEFU_APPS: ChefuApp[] = [
   {
     id: 'academy',
@@ -39,8 +47,69 @@ const CHEFU_APP_ALIASES: Record<ChefuAppAlias, ChefuAppId> = {
   music: 'muzalo',
 };
 
+export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
+  {
+    id: 'chefu-inc-web',
+    appId: 'academy',
+    name: 'CheFu Inc',
+    redirectUris: [
+      'https://chefuinc.com/auth/callback',
+      'http://localhost:3000/auth/callback',
+    ],
+    scopes: ['openid', 'profile', 'email', 'apps:read'],
+  },
+  {
+    id: 'chefu-academy-web',
+    appId: 'academy',
+    name: 'CheFu Academy',
+    redirectUris: [
+      'https://academy.chefuinc.com/auth/callback',
+      'http://localhost:3000/auth/callback',
+    ],
+    scopes: [
+      'openid',
+      'profile',
+      'email',
+      'courses:read',
+      'videos:read',
+      'keys:manage',
+    ],
+  },
+  {
+    id: 'flow-web',
+    appId: 'flow',
+    name: 'Flow Mail',
+    redirectUris: [
+      'https://flow.chefuinc.com/auth/callback',
+      'http://localhost:3001/auth/callback',
+    ],
+    scopes: ['openid', 'profile', 'email', 'flow:read', 'flow:send'],
+  },
+  {
+    id: 'muzalo-web',
+    appId: 'muzalo',
+    name: 'Muzalo',
+    redirectUris: [
+      'https://muzalo.chefuinc.com/auth/callback',
+      'https://music.chefuinc.com/auth/callback',
+      'http://localhost:3002/auth/callback',
+    ],
+    scopes: ['openid', 'profile', 'email', 'music:read'],
+  },
+];
+
 export function registeredAppOrigins() {
   return CHEFU_APPS.flatMap(app => app.origins);
+}
+
+export function registeredOauthClients() {
+  return CHEFU_OAUTH_CLIENTS;
+}
+
+export function resolveOauthClient(clientId?: string) {
+  if (!clientId) return null;
+
+  return CHEFU_OAUTH_CLIENTS.find(client => client.id === clientId) || null;
 }
 
 export function resolveChefuAppId(value?: string): ChefuAppId | null {

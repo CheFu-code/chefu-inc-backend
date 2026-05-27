@@ -3,8 +3,11 @@ import {
   CHEFU_APPS,
   ChefuApp,
   ChefuAppId,
+  ChefuOauthClient,
   registeredAppOrigins,
+  registeredOauthClients,
   resolveChefuAppId,
+  resolveOauthClient,
 } from './app-registry';
 
 @Injectable()
@@ -19,5 +22,13 @@ export class AppsService {
 
   resolveId(value?: string): ChefuAppId | null {
     return resolveChefuAppId(value);
+  }
+
+  oauthClients(): ChefuOauthClient[] {
+    return registeredOauthClients();
+  }
+
+  resolveOauthClient(clientId?: string): ChefuOauthClient | null {
+    return resolveOauthClient(clientId);
   }
 }

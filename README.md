@@ -20,10 +20,27 @@ Next/React frontends should send `x-chefu-app` when creating a session:
 
 - `x-chefu-app: academy`
 - `x-chefu-app: flow`
-- `x-chefu-app: music`
+- `x-chefu-app: muzalo`
 
 Flow's existing `x-flow-session` header still works and still enforces the
 Flow sender allowlist.
+
+`x-chefu-app: music` is accepted as a legacy alias for Muzalo.
+
+## OAuth/OIDC
+
+CheFu API also acts as the CheFu Account authorization server. It supports the
+OAuth 2.0 Authorization Code flow with PKCE and OIDC discovery:
+
+- `GET /.well-known/openid-configuration`
+- `GET /.well-known/oauth-authorization-server`
+- `GET /oauth/authorize`
+- `POST /oauth/token`
+- `GET /oauth/userinfo`
+- `GET /oauth/jwks`
+
+Registered OAuth clients live in `src/modules/apps/app-registry.ts`. Public
+browser clients must use `code_challenge_method=S256`.
 
 ## Backend Structure
 
@@ -43,6 +60,10 @@ Set these on the backend host:
 - `FRONTEND_ORIGIN=https://chefuinc.com`
 - `AUTH_COOKIE_DOMAIN=.chefuinc.com`
 - `AUTH_SESSION_SECRET=<long random secret>`
+- `CHEFU_ACCOUNT_URL=https://chefuinc.com`
+- `OAUTH_ISSUER=https://api.chefuinc.com`
+- `OAUTH_PRIVATE_KEY=<RSA private key PEM with \n escapes>`
+- `OAUTH_KEY_ID=<stable signing key id>`
 - Firebase Admin credentials using either `FIREBASE_SERVICE_ACCOUNT` JSON or `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`
 - `FIREBASE_API_KEY` for SDK email/password login compatibility
 - `GEMINI_API_KEY`
@@ -71,6 +92,10 @@ on Render, then falls back to `http://127.0.0.1:${PORT}/health`.
 
 - `GET /health`
 - `POST /auth/session`
+- `GET /oauth/authorize`
+- `POST /oauth/token`
+- `GET /oauth/userinfo`
+- `GET /oauth/jwks`
 - `POST /auth/login`
 - `POST /auth/register`
 - `POST /auth/refresh`
