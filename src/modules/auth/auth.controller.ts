@@ -19,6 +19,7 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { FieldValue } from 'firebase-admin/firestore';
+import { createHash } from 'node:crypto';
 import { AppsService } from '../apps/apps.service';
 import { CHEFU_APP_HEADER, ChefuAppId } from '../apps/app-registry';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -85,6 +86,12 @@ type AcademyProfileUpdate = {
     personalizedAiRecommendations?: boolean;
   };
   emailPreferences?: Record<string, boolean>;
+};
+
+type SignInAlertDecision = {
+  reason: string;
+  shouldSend: boolean;
+  throttleMs: number;
 };
 
 @Controller('auth')
@@ -361,22 +368,12 @@ export class AuthController {
       tokenPayload?.firebase?.sign_in_provider &&
       userProfile.securityEmailsEnabled
     ) {
-      void this.resendService.sendSignInNotification({
+      void this.sendThrottledSignInNotification({
         email: decodedToken.email,
+        uid: decodedToken.uid,
         userName: meta.name,
         provider: tokenPayload.firebase.sign_in_provider,
-        deviceInfo: request.headers['user-agent'] || undefined,
-        ipAddress: this.getClientIp(request),
-        timestamp: new Date(),
-      }).catch(error => {
-        this.logger.error(
-          JSON.stringify({
-            event: 'auth_sign_in_notification_failed',
-            uid: decodedToken.uid,
-            email: decodedToken.email || null,
-            reason: error instanceof Error ? error.message : 'unknown',
-          }),
-        );
+        request,
       });
     }
 
@@ -954,6 +951,227 @@ export class AuthController {
       },
       { merge: true },
     );
+  }
+
+  private async sendThrottledSignInNotification({
+    email,
+    provider,
+    request,
+    uid,
+    userName,
+  }: {
+    email: string;
+    provider: string;
+    request: Request;
+    uid: string;
+    userName?: string;
+  }) {
+    try {
+      const decision = await this.reserveSignInAlert({
+        email,
+        provider,
+        request,
+      });
+
+      if (!decision.shouldSend) {
+        this.logger.log(
+          JSON.stringify({
+            event: 'auth_sign_in_notification_suppressed',
+            uid,
+            email,
+            reason: decision.reason,
+            throttleMs: decision.throttleMs,
+          }),
+        );
+        return;
+      }
+
+      await this.resendService.sendSignInNotification({
+        email,
+        userName,
+        provider,
+        deviceInfo: request.headers['user-agent'] || undefined,
+        ipAddress: this.getClientIp(request),
+        timestamp: new Date(),
+      });
+
+      this.logger.log(
+        JSON.stringify({
+          event: 'auth_sign_in_notification_sent',
+          uid,
+          email,
+          reason: decision.reason,
+        }),
+      );
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'auth_sign_in_notification_failed',
+          uid,
+          email,
+          reason: error instanceof Error ? error.message : 'unknown',
+        }),
+      );
+    }
+  }
+
+  private async reserveSignInAlert({
+    email,
+    provider,
+    request,
+  }: {
+    email: string;
+    provider: string;
+    request: Request;
+  }): Promise<SignInAlertDecision> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const userRef = this.firebaseAdmin.db().collection('users').doc(normalizedEmail);
+    const fingerprint = this.signInAlertFingerprint(provider, request);
+    const userAgentHash = this.hashValue(request.headers['user-agent'] || 'unknown');
+    const ipHash = this.hashValue(this.ipFingerprintSource(request));
+    const detectedCountry = this.getDetectedCountry(request);
+    const throttleMs = this.signInAlertThrottleMs();
+    const nowMs = Date.now();
+
+    return this.firebaseAdmin.db().runTransaction(async tx => {
+      const snapshot = await tx.get(userRef);
+      const data = snapshot.data() || {};
+      const existingAlert =
+        data.signInAlert &&
+        typeof data.signInAlert === 'object' &&
+        !Array.isArray(data.signInAlert)
+          ? (data.signInAlert as Record<string, unknown>)
+          : {};
+
+      const lastFingerprint = this.stringValue(existingAlert.fingerprint);
+      const lastCountryCode = this.stringValue(existingAlert.countryCode);
+      const lastSentAtMs =
+        this.numberValue(existingAlert.lastSentAtMs, 0) ||
+        this.timestampToMillis(existingAlert.lastSentAt);
+      const isFirstAlert = !lastSentAtMs;
+      const isNewFingerprint =
+        Boolean(lastFingerprint) && lastFingerprint !== fingerprint;
+      const countryChanged =
+        Boolean(detectedCountry?.code) &&
+        Boolean(lastCountryCode) &&
+        lastCountryCode !== detectedCountry?.code;
+      const throttleExpired =
+        !lastSentAtMs || nowMs - lastSentAtMs >= throttleMs;
+      const shouldSend =
+        isFirstAlert || isNewFingerprint || countryChanged || throttleExpired;
+      const reason = isFirstAlert
+        ? 'first_alert'
+        : isNewFingerprint
+          ? 'new_device_or_network'
+          : countryChanged
+            ? 'country_changed'
+            : throttleExpired
+              ? 'throttle_expired'
+              : 'recent_same_session';
+
+      tx.set(
+        userRef,
+        {
+          signInAlert: {
+            ...existingAlert,
+            fingerprint,
+            provider,
+            countryCode: detectedCountry?.code || null,
+            countrySource: detectedCountry?.source || null,
+            userAgentHash,
+            ipHash,
+            lastSeenAt: FieldValue.serverTimestamp(),
+            lastSeenAtMs: nowMs,
+            ...(shouldSend
+              ? {
+                  lastSentAt: FieldValue.serverTimestamp(),
+                  lastSentAtMs: nowMs,
+                  lastSentReason: reason,
+                }
+              : {
+                  lastSuppressedAt: FieldValue.serverTimestamp(),
+                  lastSuppressedAtMs: nowMs,
+                  lastSuppressedReason: reason,
+                }),
+          },
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+
+      return {
+        reason,
+        shouldSend,
+        throttleMs,
+      };
+    });
+  }
+
+  private signInAlertFingerprint(provider: string, request: Request) {
+    return this.hashValue(
+      [
+        provider,
+        this.ipFingerprintSource(request),
+        request.headers['user-agent'] || 'unknown',
+      ].join('|'),
+    );
+  }
+
+  private ipFingerprintSource(request: Request) {
+    const ip = this.getClientIp(request) || 'unknown';
+
+    if (ip.includes(':')) {
+      return ip.split(':').filter(Boolean).slice(0, 4).join(':') || ip;
+    }
+
+    const parts = ip.split('.');
+    if (parts.length === 4) {
+      return `${parts[0]}.${parts[1]}.${parts[2]}.0`;
+    }
+
+    return ip;
+  }
+
+  private hashValue(value: string) {
+    const secret =
+      process.env.SIGNIN_ALERT_FINGERPRINT_SECRET ||
+      this.firebaseAdmin.projectId() ||
+      'chefu-signin-alert';
+
+    return createHash('sha256').update(`${secret}:${value}`).digest('hex');
+  }
+
+  private signInAlertThrottleMs() {
+    const configuredMinutes = Number(
+      process.env.SIGNIN_ALERT_THROTTLE_MINUTES || 360,
+    );
+    const safeMinutes = Number.isFinite(configuredMinutes)
+      ? Math.min(Math.max(configuredMinutes, 5), 24 * 60)
+      : 360;
+
+    return safeMinutes * 60 * 1000;
+  }
+
+  private timestampToMillis(value: unknown) {
+    if (
+      value &&
+      typeof value === 'object' &&
+      'toMillis' in value &&
+      typeof (value as { toMillis?: unknown }).toMillis === 'function'
+    ) {
+      return (value as { toMillis: () => number }).toMillis();
+    }
+
+    if (
+      value &&
+      typeof value === 'object' &&
+      'toDate' in value &&
+      typeof (value as { toDate?: unknown }).toDate === 'function'
+    ) {
+      return (value as { toDate: () => Date }).toDate().getTime();
+    }
+
+    return 0;
   }
 
   private getClientIp(request: Request) {
