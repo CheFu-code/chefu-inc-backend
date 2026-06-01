@@ -25,7 +25,6 @@ app.
 - `billing`: subscription and checkout operations.
 - `email`: Resend integration.
 - `notifications`: notification preferences and delivery.
-- `keepalive`: Render uptime cron.
 
 ### Product Modules
 
