@@ -1,4 +1,5 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+import { RateLimitMiddleware } from './common/rate-limit.middleware';
 import { RequestLoggerMiddleware } from './common/request-logger.middleware';
 import { AcademySdkModule } from './modules/academy-sdk/academy-sdk.module';
 import { AdminModule } from './modules/admin/admin.module';
@@ -45,6 +46,6 @@ const productModules = [
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(RequestLoggerMiddleware).forRoutes('*');
+    consumer.apply(RequestLoggerMiddleware, RateLimitMiddleware).forRoutes('*');
   }
 }

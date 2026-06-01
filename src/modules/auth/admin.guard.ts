@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { AuthenticatedUser } from './authenticated-user';
+import { isAdmin } from './roles';
 
 @Injectable()
 export class AdminGuard implements CanActivate {
@@ -16,11 +17,7 @@ export class AdminGuard implements CanActivate {
     const request = context
       .switchToHttp()
       .getRequest<Request & { user?: AuthenticatedUser }>();
-    const isAdmin = request.user?.roles.some(
-      role => role.toLowerCase() === 'admin',
-    );
-
-    if (!isAdmin) {
+    if (!isAdmin(request.user)) {
       this.logger.warn(
         JSON.stringify({
           event: 'admin_guard_denied',

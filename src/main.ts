@@ -3,6 +3,7 @@ import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { validateProductionEnv } from './common/env';
 import { GlobalExceptionFilter } from './common/global-exception.filter';
 import { NextFunction, Request, Response } from 'express';
 import {
@@ -37,8 +38,34 @@ function isAllowedOrigin(origin: string | undefined, allowedOrigins: string[]) {
   }
 }
 
+function setSecurityHeaders(response: Response) {
+  response.setHeader(
+    'Content-Security-Policy',
+    "base-uri 'self'; frame-ancestors 'self'; object-src 'none'; upgrade-insecure-requests",
+  );
+  response.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  response.setHeader(
+    'Permissions-Policy',
+    'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+  );
+  response.setHeader(
+    'Strict-Transport-Security',
+    'max-age=63072000; includeSubDomains; preload',
+  );
+  response.setHeader('X-Content-Type-Options', 'nosniff');
+  response.setHeader('X-Frame-Options', 'SAMEORIGIN');
+}
+
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
+  const envValidation = validateProductionEnv();
+
+  if (envValidation.missing.length > 0) {
+    throw new Error(
+      `Missing required production environment variables: ${envValidation.missing.join(', ')}`,
+    );
+  }
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
   });
@@ -72,6 +99,8 @@ async function bootstrap() {
     ],
   });
   app.use((request: Request, response: Response, next: NextFunction) => {
+    setSecurityHeaders(response);
+
     const origin = request.headers.origin;
 
     if (isAllowedOrigin(origin, allowedOrigins) && origin) {
