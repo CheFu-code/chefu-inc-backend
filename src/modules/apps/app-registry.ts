@@ -113,6 +113,13 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
     ],
     scopes: ['openid', 'profile', 'email', 'quantum:chat', 'quantum:read'],
   },
+  {
+    id: 'quantum-mobile',
+    appId: 'quantum',
+    name: 'Quantum Mobile',
+    redirectUris: ['quantum://auth'],
+    scopes: ['openid', 'profile', 'email', 'quantum:chat', 'quantum:read'],
+  },
 ];
 
 export function registeredAppOrigins() {

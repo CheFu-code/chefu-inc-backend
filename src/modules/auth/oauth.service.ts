@@ -57,6 +57,10 @@ type TokenClaims = {
   app?: string;
 };
 
+export type OAuthAccessTokenClaims = TokenClaims & {
+  typ: 'access_token';
+};
+
 type AuthorizeParams = {
   client_id?: string;
   code_challenge?: string;
@@ -353,6 +357,15 @@ export class OAuthService {
       app: claims.app,
       scope: claims.scope,
     };
+  }
+
+  verifyAccessToken(token: string): OAuthAccessTokenClaims {
+    const claims = this.verifyJwt(token);
+    if (claims.typ !== 'access_token') {
+      throw new UnauthorizedException('Access token required.');
+    }
+
+    return claims as OAuthAccessTokenClaims;
   }
 
   private validateAuthorizeParams(params: AuthorizeParams) {

@@ -9,11 +9,17 @@ import {
 import { Request } from 'express';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { AuthenticatedUser } from './authenticated-user';
+import { OAuthService } from './oauth.service';
 import { SESSION_COOKIE_NAME } from './session.constants';
 
 type RequestWithUser = Request & {
   user?: AuthenticatedUser;
   cookies?: Record<string, string>;
+};
+
+type AuthResolution = {
+  source: 'firebase_bearer' | 'oauth_bearer' | 'session_cookie';
+  user: AuthenticatedUser;
 };
 
 @Injectable()
@@ -23,6 +29,8 @@ export class AuthGuard implements CanActivate {
   constructor(
     @Inject(FirebaseAdminService)
     private readonly firebaseAdmin: FirebaseAdminService,
+    @Inject(OAuthService)
+    private readonly oauthService: OAuthService,
   ) {}
 
   async canActivate(context: ExecutionContext) {
@@ -31,30 +39,25 @@ export class AuthGuard implements CanActivate {
     const sessionCookie = request.cookies?.[SESSION_COOKIE_NAME];
 
     try {
-      const decoded = token
-        ? await this.firebaseAdmin.auth().verifyIdToken(token)
+      const resolution = token
+        ? await this.resolveBearerUser(token)
         : sessionCookie
-          ? await this.firebaseAdmin.auth().verifySessionCookie(sessionCookie, true)
+          ? await this.resolveSessionUser(sessionCookie)
           : null;
 
-      if (!decoded) {
+      if (!resolution) {
         throw new UnauthorizedException('Authentication required.');
       }
 
-      const email = decoded.email || '';
-      request.user = {
-        uid: decoded.uid,
-        email,
-        roles: await this.getUserRoles(email),
-      };
+      request.user = resolution.user;
 
       this.logger.log(
         JSON.stringify({
           event: 'auth_guard_allowed',
           path: request.originalUrl,
-          uid: decoded.uid,
-          email,
-          authSource: token ? 'bearer' : 'session_cookie',
+          uid: resolution.user.uid,
+          email: resolution.user.email,
+          authSource: resolution.source,
           roleCount: request.user.roles.length,
         }),
       );
@@ -79,6 +82,50 @@ export class AuthGuard implements CanActivate {
     return authorization.startsWith('Bearer ')
       ? authorization.slice('Bearer '.length)
       : '';
+  }
+
+  private async resolveBearerUser(token: string): Promise<AuthResolution> {
+    try {
+      const decoded = await this.firebaseAdmin.auth().verifyIdToken(token);
+      const email = decoded.email || '';
+
+      return {
+        source: 'firebase_bearer',
+        user: {
+          uid: decoded.uid,
+          email,
+          roles: await this.getUserRoles(email),
+        },
+      };
+    } catch {
+      const claims = this.oauthService.verifyAccessToken(token);
+      const email = claims.email || '';
+
+      return {
+        source: 'oauth_bearer',
+        user: {
+          uid: claims.sub,
+          email,
+          roles: email ? await this.getUserRoles(email) : claims.roles || [],
+        },
+      };
+    }
+  }
+
+  private async resolveSessionUser(sessionCookie: string): Promise<AuthResolution> {
+    const decoded = await this.firebaseAdmin
+      .auth()
+      .verifySessionCookie(sessionCookie, true);
+    const email = decoded.email || '';
+
+    return {
+      source: 'session_cookie',
+      user: {
+        uid: decoded.uid,
+        email,
+        roles: await this.getUserRoles(email),
+      },
+    };
   }
 
   private async getUserRoles(email: string) {
