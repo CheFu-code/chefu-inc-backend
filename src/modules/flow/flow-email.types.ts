@@ -23,7 +23,14 @@ export type FlowSendPayload = {
 
 export type FlowMessage = {
   id: string;
-  folder: 'inbox' | 'sent' | 'scheduled' | 'campaigns' | 'archived' | 'trash';
+  folder:
+    | 'inbox'
+    | 'sent'
+    | 'drafts'
+    | 'scheduled'
+    | 'campaigns'
+    | 'archived'
+    | 'trash';
   direction: 'inbound' | 'outbound';
   from: string;
   to: string[];

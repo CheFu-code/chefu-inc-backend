@@ -1,17 +1,20 @@
 import {
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Headers,
   Inject,
+  HttpCode,
   UnauthorizedException,
   Req,
+  Res,
   Query,
   Param,
   Post,
 } from '@nestjs/common';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { Webhook } from 'svix';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { SESSION_COOKIE_NAME } from '../auth/session.constants';
@@ -19,6 +22,7 @@ import {
   FLOW_ACCESS_DENIED_MESSAGE,
   isFlowAllowedEmail,
 } from './flow-access';
+import { FlowAccessKeyService } from './flow-access-key.service';
 import { FlowSendPayload } from './flow-email.types';
 import { FlowService } from './flow.service';
 
@@ -27,12 +31,54 @@ export class FlowController {
   constructor(
     @Inject(FlowService)
     private readonly flowService: FlowService,
+    @Inject(FlowAccessKeyService)
+    private readonly flowAccessKeys: FlowAccessKeyService,
     @Inject(FirebaseAdminService)
     private readonly firebaseAdmin: FirebaseAdminService,
   ) {}
 
+  @Get('access/session')
+  async accessSession(@Req() request: Request) {
+    return this.flowAccessKeys.sessionPayload(
+      await this.flowAccessKeys.sessionFromRequest(request),
+    );
+  }
+
+  @Post('access/login')
+  async accessLogin(
+    @Body() body: { code?: string },
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    return this.flowAccessKeys.login(body.code || '', response, request);
+  }
+
+  @Post('access/register')
+  async accessRegister(
+    @Body()
+    body: {
+      accessKey?: string;
+      label?: string;
+      registrationCode?: string;
+    },
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    return this.flowAccessKeys.register(body, response, request);
+  }
+
+  @Delete('access/session')
+  @HttpCode(200)
+  clearAccessSession(@Res({ passthrough: true }) response: Response) {
+    return this.flowAccessKeys.clearSession(response);
+  }
+
   @Get('config')
-  getConfig() {
+  async getConfig(
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
     return this.flowService.getConfig();
   }
 
@@ -75,6 +121,53 @@ export class FlowController {
   ) {
     await this.assertFlowAccess(flowApiKey, request);
     return this.flowService.markRead(messageId);
+  }
+
+  @Post('messages/:messageId/star')
+  async star(
+    @Param('messageId') messageId: string,
+    @Body() body: { starred?: boolean },
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    return this.flowService.setStarred(messageId, Boolean(body.starred));
+  }
+
+  @Post('messages/:messageId/trash')
+  async trash(
+    @Param('messageId') messageId: string,
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    return this.flowService.moveToTrash(messageId);
+  }
+
+  @Delete('messages/:messageId')
+  async remove(
+    @Param('messageId') messageId: string,
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    return this.flowService.deleteMessage(messageId);
+  }
+
+  @Post('drafts')
+  async saveDraft(
+    @Body()
+    body: {
+      body?: string;
+      from?: string;
+      subject?: string;
+      to?: string | string[];
+    },
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    return this.flowService.saveDraft(body);
   }
 
   @Post('send')
@@ -122,6 +215,10 @@ export class FlowController {
     const isBrowserRequest = Boolean(request?.headers.origin);
 
     if (!isBrowserRequest && (!requiredKey || flowApiKey === requiredKey)) {
+      return;
+    }
+
+    if (request && (await this.flowAccessKeys.sessionFromRequest(request))) {
       return;
     }
 

@@ -34,5 +34,13 @@ export function validateProductionEnv(): EnvValidationResult {
     missing.push('FRONTEND_ORIGINS or FRONTEND_ORIGIN');
   }
 
+  if (!hasAnyEnv(['FLOW_ACCESS_SECRET'])) {
+    missing.push('FLOW_ACCESS_SECRET');
+  }
+
+  if (!hasAnyEnv(['FLOW_REGISTRATION_SECRET', 'FLOW_ADMIN_REGISTRATION_KEY'])) {
+    missing.push('FLOW_REGISTRATION_SECRET or FLOW_ADMIN_REGISTRATION_KEY');
+  }
+
   return { missing };
 }

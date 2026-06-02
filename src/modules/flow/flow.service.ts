@@ -64,7 +64,7 @@ export class FlowService {
   }
 
   async getMessages(folder = 'inbox') {
-    const normalizedFolder = this.normalizeFolder(folder);
+    const requestedFolder = String(folder || 'inbox').toLowerCase();
     const snapshot = await this.messagesCollection()
       .orderBy('createdAt', 'desc')
       .limit(100)
@@ -72,12 +72,10 @@ export class FlowService {
     const allMessages = snapshot.docs.map(doc =>
       this.toMessage(doc.id, doc.data()),
     );
-    const messages = allMessages.filter(
-      message => message.folder === normalizedFolder,
-    );
+    const messages = this.filterMessagesByFolder(allMessages, requestedFolder);
 
     return {
-      folder: normalizedFolder,
+      folder: requestedFolder,
       messages,
       counts: this.countFolders(allMessages),
     };
@@ -353,6 +351,117 @@ export class FlowService {
     return {
       id: messageId,
       unread: false,
+    };
+  }
+
+  async setStarred(messageId: string, starred: boolean) {
+    const ref = this.messagesCollection().doc(messageId);
+    const snapshot = await ref.get();
+
+    if (!snapshot.exists) {
+      throw new BadRequestException('Message not found.');
+    }
+
+    await ref.update({
+      starred,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    return {
+      id: messageId,
+      starred,
+    };
+  }
+
+  async moveToTrash(messageId: string) {
+    const ref = this.messagesCollection().doc(messageId);
+    const snapshot = await ref.get();
+
+    if (!snapshot.exists) {
+      throw new BadRequestException('Message not found.');
+    }
+
+    await ref.update({
+      folder: 'trash',
+      unread: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    return {
+      folder: 'trash',
+      id: messageId,
+    };
+  }
+
+  async deleteMessage(messageId: string) {
+    const ref = this.messagesCollection().doc(messageId);
+    const snapshot = await ref.get();
+
+    if (!snapshot.exists) {
+      throw new BadRequestException('Message not found.');
+    }
+
+    await ref.delete();
+
+    return {
+      deleted: true,
+      id: messageId,
+    };
+  }
+
+  async saveDraft(payload: {
+    body?: string;
+    from?: string;
+    subject?: string;
+    to?: string | string[];
+  }) {
+    const body = String(payload.body || '').trim();
+    const subject = String(payload.subject || '(no subject)').trim() || '(no subject)';
+    const from =
+      this.resolveSender(payload.from || '') ||
+      this.getConfig().defaultFrom ||
+      'Flow Mail <mail@flow.chefuinc.com>';
+    const to = this.normalizeAddressList(payload.to).filter(address =>
+      /^\S+@\S+\.\S+$/.test(this.emailAddress(address) || address),
+    );
+
+    if (!body && subject === '(no subject)' && !to.length) {
+      throw new BadRequestException('Draft is empty.');
+    }
+
+    const now = new Date().toISOString();
+    const doc = await this.messagesCollection().add({
+      attachments: 0,
+      createdAt: FieldValue.serverTimestamp(),
+      direction: 'outbound',
+      folder: 'drafts',
+      from,
+      preview: this.previewFromText(body),
+      sentAt: now,
+      starred: false,
+      subject,
+      text: body,
+      to,
+      unread: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    return {
+      draft: this.toMessage(doc.id, {
+        attachments: 0,
+        createdAt: new Date(),
+        direction: 'outbound',
+        folder: 'drafts',
+        from,
+        preview: this.previewFromText(body),
+        sentAt: now,
+        starred: false,
+        subject,
+        text: body,
+        to,
+        unread: false,
+      }),
+      saved: true,
     };
   }
 
@@ -647,9 +756,15 @@ export class FlowService {
   private normalizeFolder(value?: string) {
     const folder = String(value || 'inbox').toLowerCase();
     if (
-      ['inbox', 'sent', 'scheduled', 'campaigns', 'archived', 'trash'].includes(
-        folder,
-      )
+      [
+        'inbox',
+        'sent',
+        'drafts',
+        'scheduled',
+        'campaigns',
+        'archived',
+        'trash',
+      ].includes(folder)
     ) {
       return folder as FlowMessage['folder'];
     }
@@ -659,20 +774,41 @@ export class FlowService {
 
   private countFolders(messages: FlowMessage[]) {
     const counts = {
+      allmail: 0,
       inbox: 0,
       sent: 0,
+      drafts: 0,
       scheduled: 0,
       campaigns: 0,
       archived: 0,
+      starred: 0,
       trash: 0,
     };
 
     messages.forEach(message => {
       const folder = this.normalizeFolder(message.folder);
       counts[folder] += 1;
+      if (message.folder !== 'trash') counts.allmail += 1;
+      if (message.starred) counts.starred += 1;
     });
 
     return counts;
+  }
+
+  private filterMessagesByFolder(messages: FlowMessage[], folder: string) {
+    if (folder === 'allmail') {
+      return messages.filter(message => message.folder !== 'trash');
+    }
+
+    if (folder === 'starred') {
+      return messages.filter(message => message.starred);
+    }
+
+    const normalizedFolder = this.normalizeFolder(
+      folder === 'bin' ? 'trash' : folder,
+    );
+
+    return messages.filter(message => message.folder === normalizedFolder);
   }
 
   private toMessage(
