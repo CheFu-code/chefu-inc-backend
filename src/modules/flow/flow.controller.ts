@@ -13,9 +13,13 @@ import {
   Query,
   Param,
   Post,
+  UseGuards,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { Webhook } from 'svix';
+import { AdminGuard } from '../auth/admin.guard';
+import { AuthenticatedUser } from '../auth/authenticated-user';
+import { AuthGuard } from '../auth/auth.guard';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { SESSION_COOKIE_NAME } from '../auth/session.constants';
 import {
@@ -46,25 +50,52 @@ export class FlowController {
 
   @Post('access/login')
   async accessLogin(
-    @Body() body: { code?: string },
+    @Body() body: { accessKey?: string; code?: string },
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    return this.flowAccessKeys.login(body.code || '', response, request);
+    return this.flowAccessKeys.login(
+      body.code || body.accessKey || '',
+      response,
+      request,
+    );
   }
 
-  @Post('access/register')
-  async accessRegister(
-    @Body()
-    body: {
-      accessKey?: string;
-      label?: string;
-      registrationCode?: string;
-    },
+  @Post('access/activate')
+  async accessActivate(
+    @Body() body: { accessKey?: string; code?: string },
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    return this.flowAccessKeys.register(body, response, request);
+    return this.flowAccessKeys.login(
+      body.accessKey || body.code || '',
+      response,
+      request,
+    );
+  }
+
+  @Get('admin/access-keys')
+  @UseGuards(AuthGuard, AdminGuard)
+  async listAccessKeys() {
+    return this.flowAccessKeys.listKeys();
+  }
+
+  @Post('admin/access-keys')
+  @UseGuards(AuthGuard, AdminGuard)
+  async createAccessKey(
+    @Body() body: { expiresAt?: string; label?: string },
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
+    return this.flowAccessKeys.createKey(body, request.user);
+  }
+
+  @Post('admin/access-keys/:keyId/revoke')
+  @UseGuards(AuthGuard, AdminGuard)
+  async revokeAccessKey(
+    @Param('keyId') keyId: string,
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
+    return this.flowAccessKeys.revokeKey(keyId, request.user);
   }
 
   @Delete('access/session')

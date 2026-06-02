@@ -3,10 +3,17 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  NotFoundException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { FieldValue } from 'firebase-admin/firestore';
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from 'node:crypto';
+import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 
 export const FLOW_ACCESS_COOKIE = 'flow_access';
@@ -26,6 +33,23 @@ type RegisteredFlowKey = {
   source: 'env' | 'firestore';
 };
 
+type FlowAccessKeyStatus = 'active' | 'expired' | 'revoked';
+
+type FlowAccessKeySummary = {
+  createdAt: string | null;
+  createdBy: string | null;
+  expiresAt: string | null;
+  id: string;
+  label: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  revokedBy: string | null;
+  status: FlowAccessKeyStatus;
+  updatedAt: string | null;
+};
+
+type FirestoreRecord = Record<string, unknown>;
+
 @Injectable()
 export class FlowAccessKeyService {
   constructor(
@@ -41,63 +65,83 @@ export class FlowAccessKeyService {
     const registeredKey = await this.findRegisteredKey(accessKey);
 
     if (!registeredKey) {
-      throw new ForbiddenException('That Flow key is not registered.');
+      throw new ForbiddenException('That Flow key is not active.');
     }
 
+    await this.recordKeyUse(registeredKey, request);
     this.setSessionCookie(response, registeredKey, request);
     return this.sessionPayload(this.createSession(registeredKey));
   }
 
-  async register(
+  async createKey(
     body: {
-      accessKey?: string;
+      expiresAt?: string;
       label?: string;
-      registrationCode?: string;
     },
-    response: Response,
-    request: Request,
+    createdBy?: AuthenticatedUser,
   ) {
-    if (!this.canRegisterWithSecret(body.registrationCode || '')) {
-      throw new ForbiddenException('The registration code is not valid.');
-    }
-
-    const normalized = this.normalizeKey(body.accessKey || '');
     const label = String(body.label || '').trim();
 
     if (!label) {
       throw new BadRequestException('Add an employee or workspace label for this key.');
     }
 
-    if (normalized.length < 10) {
-      throw new BadRequestException('Use an access key with at least 10 characters.');
-    }
+    const expiresAt = this.parseOptionalFutureDate(body.expiresAt);
+    const generated = await this.generateUniqueKey();
 
-    const existing = await this.findRegisteredKey(normalized);
-    if (existing) {
-      throw new BadRequestException('That Flow key is already registered.');
-    }
-
-    const keyHash = this.hashKey(normalized);
-    const keyId = keyHash.slice(0, 16);
-    const key: RegisteredFlowKey = {
-      id: keyId,
-      keyHash,
-      label,
-      source: 'firestore',
-    };
-
-    await this.keyCollection().doc(keyId).set({
+    await this.keyCollection().doc(generated.keyId).set({
       createdAt: FieldValue.serverTimestamp(),
-      keyHash,
+      createdBy: this.auditIdentity(createdBy),
+      expiresAt,
+      keyHash: generated.keyHash,
       label,
+      lastUsedAt: null,
+      revokedAt: null,
+      revokedBy: null,
+      status: 'active',
       updatedAt: FieldValue.serverTimestamp(),
     });
 
-    this.setSessionCookie(response, key, request);
     return {
-      ...this.sessionPayload(this.createSession(key)),
-      keyId,
+      accessKey: generated.accessKey,
+      expiresAt: expiresAt?.toISOString() || null,
+      keyId: generated.keyId,
       keyLabel: label,
+      status: 'active',
+    };
+  }
+
+  async listKeys() {
+    const snapshot = await this.keyCollection()
+      .orderBy('createdAt', 'desc')
+      .limit(100)
+      .get();
+
+    return {
+      keys: snapshot.docs.map(doc => this.keySummary(doc.id, doc.data())),
+    };
+  }
+
+  async revokeKey(keyId: string, revokedBy?: AuthenticatedUser) {
+    const id = this.normalizeKeyId(keyId);
+    const docRef = this.keyCollection().doc(id);
+    const snapshot = await docRef.get();
+
+    if (!snapshot.exists) {
+      throw new NotFoundException('Flow access key not found.');
+    }
+
+    await docRef.update({
+      revokedAt: FieldValue.serverTimestamp(),
+      revokedBy: this.auditIdentity(revokedBy),
+      status: 'revoked',
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    const updated = await docRef.get();
+    return {
+      key: this.keySummary(updated.id, updated.data() || {}),
+      success: true,
     };
   }
 
@@ -131,7 +175,7 @@ export class FlowAccessKeyService {
         return null;
       }
 
-      if (!(await this.keyExists(token.keyId))) return null;
+      if (!(await this.keyIsActive(token.keyId))) return null;
 
       return token;
     } catch {
@@ -194,6 +238,7 @@ export class FlowAccessKeyService {
 
     const data = snapshot.data() || {};
     if (!this.safeEqual(String(data.keyHash || ''), keyHash)) return null;
+    if (!this.isStoredKeyActive(data)) return null;
 
     return {
       id: snapshot.id,
@@ -203,9 +248,13 @@ export class FlowAccessKeyService {
     };
   }
 
-  private async keyExists(keyId: string) {
+  private async keyIsActive(keyId: string) {
     if (this.envKeys().some(key => key.id === keyId)) return true;
-    return (await this.keyCollection().doc(keyId).get()).exists;
+
+    const snapshot = await this.keyCollection().doc(keyId).get();
+    if (!snapshot.exists) return false;
+
+    return this.isStoredKeyActive(snapshot.data() || {});
   }
 
   private envKeys(): RegisteredFlowKey[] {
@@ -245,17 +294,45 @@ export class FlowAccessKeyService {
     ];
   }
 
-  private canRegisterWithSecret(value: string) {
-    const secret =
-      process.env.FLOW_REGISTRATION_SECRET ||
-      process.env.FLOW_ADMIN_REGISTRATION_KEY ||
-      (process.env.NODE_ENV === 'production' ? '' : 'FLOW-REGISTER-2026');
-
-    return Boolean(secret && this.safeEqual(value.trim(), secret.trim()));
-  }
-
   private normalizeKey(value: string) {
     return value.trim().replace(/\s+/g, '').toUpperCase();
+  }
+
+  private normalizeKeyId(value: string) {
+    const normalized = value.trim().toLowerCase();
+
+    if (!/^[a-f0-9]{16}$/.test(normalized)) {
+      throw new BadRequestException('Invalid Flow access key id.');
+    }
+
+    return normalized;
+  }
+
+  private async generateUniqueKey() {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const accessKey = this.generateAccessKey();
+      const keyHash = this.hashKey(this.normalizeKey(accessKey));
+      const keyId = keyHash.slice(0, 16);
+      const existing = await this.keyCollection().doc(keyId).get();
+
+      if (!existing.exists) {
+        return { accessKey, keyHash, keyId };
+      }
+    }
+
+    throw new BadRequestException('Could not generate a unique Flow access key.');
+  }
+
+  private generateAccessKey() {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const characters = Array.from(randomBytes(20), byte => alphabet[byte % alphabet.length]);
+    const groups = [];
+
+    for (let index = 0; index < characters.length; index += 4) {
+      groups.push(characters.slice(index, index + 4).join(''));
+    }
+
+    return `FLOW-${groups.join('-')}`;
   }
 
   private hashKey(value: string) {
@@ -289,6 +366,113 @@ export class FlowAccessKeyService {
 
   private keyCollection() {
     return this.firebaseAdmin.db().collection('flowAccessKeys');
+  }
+
+  private async recordKeyUse(key: RegisteredFlowKey, request: Request) {
+    if (key.source !== 'firestore') return;
+
+    await this.keyCollection()
+      .doc(key.id)
+      .update({
+        lastUsedAt: FieldValue.serverTimestamp(),
+        lastUsedIp: this.requestIp(request),
+        lastUserAgent: String(request.headers['user-agent'] || '').slice(0, 256),
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+      .catch(() => undefined);
+  }
+
+  private requestIp(request: Request) {
+    const forwardedFor = request.headers['x-forwarded-for'];
+
+    if (Array.isArray(forwardedFor)) {
+      return forwardedFor[0] || request.ip || null;
+    }
+
+    if (forwardedFor) {
+      return forwardedFor.split(',')[0]?.trim() || request.ip || null;
+    }
+
+    return request.ip || null;
+  }
+
+  private parseOptionalFutureDate(value?: string) {
+    if (!value?.trim()) return null;
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException('expiresAt must be a valid date.');
+    }
+
+    if (date.getTime() <= Date.now()) {
+      throw new BadRequestException('expiresAt must be in the future.');
+    }
+
+    return date;
+  }
+
+  private isStoredKeyActive(data: FirestoreRecord) {
+    return this.keyStatus(data) === 'active';
+  }
+
+  private keyStatus(data: FirestoreRecord): FlowAccessKeyStatus {
+    if (String(data.status || 'active') === 'revoked') {
+      return 'revoked';
+    }
+
+    const expiresAt = this.toDate(data.expiresAt);
+    if (expiresAt && expiresAt.getTime() <= Date.now()) {
+      return 'expired';
+    }
+
+    return 'active';
+  }
+
+  private keySummary(id: string, data: FirestoreRecord): FlowAccessKeySummary {
+    return {
+      createdAt: this.toIsoString(data.createdAt),
+      createdBy: this.nullableString(data.createdBy),
+      expiresAt: this.toIsoString(data.expiresAt),
+      id,
+      label: String(data.label || 'Flow key'),
+      lastUsedAt: this.toIsoString(data.lastUsedAt),
+      revokedAt: this.toIsoString(data.revokedAt),
+      revokedBy: this.nullableString(data.revokedBy),
+      status: this.keyStatus(data),
+      updatedAt: this.toIsoString(data.updatedAt),
+    };
+  }
+
+  private auditIdentity(user?: AuthenticatedUser) {
+    return user?.email || user?.uid || null;
+  }
+
+  private nullableString(value: unknown) {
+    return typeof value === 'string' && value.trim() ? value : null;
+  }
+
+  private toIsoString(value: unknown) {
+    return this.toDate(value)?.toISOString() || null;
+  }
+
+  private toDate(value: unknown): Date | null {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    if (typeof value === 'string' || typeof value === 'number') {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+    if (
+      typeof value === 'object' &&
+      'toDate' in value &&
+      typeof value.toDate === 'function'
+    ) {
+      const date = value.toDate();
+      return date instanceof Date && !Number.isNaN(date.getTime()) ? date : null;
+    }
+
+    return null;
   }
 
   private cookieDomain() {

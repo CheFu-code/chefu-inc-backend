@@ -71,6 +71,7 @@ Set these on the backend host:
 - `WHATSAPP_PHONE_NUMBER_ID`
 - `WHATSAPP_SYSTEM_USER_TOKEN`
 - `RESEND_API_KEY` for security notification emails
+- `FLOW_ACCESS_SECRET=<long random secret shared with the Flow frontend>`
 - `SIGNIN_ALERT_TEMPLATE_ID` if using a saved Resend template for sign-in alerts
 - `PASSWORD_CHANGED_TEMPLATE_ID` if using a saved Resend template for password-change alerts
 
@@ -106,3 +107,10 @@ On the frontend host, set:
 - `POST /admin/delete-user`
 - `POST /admin/send-otp`
 - `POST /email/password-changed`
+- `GET /flow/access/session`
+- `POST /flow/access/login`
+- `POST /flow/access/activate`
+- `DELETE /flow/access/session`
+- `GET /flow/admin/access-keys` admin only
+- `POST /flow/admin/access-keys` admin only
+- `POST /flow/admin/access-keys/:keyId/revoke` admin only
