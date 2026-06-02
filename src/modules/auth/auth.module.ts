@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { AuthController } from './auth.controller';
 import { OAuthController, OAuthDiscoveryController } from './oauth.controller';
 import { AdminGuard } from './admin.guard';
@@ -10,7 +10,7 @@ import { AppsModule } from '../apps/apps.module';
 import { EmailModule } from '../email/email.module';
 
 @Module({
-  imports: [AppsModule, EmailModule],
+  imports: [AppsModule, forwardRef(() => EmailModule)],
   controllers: [AuthController, OAuthController, OAuthDiscoveryController],
   providers: [
     AuthGuard,
@@ -19,6 +19,6 @@ import { EmailModule } from '../email/email.module';
     MfaBackupCodeService,
     OAuthService,
   ],
-  exports: [AuthGuard, AdminGuard, SessionSignerService],
+  exports: [AuthGuard, AdminGuard, OAuthService, SessionSignerService],
 })
 export class AuthModule {}
