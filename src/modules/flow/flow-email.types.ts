@@ -8,7 +8,9 @@ export type FlowRecipient = {
 
 export type FlowSendPayload = {
   action?: 'test' | 'campaign';
+  attachments?: FlowSendAttachment[];
   audienceName?: string;
+  bodyFormat?: 'text' | 'html';
   ctaLabel?: string;
   ctaUrl?: string;
   from?: string;
@@ -19,6 +21,14 @@ export type FlowSendPayload = {
   subject?: string;
   tags?: string[];
   testEmail?: string;
+};
+
+export type FlowSendAttachment = {
+  content: string;
+  contentId?: string;
+  contentType?: string;
+  filename: string;
+  size?: number;
 };
 
 export type FlowMessage = {

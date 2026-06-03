@@ -29,6 +29,35 @@ export function textToHtml(value: string) {
     .join('');
 }
 
+export function sanitizeFlowHtml(value: string) {
+  return value
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(
+      /<\s*(script|style|iframe|object|embed|link|meta)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi,
+      '',
+    )
+    .replace(/<\s*(script|style|iframe|object|embed|link|meta)[^>]*\/?>/gi, '')
+    .replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/\s+srcdoc\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(
+      /\s+(href|src)\s*=\s*(['"]?)\s*javascript:[^'"\s>]*/gi,
+      ' $1="#"',
+    )
+    .replace(
+      /\s+style\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi,
+      (_match, _full, doubleValue, singleValue, bareValue) => {
+        const style = String(doubleValue || singleValue || bareValue || '');
+        const cleanStyle = style
+          .split(';')
+          .map(rule => rule.trim())
+          .filter(rule => rule && !/url\s*\(|expression\s*\(/i.test(rule))
+          .join('; ');
+
+        return cleanStyle ? ` style="${escapeAttribute(cleanStyle)}"` : '';
+      },
+    );
+}
+
 export function createFlowTemplateVariables({
   audienceName,
   bodyHtml,

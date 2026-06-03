@@ -12,6 +12,7 @@ import {
   applyVariables,
   createFlowTemplateVariables,
   renderFlowEmailShell,
+  sanitizeFlowHtml,
   textToHtml,
 } from './flow-email-template';
 import {
@@ -22,6 +23,7 @@ import {
 } from './flow-email.types';
 
 type ResendEmailPayload = {
+  attachments?: ResendAttachmentPayload[];
   from: string;
   reply_to?: string;
   html?: string;
@@ -32,6 +34,13 @@ type ResendEmailPayload = {
     variables: Record<string, string>;
   };
   to: string[];
+};
+
+type ResendAttachmentPayload = {
+  content: string;
+  contentId?: string;
+  content_type?: string;
+  filename: string;
 };
 
 type FlowFolderCounts = {
@@ -182,29 +191,33 @@ export class FlowService {
     const response =
       emails.length === 1
         ? await this.postToResend('/emails', emails[0])
-        : await this.postToResend('/emails/batch', emails, {
-            'x-batch-validation': 'permissive',
-          });
+        : normalized.attachments.length
+          ? await Promise.all(
+              emails.map(email => this.postToResend('/emails', email)),
+            )
+          : await this.postToResend('/emails/batch', emails, {
+              'x-batch-validation': 'permissive',
+            });
     const sentAt = new Date().toISOString();
     const sendGroupId = randomUUID();
 
     await Promise.all(
       renderedEmails.map(({ body, email, html, recipient, subject }, index) =>
         this.messagesCollection().add({
-          attachments: 0,
+          attachments: normalized.attachments.length,
           createdAt: FieldValue.serverTimestamp(),
           direction: 'outbound',
           folder: 'sent',
           from: normalized.from,
           html,
           label: normalized.action === 'test' ? 'Test' : 'Sent',
-          preview: this.previewFromText(body),
+          preview: this.previewForBody(body, normalized.bodyFormat),
           resendEmailId: this.sentEmailId(response, index),
           sendGroupId,
           sentAt,
           starred: false,
           subject,
-          text: body,
+          text: this.textForBody(body, normalized.bodyFormat),
           threadKey: this.threadKeyForMessage(subject, normalized.from, [
             recipient.email,
           ]),
@@ -573,6 +586,9 @@ export class FlowService {
           /^\S+@\S+\.\S+$/.test(String(recipient.email || '')),
         )
       : [];
+    const attachments = this.normalizeSendAttachments(payload.attachments);
+    const bodyFormat: 'html' | 'text' =
+      payload.bodyFormat === 'html' ? 'html' : 'text';
 
     if (action !== 'test' && action !== 'campaign') {
       throw new BadRequestException('Invalid Flow send action.');
@@ -610,6 +626,8 @@ export class FlowService {
       audienceName: payload.audienceName || 'Manual audience',
       ctaLabel: payload.ctaLabel || '',
       ctaUrl: payload.ctaUrl || '',
+      attachments,
+      bodyFormat,
       from,
       html: payload.html,
       preheader: payload.preheader || '',
@@ -621,15 +639,70 @@ export class FlowService {
     };
   }
 
+  private normalizeSendAttachments(
+    attachments: FlowSendPayload['attachments'],
+  ): ResendAttachmentPayload[] {
+    if (!Array.isArray(attachments)) return [];
+
+    const normalized = attachments
+      .map(attachment => {
+        const filename = String(attachment.filename || '').trim();
+        const content = String(attachment.content || '').trim();
+
+        if (!filename || !content) return null;
+
+        const item: ResendAttachmentPayload = {
+          content,
+          filename,
+        };
+        const contentId = String(attachment.contentId || '').trim();
+        const contentType = String(attachment.contentType || '').trim();
+
+        if (contentId) item.contentId = contentId.slice(0, 127);
+        if (contentType) item.content_type = contentType;
+
+        return item;
+      })
+      .filter((item): item is ResendAttachmentPayload => Boolean(item));
+
+    const encodedSize = normalized.reduce(
+      (total, attachment) => total + attachment.content.length,
+      0,
+    );
+
+    if (encodedSize > 34 * 1024 * 1024) {
+      throw new BadRequestException(
+        'Attachments are too large. Keep total files under 24 MB before encoding.',
+      );
+    }
+
+    return normalized;
+  }
+
+  private htmlForBody(body: string, format: 'html' | 'text') {
+    return format === 'html' ? sanitizeFlowHtml(body) : textToHtml(body);
+  }
+
+  private textForBody(body: string, format: 'html' | 'text') {
+    return format === 'html' ? this.stripHtml(body) : body;
+  }
+
+  private previewForBody(body: string, format: 'html' | 'text') {
+    return this.previewFromText(this.textForBody(body, format));
+  }
+
   private createResendEmail(
     payload: ReturnType<FlowService['normalizePayload']>,
     recipient: FlowRecipient,
     body: string,
     subject: string,
   ): ResendEmailPayload {
-    const bodyHtml = textToHtml(body);
+    const bodyHtml = this.htmlForBody(body, payload.bodyFormat);
     const emailTemplateId = this.flowEmailTemplateId();
     const baseEmail = {
+      attachments: payload.attachments.length
+        ? payload.attachments
+        : undefined,
       from: payload.from,
       to: [recipient.email],
       subject,
@@ -709,10 +782,10 @@ export class FlowService {
   ) {
     return renderFlowEmailShell({
       audienceName: payload.audienceName,
-      body: textToHtml(body),
+      body: this.htmlForBody(body, payload.bodyFormat),
       ctaLabel: payload.ctaLabel || undefined,
       ctaUrl: payload.ctaUrl || undefined,
-      preheader: payload.preheader || this.previewFromText(body),
+      preheader: payload.preheader || this.previewForBody(body, payload.bodyFormat),
       recipientName: this.recipientDisplayName(recipient),
       senderName: this.senderDisplayName(payload.from),
       title: subject,
