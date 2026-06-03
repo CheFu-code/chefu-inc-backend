@@ -58,6 +58,13 @@ export type FlowMessage = {
   references?: string[];
   resendEmailId?: string;
   threadKey?: string;
+  clickedAt?: string;
+  clickCount?: number;
+  deliveredAt?: string;
+  deliveryStatus?: string;
+  firstOpenedAt?: string;
+  openCount?: number;
+  openedAt?: string;
   unread: boolean;
   starred: boolean;
   attachments: number;

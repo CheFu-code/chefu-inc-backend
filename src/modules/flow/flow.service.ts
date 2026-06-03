@@ -205,7 +205,9 @@ export class FlowService {
       renderedEmails.map(({ body, email, html, recipient, subject }, index) =>
         this.messagesCollection().add({
           attachments: normalized.attachments.length,
+          clickCount: 0,
           createdAt: FieldValue.serverTimestamp(),
+          deliveryStatus: 'sent',
           direction: 'outbound',
           folder: 'sent',
           from: normalized.from,
@@ -215,6 +217,7 @@ export class FlowService {
           resendEmailId: this.sentEmailId(response, index),
           sendGroupId,
           sentAt,
+          openCount: 0,
           starred: false,
           subject,
           text: this.textForBody(body, normalized.bodyFormat),
@@ -239,6 +242,10 @@ export class FlowService {
 
   async receiveInbound(payload: unknown) {
     const eventType = this.webhookEventType(payload);
+
+    if (eventType && this.isEmailTrackingEvent(eventType)) {
+      return this.trackEmailEvent(payload, eventType);
+    }
 
     if (eventType && !this.isInboundEmailEvent(eventType)) {
       this.logger.log(
@@ -860,6 +867,147 @@ export class FlowService {
     ].includes(eventType);
   }
 
+  private isEmailTrackingEvent(eventType: string) {
+    return [
+      'email.opened',
+      'email.clicked',
+      'email.delivered',
+      'email.delivery_delayed',
+      'email.bounced',
+      'email.complained',
+      'email.failed',
+      'email.sent',
+    ].includes(eventType);
+  }
+
+  private async trackEmailEvent(payload: unknown, eventType: string) {
+    const event = this.emailTrackingEvent(payload);
+
+    if (!event.emailId) {
+      return {
+        eventType,
+        ignored: true,
+        reason: 'missing_email_id',
+        tracked: false,
+      };
+    }
+
+    const snapshot = await this.messagesCollection()
+      .where('resendEmailId', '==', event.emailId)
+      .limit(10)
+      .get();
+
+    if (snapshot.empty) {
+      this.logger.log(
+        JSON.stringify({
+          event: 'flow_email_tracking_unmatched',
+          emailId: event.emailId,
+          eventType,
+        }),
+      );
+
+      return {
+        emailId: event.emailId,
+        eventType,
+        tracked: false,
+      };
+    }
+
+    const batch = this.firebaseAdmin.db().batch();
+
+    snapshot.docs.forEach(doc => {
+      batch.update(
+        doc.ref,
+        this.withoutUndefined({
+          ...this.trackingUpdateForEvent(eventType, event.createdAt, doc.data()),
+          lastTrackingEvent: eventType,
+          lastTrackingEventAt: event.createdAt,
+          updatedAt: FieldValue.serverTimestamp(),
+        }),
+      );
+    });
+
+    await batch.commit();
+
+    return {
+      count: snapshot.size,
+      emailId: event.emailId,
+      eventType,
+      tracked: true,
+    };
+  }
+
+  private emailTrackingEvent(payload: unknown) {
+    const input =
+      payload && typeof payload === 'object'
+        ? (payload as Record<string, unknown>)
+        : {};
+    const data =
+      input.data && typeof input.data === 'object'
+        ? (input.data as Record<string, unknown>)
+        : input;
+    const createdAt = String(
+      input.created_at || input.createdAt || data.created_at || new Date().toISOString(),
+    );
+
+    return {
+      createdAt,
+      emailId: String(data.email_id || data.emailId || input.email_id || ''),
+    };
+  }
+
+  private trackingUpdateForEvent(
+    eventType: string,
+    createdAt: string,
+    current: Record<string, unknown>,
+  ) {
+    if (eventType === 'email.opened') {
+      return {
+        deliveryStatus: 'opened',
+        firstOpenedAt: current.firstOpenedAt ? undefined : createdAt,
+        openCount: FieldValue.increment(1),
+        openedAt: createdAt,
+      };
+    }
+
+    if (eventType === 'email.clicked') {
+      return {
+        clickCount: FieldValue.increment(1),
+        clickedAt: createdAt,
+        deliveryStatus: 'clicked',
+        firstOpenedAt: current.firstOpenedAt ? undefined : createdAt,
+        openedAt: current.openedAt ? undefined : createdAt,
+      };
+    }
+
+    if (eventType === 'email.delivered') {
+      return {
+        deliveredAt: current.deliveredAt ? undefined : createdAt,
+        deliveryStatus: current.deliveryStatus === 'opened'
+          ? undefined
+          : 'delivered',
+      };
+    }
+
+    if (eventType === 'email.delivery_delayed') {
+      return { deliveryStatus: 'delayed' };
+    }
+
+    if (eventType === 'email.bounced') {
+      return { deliveryStatus: 'bounced' };
+    }
+
+    if (eventType === 'email.complained') {
+      return { deliveryStatus: 'complained' };
+    }
+
+    if (eventType === 'email.failed') {
+      return { deliveryStatus: 'failed' };
+    }
+
+    return { deliveryStatus: current.deliveryStatus || 'sent' };
+  }
+
   private async postToResend(
     path: string,
     body: unknown,
@@ -1246,9 +1394,22 @@ export class FlowService {
         ? visibleAttachmentItems.length
         : Number(data.attachments) || visibleAttachmentItems.length,
       attachmentItems: visibleAttachmentItems,
+      clickedAt:
+        typeof data.clickedAt === 'string' ? data.clickedAt : undefined,
+      clickCount: Number(data.clickCount) || 0,
       createdAt: this.timestampToIso(data.createdAt),
+      deliveredAt:
+        typeof data.deliveredAt === 'string' ? data.deliveredAt : undefined,
+      deliveryStatus:
+        typeof data.deliveryStatus === 'string'
+          ? data.deliveryStatus
+          : undefined,
       direction,
       folder,
+      firstOpenedAt:
+        typeof data.firstOpenedAt === 'string'
+          ? data.firstOpenedAt
+          : undefined,
       from,
       html: typeof data.html === 'string' ? data.html : undefined,
       inReplyTo:
@@ -1260,6 +1421,9 @@ export class FlowService {
       isReaction: isReactionMessage,
       label: typeof data.label === 'string' ? data.label : undefined,
       messageId,
+      openCount: Number(data.openCount) || 0,
+      openedAt:
+        typeof data.openedAt === 'string' ? data.openedAt : undefined,
       preview: String(data.preview || ''),
       reactionCount: isReactionMessage
         ? Number(data.reactionCount) || 1
