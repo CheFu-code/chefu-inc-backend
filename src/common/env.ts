@@ -59,8 +59,8 @@ export function validateProductionEnv(): EnvValidationResult {
     }
   }
 
-  if (!hasAnyEnv(['OAUTH_PRIVATE_KEY'])) {
-    missing.push('OAUTH_PRIVATE_KEY');
+  if (!hasAnyEnv(['OAUTH_PRIVATE_KEY', 'OAUTH_SIGNING_KEYS_JSON'])) {
+    missing.push('OAUTH_PRIVATE_KEY or OAUTH_SIGNING_KEYS_JSON');
   }
 
   if (!hasAnyEnv(['FLOW_ACCESS_SECRET'])) {

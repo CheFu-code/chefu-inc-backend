@@ -41,7 +41,7 @@ export class AuthGuard implements CanActivate {
 
     try {
       const resolution = token
-        ? await this.resolveBearerUser(token)
+        ? await this.resolveBearerUser(token, request)
         : sessionCookie
           ? await this.resolveSessionUser(sessionCookie)
           : null;
@@ -80,12 +80,19 @@ export class AuthGuard implements CanActivate {
 
   private getBearerToken(request: Request) {
     const authorization = request.headers.authorization || '';
+    if (authorization.startsWith('DPoP ')) {
+      return authorization.slice('DPoP '.length);
+    }
+
     return authorization.startsWith('Bearer ')
       ? authorization.slice('Bearer '.length)
       : '';
   }
 
-  private async resolveBearerUser(token: string): Promise<AuthResolution> {
+  private async resolveBearerUser(
+    token: string,
+    request: RequestWithUser,
+  ): Promise<AuthResolution> {
     try {
       const decoded = await this.firebaseAdmin.auth().verifyIdToken(token);
       const email = decoded.email || '';
@@ -99,7 +106,12 @@ export class AuthGuard implements CanActivate {
         },
       };
     } catch {
-      const claims = this.oauthService.verifyAccessToken(token);
+      const dpop = request.headers.dpop;
+      const claims = await this.oauthService.verifyAccessToken(
+        token,
+        request,
+        Array.isArray(dpop) ? dpop[0] : dpop,
+      );
       const email = claims.email || '';
 
       return {

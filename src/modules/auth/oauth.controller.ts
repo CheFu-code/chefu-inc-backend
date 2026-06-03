@@ -43,20 +43,33 @@ export class OAuthController {
   async token(
     @Body()
     body: {
+      audience?: string;
+      client_assertion?: string;
+      client_assertion_type?: string;
       client_id?: string;
       code?: string;
       code_verifier?: string;
       grant_type?: string;
       redirect_uri?: string;
+      refresh_token?: string;
+      requested_token_type?: string;
+      scope?: string;
+      subject_token?: string;
+      subject_token_type?: string;
     },
+    @Headers('dpop') dpop: string | undefined,
     @Req() request: Request,
   ) {
-    return this.oauthService.exchangeCode(body, request);
+    return this.oauthService.token(body, request, dpop);
   }
 
   @Get('userinfo')
-  async userinfo(@Headers('authorization') authorization?: string) {
-    return this.oauthService.userinfo(authorization);
+  async userinfo(
+    @Headers('authorization') authorization: string | undefined,
+    @Headers('dpop') dpop: string | undefined,
+    @Req() request: Request,
+  ) {
+    return this.oauthService.userinfo(authorization, request, dpop);
   }
 
   @Get('jwks')
