@@ -31,7 +31,7 @@ export const CHEFU_APPS: ChefuApp[] = [
   {
     id: 'admin',
     name: 'CheFu Admin',
-    origins: ['http://localhost:3004', 'https://admin.chefuinc.com'],
+    origins: ['http://localhost:3004', 'https://internal.chefuinc.com'],
   },
   {
     id: 'flow',
@@ -92,7 +92,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
     appId: 'admin',
     name: 'CheFu Admin',
     redirectUris: [
-      'https://admin.chefuinc.com/auth/callback',
+      'https://internal.chefuinc.com/auth/callback',
       'http://localhost:3004/auth/callback',
     ],
     scopes: ['openid', 'profile', 'email', 'admin:manage'],

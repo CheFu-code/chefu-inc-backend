@@ -19,6 +19,7 @@ Add new frontend apps there once, including local and production origins.
 Next/React frontends should send `x-chefu-app` when creating a session:
 
 - `x-chefu-app: academy`
+- `x-chefu-app: admin`
 - `x-chefu-app: flow`
 - `x-chefu-app: muzalo`
 - `x-chefu-app: quantum`
