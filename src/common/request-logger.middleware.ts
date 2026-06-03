@@ -2,6 +2,7 @@ import { Injectable, Logger, NestMiddleware } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { NextFunction, Response } from 'express';
 import { RequestWithId } from './request-context';
+import { auditRequestContext } from './security-audit';
 
 @Injectable()
 export class RequestLoggerMiddleware implements NestMiddleware {
@@ -16,19 +17,19 @@ export class RequestLoggerMiddleware implements NestMiddleware {
 
     response.on('finish', () => {
       const durationMs = Date.now() - startedAt;
-      const userAgent = request.headers['user-agent'] || 'unknown';
+      const auditContext = auditRequestContext(request);
 
       this.logger.log(
         JSON.stringify({
           event: 'http_request',
           requestId,
           method: request.method,
-          path: request.originalUrl,
+          path: auditContext.path,
           statusCode: response.statusCode,
           durationMs,
-          origin: request.headers.origin || null,
-          ip: request.ip,
-          userAgent,
+          origin: auditContext.origin,
+          ipHash: auditContext.ipHash,
+          userAgentHash: auditContext.userAgentHash,
         }),
       );
     });

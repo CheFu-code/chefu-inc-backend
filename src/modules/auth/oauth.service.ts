@@ -18,6 +18,10 @@ import {
   timingSafeEqual,
   KeyObject,
 } from 'node:crypto';
+import {
+  auditRequestContext,
+  hashForAudit,
+} from '../../common/security-audit';
 import { AppsService } from '../apps/apps.service';
 import { ChefuOauthClient } from '../apps/app-registry';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -41,13 +45,14 @@ type OAuthCodeDocument = {
 };
 
 type TokenClaims = {
-  aud?: string;
+  aud: string;
   client_id?: string;
   email?: string;
   exp: number;
   iat: number;
   iss: string;
   jti: string;
+  nbf: number;
   name?: string;
   nonce?: string;
   roles?: string[];
@@ -81,6 +86,17 @@ type TokenPayload = {
   redirect_uri?: string;
 };
 
+type JwtHeader = {
+  alg?: unknown;
+  kid?: unknown;
+  typ?: unknown;
+};
+
+type JwtValidationPolicy = {
+  audience: string;
+  typ: TokenClaims['typ'];
+};
+
 @Injectable()
 export class OAuthService {
   private readonly logger = new Logger(OAuthService.name);
@@ -93,9 +109,23 @@ export class OAuthService {
   private readonly accountUrl = this.cleanUrl(
     process.env.CHEFU_ACCOUNT_URL || 'https://chefuinc.com',
   );
-  private readonly tokenTtlSeconds = Number(process.env.OAUTH_TOKEN_TTL_SECONDS || 3600);
-  private readonly authorizationCodeTtlMs = Number(
-    process.env.OAUTH_CODE_TTL_MS || 5 * 60 * 1000,
+  private readonly clockSkewSeconds = this.safeNumber(
+    process.env.OAUTH_CLOCK_SKEW_SECONDS,
+    60,
+    0,
+    300,
+  );
+  private readonly tokenTtlSeconds = this.safeNumber(
+    process.env.OAUTH_TOKEN_TTL_SECONDS,
+    3600,
+    300,
+    24 * 60 * 60,
+  );
+  private readonly authorizationCodeTtlMs = this.safeNumber(
+    process.env.OAUTH_CODE_TTL_MS,
+    5 * 60 * 1000,
+    60 * 1000,
+    10 * 60 * 1000,
   );
   private readonly keyId = process.env.OAUTH_KEY_ID || 'chefu-oauth-dev-key';
   private readonly privateKey: KeyObject;
@@ -148,6 +178,8 @@ export class OAuthService {
         'iat',
         'iss',
         'name',
+        'nbf',
+        'nonce',
         'roles',
         'sub',
       ],
@@ -233,15 +265,17 @@ export class OAuthService {
         event: 'oauth_authorization_code_issued',
         clientId: client.id,
         appId: client.appId,
-        uid: decoded.uid,
+        uidHash: hashForAudit(decoded.uid),
+        emailHash: hashForAudit(decoded.email),
         scopes,
+        ...auditRequestContext(request),
       }),
     );
 
     return { redirectTo: redirectUrl.toString() };
   }
 
-  async exchangeCode(body: TokenPayload) {
+  async exchangeCode(body: TokenPayload, request?: Request) {
     if (body.grant_type !== 'authorization_code') {
       throw new BadRequestException('Only authorization_code grant is supported.');
     }
@@ -257,28 +291,41 @@ export class OAuthService {
       throw new BadRequestException('Unknown OAuth client.');
     }
 
+    this.validatePkceVerifier(body.code_verifier);
+    const codeVerifier = body.code_verifier;
+
     const codeRef = this.authorizationCodes().doc(this.hash(body.code));
     const now = Date.now();
     const codeDoc = await this.firebaseAdmin.db().runTransaction(async transaction => {
       const snapshot = await transaction.get(codeRef);
       if (!snapshot.exists) {
+        this.logCodeExchangeFailure('invalid_code', body, request);
         throw new UnauthorizedException('Invalid authorization code.');
       }
 
       const data = snapshot.data() as OAuthCodeDocument;
       if (data.usedAt) {
+        this.logCodeExchangeFailure('reused_code', body, request, data);
         throw new UnauthorizedException('Authorization code has already been used.');
       }
 
       if (data.expiresAt <= now) {
+        this.logCodeExchangeFailure('expired_code', body, request, data);
         throw new UnauthorizedException('Authorization code has expired.');
       }
 
       if (data.clientId !== client.id || data.redirectUri !== body.redirect_uri) {
+        this.logCodeExchangeFailure('client_or_redirect_mismatch', body, request, data);
         throw new UnauthorizedException('Authorization code does not match this client.');
       }
 
-      this.verifyPkce(data.codeChallenge, body.code_verifier || '');
+      try {
+        this.verifyPkce(data.codeChallenge, codeVerifier);
+      } catch {
+        this.logCodeExchangeFailure('pkce_mismatch', body, request, data);
+        throw new UnauthorizedException('Invalid PKCE verifier.');
+      }
+
       transaction.update(codeRef, {
         usedAt: now,
         updatedAt: FieldValue.serverTimestamp(),
@@ -287,15 +334,17 @@ export class OAuthService {
     });
 
     const roles = await this.getUserRoles(codeDoc.email);
+    const issuedAtSeconds = Math.floor(Date.now() / 1000);
     const accessToken = this.signJwt({
       app: codeDoc.appId,
       aud: this.issuer,
       client_id: client.id,
       email: codeDoc.email,
-      exp: Math.floor(Date.now() / 1000) + this.tokenTtlSeconds,
-      iat: Math.floor(Date.now() / 1000),
+      exp: issuedAtSeconds + this.tokenTtlSeconds,
+      iat: issuedAtSeconds,
       iss: this.issuer,
       jti: this.randomToken(16),
+      nbf: issuedAtSeconds,
       name: codeDoc.name,
       roles,
       scope: codeDoc.scopes.join(' '),
@@ -305,10 +354,11 @@ export class OAuthService {
     const idToken = this.signJwt({
       aud: client.id,
       email: codeDoc.email,
-      exp: Math.floor(Date.now() / 1000) + this.tokenTtlSeconds,
-      iat: Math.floor(Date.now() / 1000),
+      exp: issuedAtSeconds + this.tokenTtlSeconds,
+      iat: issuedAtSeconds,
       iss: this.issuer,
       jti: this.randomToken(16),
+      nbf: issuedAtSeconds,
       name: codeDoc.name,
       nonce: codeDoc.nonce || undefined,
       roles,
@@ -321,8 +371,10 @@ export class OAuthService {
         event: 'oauth_token_issued',
         clientId: client.id,
         appId: codeDoc.appId,
-        uid: codeDoc.uid,
+        uidHash: hashForAudit(codeDoc.uid),
+        emailHash: hashForAudit(codeDoc.email),
         scopes: codeDoc.scopes,
+        ...auditRequestContext(request),
       }),
     );
 
@@ -344,7 +396,10 @@ export class OAuthService {
       throw new UnauthorizedException('Missing access token.');
     }
 
-    const claims = this.verifyJwt(token);
+    const claims = this.verifyJwt(token, {
+      audience: this.issuer,
+      typ: 'access_token',
+    });
     if (claims.typ !== 'access_token') {
       throw new UnauthorizedException('Access token required.');
     }
@@ -360,7 +415,10 @@ export class OAuthService {
   }
 
   verifyAccessToken(token: string): OAuthAccessTokenClaims {
-    const claims = this.verifyJwt(token);
+    const claims = this.verifyJwt(token, {
+      audience: this.issuer,
+      typ: 'access_token',
+    });
     if (claims.typ !== 'access_token') {
       throw new UnauthorizedException('Access token required.');
     }
@@ -378,11 +436,22 @@ export class OAuthService {
       throw new BadRequestException('Unknown OAuth client.');
     }
 
-    if (!params.redirect_uri || !client.redirectUris.includes(params.redirect_uri)) {
+    if (!params.redirect_uri || !this.isRegisteredRedirectUri(params.redirect_uri, client)) {
       throw new BadRequestException('Invalid redirect_uri for this client.');
     }
 
-    if (!params.code_challenge || params.code_challenge_method !== 'S256') {
+    if (!this.isOauthOpaqueParam(params.state, 16, 512)) {
+      return this.redirectError(params, 'invalid_request', 'state is required.');
+    }
+
+    if (!this.isOauthOpaqueParam(params.nonce, 16, 512)) {
+      return this.redirectError(params, 'invalid_request', 'nonce is required.');
+    }
+
+    if (
+      params.code_challenge_method !== 'S256' ||
+      !this.isPkceCodeChallenge(params.code_challenge)
+    ) {
       return this.redirectError(params, 'invalid_request', 'PKCE S256 is required.');
     }
 
@@ -457,10 +526,50 @@ export class OAuthService {
     return [...new Set(this.appsService.oauthClients().flatMap(client => client.scopes))];
   }
 
-  private verifyPkce(codeChallenge: string, codeVerifier: string) {
-    if (codeVerifier.length < 43 || codeVerifier.length > 128) {
+  private isRegisteredRedirectUri(redirectUri: string, client: ChefuOauthClient) {
+    if (!client.redirectUris.includes(redirectUri)) return false;
+
+    try {
+      const url = new URL(redirectUri);
+      return !url.hash && !url.username && !url.password;
+    } catch {
+      return false;
+    }
+  }
+
+  private isOauthOpaqueParam(
+    value: string | undefined,
+    minLength: number,
+    maxLength: number,
+  ) {
+    return (
+      typeof value === 'string' &&
+      value.length >= minLength &&
+      value.length <= maxLength &&
+      /^[A-Za-z0-9._~:-]+$/.test(value)
+    );
+  }
+
+  private isPkceCodeChallenge(value: string | undefined) {
+    return (
+      typeof value === 'string' &&
+      value.length === 43 &&
+      /^[A-Za-z0-9_-]+$/.test(value)
+    );
+  }
+
+  private validatePkceVerifier(codeVerifier: string) {
+    if (
+      codeVerifier.length < 43 ||
+      codeVerifier.length > 128 ||
+      !/^[A-Za-z0-9._~-]+$/.test(codeVerifier)
+    ) {
       throw new UnauthorizedException('Invalid PKCE verifier.');
     }
+  }
+
+  private verifyPkce(codeChallenge: string, codeVerifier: string) {
+    this.validatePkceVerifier(codeVerifier);
 
     const actual = this.base64Url(createHash('sha256').update(codeVerifier).digest());
     const expectedBuffer = Buffer.from(codeChallenge);
@@ -490,14 +599,24 @@ export class OAuthService {
     return `${signingInput}.${this.base64Url(signature)}`;
   }
 
-  private verifyJwt(token: string) {
-    const [headerSegment, payloadSegment, signatureSegment] = token.split('.');
+  private verifyJwt(token: string, policy: JwtValidationPolicy) {
+    const segments = token.split('.');
+    if (segments.length !== 3) {
+      throw new UnauthorizedException('Malformed access token.');
+    }
+
+    const [headerSegment, payloadSegment, signatureSegment] = segments;
     if (!headerSegment || !payloadSegment || !signatureSegment) {
       throw new UnauthorizedException('Malformed access token.');
     }
 
-    const header = this.parseJwtSegment(headerSegment) as { alg?: string; kid?: string };
-    if (header.alg !== 'RS256' || header.kid !== this.keyId) {
+    const header = this.parseJwtSegment(headerSegment) as JwtHeader;
+    if (
+      header.typ !== 'JWT' ||
+      header.alg !== 'RS256' ||
+      typeof header.kid !== 'string' ||
+      header.kid !== this.keyId
+    ) {
       throw new UnauthorizedException('Unsupported token signing key.');
     }
 
@@ -511,11 +630,59 @@ export class OAuthService {
     }
 
     const claims = this.parseJwtSegment(payloadSegment) as TokenClaims;
-    if (claims.iss !== this.issuer || claims.exp <= Math.floor(Date.now() / 1000)) {
-      throw new UnauthorizedException('Access token expired or issued by unknown issuer.');
-    }
+    this.validateJwtClaims(claims, policy);
 
     return claims;
+  }
+
+  private validateJwtClaims(
+    claims: Partial<TokenClaims>,
+    policy: JwtValidationPolicy,
+  ): asserts claims is TokenClaims {
+    const now = Math.floor(Date.now() / 1000);
+    const { exp, iat, nbf } = claims;
+
+    if (
+      claims.iss !== this.issuer ||
+      claims.aud !== policy.audience ||
+      claims.typ !== policy.typ ||
+      typeof claims.sub !== 'string' ||
+      !claims.sub ||
+      typeof claims.jti !== 'string' ||
+      !claims.jti ||
+      typeof iat !== 'number' ||
+      typeof nbf !== 'number' ||
+      typeof exp !== 'number' ||
+      !Number.isInteger(iat) ||
+      !Number.isInteger(nbf) ||
+      !Number.isInteger(exp)
+    ) {
+      throw new UnauthorizedException('Access token claims are invalid.');
+    }
+
+    if (iat > now + this.clockSkewSeconds) {
+      throw new UnauthorizedException('Access token was issued in the future.');
+    }
+
+    if (nbf > now + this.clockSkewSeconds) {
+      throw new UnauthorizedException('Access token is not active yet.');
+    }
+
+    if (exp <= now - this.clockSkewSeconds) {
+      throw new UnauthorizedException('Access token has expired.');
+    }
+
+    if (exp - iat > this.tokenTtlSeconds + this.clockSkewSeconds) {
+      throw new UnauthorizedException('Access token lifetime is invalid.');
+    }
+
+    if (
+      claims.roles !== undefined &&
+      (!Array.isArray(claims.roles) ||
+        !claims.roles.every(role => typeof role === 'string'))
+    ) {
+      throw new UnauthorizedException('Access token roles claim is invalid.');
+    }
   }
 
   private async getUserRoles(email: string) {
@@ -531,11 +698,38 @@ export class OAuthService {
   }
 
   private parseJwtSegment(segment: string) {
-    return JSON.parse(Buffer.from(segment, 'base64url').toString('utf8')) as unknown;
+    try {
+      return JSON.parse(Buffer.from(segment, 'base64url').toString('utf8')) as unknown;
+    } catch {
+      throw new UnauthorizedException('Malformed access token.');
+    }
   }
 
   private authorizationCodes() {
     return this.firebaseAdmin.db().collection('oauth_authorization_codes');
+  }
+
+  private logCodeExchangeFailure(
+    reason: string,
+    body: Pick<TokenPayload, 'client_id' | 'code' | 'redirect_uri'>,
+    request?: Request,
+    codeDoc?: Partial<OAuthCodeDocument>,
+  ) {
+    this.logger.warn(
+      JSON.stringify({
+        event: 'oauth_code_exchange_failed',
+        reason,
+        clientId: body.client_id || null,
+        appId: codeDoc?.appId || null,
+        codeHash: hashForAudit(body.code),
+        redirectUriHash: hashForAudit(body.redirect_uri),
+        expectedClientId: codeDoc?.clientId || null,
+        expectedRedirectUriHash: hashForAudit(codeDoc?.redirectUri),
+        uidHash: hashForAudit(codeDoc?.uid),
+        emailHash: hashForAudit(codeDoc?.email),
+        ...auditRequestContext(request),
+      }),
+    );
   }
 
   private randomToken(bytes: number) {
@@ -556,5 +750,17 @@ export class OAuthService {
 
   private cleanUrl(value: string) {
     return value.replace(/\/$/, '');
+  }
+
+  private safeNumber(
+    value: string | undefined,
+    fallback: number,
+    minimum: number,
+    maximum: number,
+  ) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+
+    return Math.min(Math.max(Math.round(parsed), minimum), maximum);
   }
 }

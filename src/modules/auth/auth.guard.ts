@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
+import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { AuthenticatedUser } from './authenticated-user';
 import { OAuthService } from './oauth.service';
 import { SESSION_COOKIE_NAME } from './session.constants';
@@ -54,9 +55,9 @@ export class AuthGuard implements CanActivate {
       this.logger.log(
         JSON.stringify({
           event: 'auth_guard_allowed',
-          path: request.originalUrl,
-          uid: resolution.user.uid,
-          email: resolution.user.email,
+          ...auditRequestContext(request),
+          uidHash: hashForAudit(resolution.user.uid),
+          emailHash: hashForAudit(resolution.user.email),
           authSource: resolution.source,
           roleCount: request.user.roles.length,
         }),
@@ -67,7 +68,7 @@ export class AuthGuard implements CanActivate {
       this.logger.warn(
         JSON.stringify({
           event: 'auth_guard_denied',
-          path: request.originalUrl,
+          ...auditRequestContext(request),
           hasBearerToken: Boolean(token),
           hasSessionCookie: Boolean(sessionCookie),
           reason: error instanceof Error ? error.message : 'unknown',

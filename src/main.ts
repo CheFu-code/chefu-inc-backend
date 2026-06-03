@@ -19,20 +19,30 @@ function getAllowedOrigins() {
     ? [...defaults, ...configuredOrigins.split(',')]
     : defaults;
 
-  return [...new Set(origins.map(origin => origin.trim()).filter(Boolean))];
+  return [
+    ...new Set(
+      origins
+        .map(origin => normalizeOrigin(origin.trim()))
+        .filter((origin): origin is string => Boolean(origin)),
+    ),
+  ];
+}
+
+function normalizeOrigin(origin: string) {
+  if (!origin) return null;
+
+  try {
+    return new URL(origin).origin;
+  } catch {
+    return null;
+  }
 }
 
 function isAllowedOrigin(origin: string | undefined, allowedOrigins: string[]) {
   if (!origin) return true;
 
   try {
-    const { hostname, protocol } = new URL(origin);
-    return (
-      allowedOrigins.includes(origin) ||
-      (protocol === 'https:' &&
-        (hostname === 'chefuinc.com' || hostname.endsWith('.chefuinc.com'))) ||
-      (protocol === 'http:' && hostname === 'localhost')
-    );
+    return allowedOrigins.includes(new URL(origin).origin);
   } catch {
     return false;
   }

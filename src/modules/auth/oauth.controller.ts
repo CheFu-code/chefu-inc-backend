@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Headers,
   HttpCode,
   Post,
@@ -48,8 +49,9 @@ export class OAuthController {
       grant_type?: string;
       redirect_uri?: string;
     },
+    @Req() request: Request,
   ) {
-    return this.oauthService.exchangeCode(body);
+    return this.oauthService.exchangeCode(body, request);
   }
 
   @Get('userinfo')
@@ -58,6 +60,7 @@ export class OAuthController {
   }
 
   @Get('jwks')
+  @Header('Cache-Control', 'public, max-age=300, stale-while-revalidate=300')
   jwks() {
     return this.oauthService.jwks();
   }
@@ -68,16 +71,19 @@ export class OAuthDiscoveryController {
   constructor(private readonly oauthService: OAuthService) {}
 
   @Get('openid-configuration')
+  @Header('Cache-Control', 'public, max-age=300, stale-while-revalidate=300')
   openidConfiguration() {
     return this.oauthService.metadata();
   }
 
   @Get('oauth-authorization-server')
+  @Header('Cache-Control', 'public, max-age=300, stale-while-revalidate=300')
   oauthAuthorizationServer() {
     return this.oauthService.authorizationServerMetadata();
   }
 
   @Get('jwks.json')
+  @Header('Cache-Control', 'public, max-age=300, stale-while-revalidate=300')
   jwks() {
     return this.oauthService.jwks();
   }

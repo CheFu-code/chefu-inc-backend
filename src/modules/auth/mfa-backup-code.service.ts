@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import admin from 'firebase-admin';
+import { hashForAudit } from '../../common/security-audit';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 
 type BackupCodeRecord = {
@@ -110,8 +111,8 @@ export class MfaBackupCodeService {
     this.logger.warn(
       JSON.stringify({
         event: 'mfa_backup_codes_generated',
-        uid,
-        email: normalizedEmail,
+        uidHash: hashForAudit(uid),
+        emailHash: hashForAudit(normalizedEmail),
         count: codes.length,
       }),
     );
@@ -209,8 +210,8 @@ export class MfaBackupCodeService {
     this.logger.warn(
       JSON.stringify({
         event: 'mfa_backup_code_consumed',
-        uid: userRecord.uid,
-        email: normalizedEmail,
+        uidHash: hashForAudit(userRecord.uid),
+        emailHash: hashForAudit(normalizedEmail),
       }),
     );
 

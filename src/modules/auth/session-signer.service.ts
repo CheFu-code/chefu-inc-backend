@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'crypto';
-import { SessionMeta } from './session.constants';
+import {
+  SESSION_META_AUDIENCE,
+  SESSION_META_ISSUER,
+  SessionMeta,
+} from './session.constants';
 
 @Injectable()
 export class SessionSignerService {
@@ -27,15 +31,17 @@ export class SessionSignerService {
       return null;
     }
 
-    const meta = JSON.parse(
-      Buffer.from(payload, 'base64url').toString('utf8'),
-    ) as SessionMeta;
+    try {
+      const meta = JSON.parse(
+        Buffer.from(payload, 'base64url').toString('utf8'),
+      ) as Partial<SessionMeta>;
 
-    if (!meta.exp || meta.exp <= Math.floor(Date.now() / 1000)) {
+      if (!this.isValidSessionMeta(meta)) return null;
+
+      return meta;
+    } catch {
       return null;
     }
-
-    return meta;
   }
 
   private createSignature(payload: string) {
@@ -59,5 +65,28 @@ export class SessionSignerService {
     }
 
     return secret;
+  }
+
+  private isValidSessionMeta(meta: Partial<SessionMeta>): meta is SessionMeta {
+    const now = Math.floor(Date.now() / 1000);
+    const maxAgeSeconds = 60 * 60 * 24 * 7;
+    const { exp, iat } = meta;
+
+    return (
+      meta.aud === SESSION_META_AUDIENCE &&
+      meta.iss === SESSION_META_ISSUER &&
+      typeof meta.uid === 'string' &&
+      meta.uid.length > 0 &&
+      typeof meta.email === 'string' &&
+      Array.isArray(meta.roles) &&
+      meta.roles.every(role => typeof role === 'string') &&
+      typeof iat === 'number' &&
+      typeof exp === 'number' &&
+      Number.isInteger(iat) &&
+      Number.isInteger(exp) &&
+      iat <= now + 60 &&
+      exp > now &&
+      exp - iat <= maxAgeSeconds
+    );
   }
 }

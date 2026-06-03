@@ -12,6 +12,7 @@ import {
   Logger,
   Patch,
   Post,
+  Query,
   Req,
   Res,
   UseGuards,
@@ -20,6 +21,7 @@ import {
 import { Request, Response } from 'express';
 import { FieldValue } from 'firebase-admin/firestore';
 import { createHash } from 'node:crypto';
+import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { AppsService } from '../apps/apps.service';
 import { CHEFU_APP_HEADER, ChefuAppId } from '../apps/app-registry';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -27,6 +29,8 @@ import { AuthenticatedUser } from './authenticated-user';
 import { AuthGuard } from './auth.guard';
 import { ADMIN_ROLE } from './roles';
 import {
+  SESSION_META_AUDIENCE,
+  SESSION_META_ISSUER,
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE_SECONDS,
   SESSION_META_COOKIE_NAME,
@@ -217,13 +221,12 @@ export class AuthController {
       .set(updates, { merge: true });
 
     const profile = await this.getUserProfile(user.email);
-    const meta: SessionMeta = {
-      uid: user.uid,
+    const meta = this.buildSessionMeta({
       email: user.email,
       name: profile.name || user.email.split('@')[0] || '',
       roles: profile.roles,
-      exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS,
-    };
+      uid: user.uid,
+    });
 
     response.cookie(
       SESSION_META_COOKIE_NAME,
@@ -279,7 +282,8 @@ export class AuthController {
     let sessionCookie: string;
 
     try {
-      decodedToken = await this.firebaseAdmin.auth().verifyIdToken(idToken);
+      decodedToken = await this.firebaseAdmin.auth().verifyIdToken(idToken, true);
+      this.assertRecentFirebaseSignIn(decodedToken.auth_time);
     } catch (error) {
       this.logger.error(
         JSON.stringify({
@@ -304,8 +308,9 @@ export class AuthController {
       this.logger.warn(
         JSON.stringify({
           event: 'flow_session_denied',
-          uid: decodedToken.uid,
-          email: decodedToken.email || null,
+          uidHash: hashForAudit(decodedToken.uid),
+          emailHash: hashForAudit(decodedToken.email),
+          ...auditRequestContext(request),
         }),
       );
       throw new ForbiddenException(FLOW_ACCESS_DENIED_MESSAGE);
@@ -322,9 +327,10 @@ export class AuthController {
       this.logger.warn(
         JSON.stringify({
           event: 'admin_session_denied',
-          uid: decodedToken.uid,
-          email: decodedToken.email || null,
+          uidHash: hashForAudit(decodedToken.uid),
+          emailHash: hashForAudit(decodedToken.email),
           roles: profileForAccess.roles,
+          ...auditRequestContext(request),
         }),
       );
       throw new ForbiddenException('Admin access required.');
@@ -354,8 +360,7 @@ export class AuthController {
 
     await this.ensureUserProfile(decodedToken, sessionAppId, request);
     const userProfile = await this.getUserProfile(decodedToken.email);
-    const meta: SessionMeta = {
-      uid: decodedToken.uid,
+    const meta = this.buildSessionMeta({
       email: decodedToken.email || '',
       name:
         userProfile.name ||
@@ -363,8 +368,8 @@ export class AuthController {
         decodedToken.email?.split('@')[0] ||
         '',
       roles: userProfile.roles,
-      exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS,
-    };
+      uid: decodedToken.uid,
+    });
 
     response.cookie(SESSION_COOKIE_NAME, sessionCookie, this.getCookieOptions());
     response.cookie(
@@ -376,10 +381,11 @@ export class AuthController {
     this.logger.log(
       JSON.stringify({
         event: 'auth_session_created',
-        uid: decodedToken.uid,
-        email: decodedToken.email || null,
+        uidHash: hashForAudit(decodedToken.uid),
+        emailHash: hashForAudit(decodedToken.email),
         app: sessionAppId,
         roleCount: userProfile.roles.length,
+        ...auditRequestContext(request),
       }),
     );
 
@@ -446,7 +452,7 @@ export class AuthController {
     this.logger.log(
       JSON.stringify({
         event: 'otp_send_started',
-        ip: request.ip,
+        ipHash: hashForAudit(request.ip),
         phoneLast4: to.slice(-4),
       }),
     );
@@ -513,10 +519,120 @@ export class AuthController {
 
   @Delete('session')
   @HttpCode(200)
-  clearSession(@Res({ passthrough: true }) response: Response) {
+  async clearSession(
+    @Query('global') globalLogout: string | undefined,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const revokeGlobally =
+      globalLogout === 'true' || globalLogout === '1' || globalLogout === 'yes';
+    const revocation = revokeGlobally
+      ? await this.revokeCurrentSession(request)
+      : { revoked: false, uidHash: null, emailHash: null };
+
     this.clearSessionCookies(response);
-    this.logger.log(JSON.stringify({ event: 'auth_session_cleared' }));
-    return { ok: true };
+    this.logger.log(
+      JSON.stringify({
+        event: 'auth_session_cleared',
+        global: revokeGlobally,
+        revoked: revocation.revoked,
+        uidHash: revocation.uidHash,
+        emailHash: revocation.emailHash,
+        ...auditRequestContext(request),
+      }),
+    );
+
+    return { ok: true, revoked: revocation.revoked };
+  }
+
+  private buildSessionMeta({
+    email,
+    name,
+    roles,
+    uid,
+  }: {
+    email: string;
+    name?: string;
+    roles: string[];
+    uid: string;
+  }): SessionMeta {
+    const now = Math.floor(Date.now() / 1000);
+
+    return {
+      aud: SESSION_META_AUDIENCE,
+      uid,
+      email,
+      name,
+      roles,
+      iat: now,
+      exp: now + SESSION_MAX_AGE_SECONDS,
+      iss: SESSION_META_ISSUER,
+    };
+  }
+
+  private assertRecentFirebaseSignIn(authTime?: number) {
+    const maxAgeSeconds = Number(
+      process.env.AUTH_SESSION_MAX_AUTH_AGE_SECONDS || 5 * 60,
+    );
+    const safeMaxAgeSeconds = Number.isFinite(maxAgeSeconds)
+      ? Math.min(Math.max(maxAgeSeconds, 60), 24 * 60 * 60)
+      : 5 * 60;
+    const now = Math.floor(Date.now() / 1000);
+
+    if (!authTime || now - authTime > safeMaxAgeSeconds) {
+      throw new UnauthorizedException('Recent sign-in required.');
+    }
+  }
+
+  private async revokeCurrentSession(request: Request) {
+    const sessionCookie = request.cookies?.[SESSION_COOKIE_NAME];
+
+    if (!sessionCookie) {
+      return { revoked: false, uidHash: null, emailHash: null };
+    }
+
+    try {
+      const decoded = await this.firebaseAdmin
+        .auth()
+        .verifySessionCookie(sessionCookie, false);
+
+      await this.firebaseAdmin.auth().revokeRefreshTokens(decoded.uid);
+      await this.recordSessionRevocation(decoded.email, decoded.uid);
+
+      return {
+        revoked: true,
+        uidHash: hashForAudit(decoded.uid),
+        emailHash: hashForAudit(decoded.email),
+      };
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'auth_session_revoke_failed',
+          reason: error instanceof Error ? error.message : 'unknown',
+          ...auditRequestContext(request),
+        }),
+      );
+
+      return { revoked: false, uidHash: null, emailHash: null };
+    }
+  }
+
+  private async recordSessionRevocation(email: string | undefined, uid: string) {
+    const normalizedEmail = email?.trim().toLowerCase();
+    if (!normalizedEmail) return;
+
+    await this.firebaseAdmin
+      .db()
+      .collection('users')
+      .doc(normalizedEmail)
+      .set(
+        {
+          sessionRevokedAt: FieldValue.serverTimestamp(),
+          sessionRevokedUid: uid,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
   }
 
   private clearSessionCookies(response: Response) {
@@ -857,7 +973,7 @@ export class AuthController {
         this.logger.warn(
           JSON.stringify({
             event: 'auth_detected_country_update_failed',
-            email: normalizedEmail,
+            emailHash: hashForAudit(normalizedEmail),
             reason: error instanceof Error ? error.message : 'unknown',
           }),
         );
@@ -1001,8 +1117,8 @@ export class AuthController {
         this.logger.log(
           JSON.stringify({
             event: 'auth_sign_in_notification_suppressed',
-            uid,
-            email,
+            uidHash: hashForAudit(uid),
+            emailHash: hashForAudit(email),
             reason: decision.reason,
             throttleMs: decision.throttleMs,
           }),
@@ -1022,8 +1138,8 @@ export class AuthController {
       this.logger.log(
         JSON.stringify({
           event: 'auth_sign_in_notification_sent',
-          uid,
-          email,
+          uidHash: hashForAudit(uid),
+          emailHash: hashForAudit(email),
           reason: decision.reason,
         }),
       );
@@ -1031,8 +1147,8 @@ export class AuthController {
       this.logger.error(
         JSON.stringify({
           event: 'auth_sign_in_notification_failed',
-          uid,
-          email,
+          uidHash: hashForAudit(uid),
+          emailHash: hashForAudit(email),
           reason: error instanceof Error ? error.message : 'unknown',
         }),
       );

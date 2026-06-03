@@ -1,5 +1,6 @@
 import { Injectable, Logger, NestMiddleware } from '@nestjs/common';
 import { NextFunction, Request, Response } from 'express';
+import { auditRequestContext } from './security-audit';
 
 type RateLimitBucket = {
   count: number;
@@ -46,12 +47,13 @@ export class RateLimitMiddleware implements NestMiddleware {
     }
 
     response.setHeader('Retry-After', String(retryAfterSeconds));
+    const auditContext = auditRequestContext(request);
     this.logger.warn(
       JSON.stringify({
         event: 'rate_limit_denied',
         method: request.method,
-        path: request.originalUrl,
-        ip: request.ip,
+        path: auditContext.path,
+        ipHash: auditContext.ipHash,
         retryAfterSeconds,
       }),
     );

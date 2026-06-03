@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import { getRequestId, RequestWithId } from './request-context';
+import { auditRequestContext } from './security-audit';
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
@@ -36,7 +37,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       event: 'request_error',
       requestId: getRequestId(request),
       method: request.method,
-      path: request.originalUrl,
+      path: auditRequestContext(request).path,
       statusCode: status,
       message,
     });

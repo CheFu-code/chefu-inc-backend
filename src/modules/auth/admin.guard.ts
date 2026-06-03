@@ -6,6 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request } from 'express';
+import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { AuthenticatedUser } from './authenticated-user';
 import { isAdmin } from './roles';
 
@@ -21,9 +22,9 @@ export class AdminGuard implements CanActivate {
       this.logger.warn(
         JSON.stringify({
           event: 'admin_guard_denied',
-          path: request.originalUrl,
-          uid: request.user?.uid || null,
-          email: request.user?.email || null,
+          ...auditRequestContext(request),
+          uidHash: hashForAudit(request.user?.uid),
+          emailHash: hashForAudit(request.user?.email),
           roles: request.user?.roles || [],
         }),
       );
@@ -33,9 +34,9 @@ export class AdminGuard implements CanActivate {
     this.logger.log(
       JSON.stringify({
         event: 'admin_guard_allowed',
-        path: request.originalUrl,
-        uid: request.user?.uid,
-        email: request.user?.email,
+        ...auditRequestContext(request),
+        uidHash: hashForAudit(request.user?.uid),
+        emailHash: hashForAudit(request.user?.email),
       }),
     );
 
