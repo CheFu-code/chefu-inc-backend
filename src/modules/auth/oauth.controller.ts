@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -27,6 +28,7 @@ export class OAuthController {
       nonce?: string;
       prompt?: string;
       redirect_uri?: string;
+      response_mode?: string;
       response_type?: string;
       scope?: string;
       state?: string;
@@ -34,8 +36,17 @@ export class OAuthController {
     @Req() request: Request,
     @Res() response: Response,
   ) {
-    const { redirectTo } = await this.oauthService.authorize(query, request);
-    return response.redirect(302, redirectTo);
+    try {
+      const { redirectTo } = await this.oauthService.authorize(query, request);
+      return response.redirect(302, redirectTo);
+    } catch (error) {
+      const redirectTo = this.extractRedirectTo(error);
+      if (redirectTo) {
+        return response.redirect(302, redirectTo);
+      }
+
+      throw error;
+    }
   }
 
   @Post('token')
@@ -76,6 +87,24 @@ export class OAuthController {
   @Header('Cache-Control', 'public, max-age=300, stale-while-revalidate=300')
   jwks() {
     return this.oauthService.jwks();
+  }
+
+  private extractRedirectTo(error: unknown) {
+    if (!(error instanceof BadRequestException)) {
+      return null;
+    }
+
+    const response = error.getResponse();
+    if (
+      response &&
+      typeof response === 'object' &&
+      'redirect_to' in response &&
+      typeof response.redirect_to === 'string'
+    ) {
+      return response.redirect_to;
+    }
+
+    return null;
   }
 }
 

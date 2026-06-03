@@ -25,6 +25,7 @@ import {
 import { AppsService } from '../apps/apps.service';
 import { ChefuOauthClient } from '../apps/app-registry';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
+import { SecurityEventsService } from './security-events.service';
 import { SESSION_COOKIE_NAME } from './session.constants';
 
 type OAuthCodeDocument = {
@@ -100,6 +101,7 @@ type AuthorizeParams = {
   nonce?: string;
   prompt?: string;
   redirect_uri?: string;
+  response_mode?: string;
   response_type?: string;
   scope?: string;
   state?: string;
@@ -215,7 +217,17 @@ export class OAuthService {
     1000;
   private readonly issueRefreshTokens =
     process.env.OAUTH_ENABLE_REFRESH_TOKENS === 'true';
-  private readonly dpopRequired = process.env.OAUTH_DPOP_REQUIRED === 'true';
+  private readonly fapiEnforced = process.env.OAUTH_FAPI_ENFORCED === 'true';
+  private readonly dpopRequired =
+    process.env.OAUTH_DPOP_REQUIRED === 'true' || this.fapiEnforced;
+  private readonly jarmRequired =
+    process.env.OAUTH_JARM_REQUIRED === 'true' || this.fapiEnforced;
+  private readonly jarmTtlSeconds = this.safeNumber(
+    process.env.OAUTH_JARM_TTL_SECONDS,
+    60,
+    30,
+    300,
+  );
   private readonly internalTokenTtlSeconds = this.safeNumber(
     process.env.OAUTH_INTERNAL_TOKEN_TTL_SECONDS,
     300,
@@ -233,6 +245,8 @@ export class OAuthService {
     private readonly firebaseAdmin: FirebaseAdminService,
     @Inject(AppsService)
     private readonly appsService: AppsService,
+    @Inject(SecurityEventsService)
+    private readonly securityEvents: SecurityEventsService,
   ) {
     this.signingKeys = this.loadSigningKeys();
   }
@@ -248,7 +262,10 @@ export class OAuthService {
       token_endpoint: `${this.issuer}/oauth/token`,
       userinfo_endpoint: `${this.issuer}/oauth/userinfo`,
       jwks_uri: `${this.issuer}/oauth/jwks`,
+      authorization_response_iss_parameter_supported: true,
+      authorization_signing_alg_values_supported: ['RS256'],
       response_types_supported: ['code'],
+      response_modes_supported: this.jarmRequired ? ['jwt'] : ['query', 'jwt'],
       grant_types_supported: [
         'authorization_code',
         'refresh_token',
@@ -260,6 +277,8 @@ export class OAuthService {
       token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
       code_challenge_methods_supported: ['S256'],
       dpop_signing_alg_values_supported: ['ES256', 'RS256'],
+      require_signed_authorization_response: this.jarmRequired,
+      fapi_profile_enforced: this.fapiEnforced,
       scopes_supported: this.supportedScopes(),
       claims_supported: [
         'aud',
@@ -282,7 +301,10 @@ export class OAuthService {
       authorization_endpoint: `${this.issuer}/oauth/authorize`,
       token_endpoint: `${this.issuer}/oauth/token`,
       jwks_uri: `${this.issuer}/oauth/jwks`,
+      authorization_response_iss_parameter_supported: true,
+      authorization_signing_alg_values_supported: ['RS256'],
       response_types_supported: ['code'],
+      response_modes_supported: this.jarmRequired ? ['jwt'] : ['query', 'jwt'],
       grant_types_supported: [
         'authorization_code',
         'refresh_token',
@@ -292,6 +314,8 @@ export class OAuthService {
       token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
       code_challenge_methods_supported: ['S256'],
       dpop_signing_alg_values_supported: ['ES256', 'RS256'],
+      require_signed_authorization_response: this.jarmRequired,
+      fapi_profile_enforced: this.fapiEnforced,
       scopes_supported: this.supportedScopes(),
     };
   }
@@ -368,10 +392,6 @@ export class OAuthService {
       usedAt: null,
     });
 
-    const redirectUrl = new URL(redirectUri);
-    redirectUrl.searchParams.set('code', code);
-    if (params.state) redirectUrl.searchParams.set('state', params.state);
-
     this.logger.log(
       JSON.stringify({
         event: 'oauth_authorization_code_issued',
@@ -384,7 +404,54 @@ export class OAuthService {
       }),
     );
 
-    return { redirectTo: redirectUrl.toString() };
+    return {
+      redirectTo: this.buildAuthorizationResponseRedirect({
+        client,
+        code,
+        params,
+        redirectUri,
+      }),
+    };
+  }
+
+  private buildAuthorizationResponseRedirect({
+    client,
+    code,
+    params,
+    redirectUri,
+  }: {
+    client: ChefuOauthClient;
+    code: string;
+    params: AuthorizeParams;
+    redirectUri: string;
+  }) {
+    const redirectUrl = new URL(redirectUri);
+
+    if (this.shouldUseJarm(params)) {
+      const now = Math.floor(Date.now() / 1000);
+      const responseJwt = this.signJwtPayload({
+        aud: client.id,
+        client_id: client.id,
+        code,
+        exp: now + this.jarmTtlSeconds,
+        iat: now,
+        iss: this.issuer,
+        jti: this.randomToken(16),
+        nbf: now,
+        state: params.state,
+      });
+
+      redirectUrl.searchParams.set('response', responseJwt);
+      return redirectUrl.toString();
+    }
+
+    redirectUrl.searchParams.set('code', code);
+    if (params.state) redirectUrl.searchParams.set('state', params.state);
+    return redirectUrl.toString();
+  }
+
+  private shouldUseJarm(params: AuthorizeParams) {
+    return this.jarmRequired || params.response_mode === 'jwt';
   }
 
   private async exchangeCode(body: TokenPayload, request: Request, dpop?: string) {
@@ -557,6 +624,8 @@ export class OAuthService {
       throw new UnauthorizedException('Access token required.');
     }
 
+    await this.securityEvents.assertTokenNotRevoked(claims);
+
     await this.enforceDpopBinding({
       accessToken: token,
       claims,
@@ -567,7 +636,7 @@ export class OAuthService {
     return claims as OAuthAccessTokenClaims;
   }
 
-  verifyInternalToken(token: string, audience: string) {
+  async verifyInternalToken(token: string, audience: string) {
     const claims = this.verifyJwt(token, {
       audience,
       typ: 'internal_access_token',
@@ -576,6 +645,8 @@ export class OAuthService {
     if (claims.typ !== 'internal_access_token') {
       throw new UnauthorizedException('Internal access token required.');
     }
+
+    await this.securityEvents.assertTokenNotRevoked(claims);
 
     return claims as OAuthAccessTokenClaims;
   }
@@ -816,23 +887,31 @@ export class OAuthService {
       throw new BadRequestException('Invalid redirect_uri for this client.');
     }
 
+    if (params.response_mode && params.response_mode !== 'jwt' && params.response_mode !== 'query') {
+      return this.redirectError(params, 'invalid_request', 'Unsupported response_mode.', client);
+    }
+
+    if (this.jarmRequired && params.response_mode !== 'jwt') {
+      return this.redirectError(params, 'invalid_request', 'response_mode=jwt is required.', client);
+    }
+
     if (!this.isOauthOpaqueParam(params.state, 16, 512)) {
-      return this.redirectError(params, 'invalid_request', 'state is required.');
+      return this.redirectError(params, 'invalid_request', 'state is required.', client);
     }
 
     if (!this.isOauthOpaqueParam(params.nonce, 16, 512)) {
-      return this.redirectError(params, 'invalid_request', 'nonce is required.');
+      return this.redirectError(params, 'invalid_request', 'nonce is required.', client);
     }
 
     if (
       params.code_challenge_method !== 'S256' ||
       !this.isPkceCodeChallenge(params.code_challenge)
     ) {
-      return this.redirectError(params, 'invalid_request', 'PKCE S256 is required.');
+      return this.redirectError(params, 'invalid_request', 'PKCE S256 is required.', client);
     }
 
     if (!this.resolveScopes(params.scope, client).includes('openid')) {
-      return this.redirectError(params, 'invalid_scope', 'openid scope is required.');
+      return this.redirectError(params, 'invalid_scope', 'openid scope is required.', client);
     }
 
     return client;
@@ -842,15 +921,35 @@ export class OAuthService {
     params: AuthorizeParams,
     error: string,
     description: string,
+    client?: ChefuOauthClient,
   ): never {
     if (!params.redirect_uri) {
       throw new BadRequestException(description);
     }
 
     const url = new URL(params.redirect_uri);
-    url.searchParams.set('error', error);
-    url.searchParams.set('error_description', description);
-    if (params.state) url.searchParams.set('state', params.state);
+    if (client && this.shouldUseJarm(params)) {
+      const now = Math.floor(Date.now() / 1000);
+      url.searchParams.set(
+        'response',
+        this.signJwtPayload({
+          aud: client.id,
+          client_id: client.id,
+          error,
+          error_description: description,
+          exp: now + this.jarmTtlSeconds,
+          iat: now,
+          iss: this.issuer,
+          jti: this.randomToken(16),
+          nbf: now,
+          state: params.state,
+        }),
+      );
+    } else {
+      url.searchParams.set('error', error);
+      url.searchParams.set('error_description', description);
+      if (params.state) url.searchParams.set('state', params.state);
+    }
 
     throw new BadRequestException({
       error,
@@ -881,6 +980,7 @@ export class OAuthService {
         : {}),
       ...(params.nonce ? { nonce: params.nonce } : {}),
       ...(params.redirect_uri ? { redirect_uri: params.redirect_uri } : {}),
+      ...(params.response_mode ? { response_mode: params.response_mode } : {}),
       ...(params.response_type ? { response_type: params.response_type } : {}),
       ...(params.scope ? { scope: params.scope } : {}),
       ...(params.state ? { state: params.state } : {}),
@@ -1506,6 +1606,10 @@ export class OAuthService {
   }
 
   private signJwt(claims: TokenClaims) {
+    return this.signJwtPayload(claims);
+  }
+
+  private signJwtPayload(claims: Record<string, unknown>) {
     const signingKey = this.activeSigningKey();
     const header = this.base64UrlJson({
       alg: 'RS256',

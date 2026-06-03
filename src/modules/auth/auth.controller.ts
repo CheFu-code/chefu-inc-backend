@@ -26,6 +26,7 @@ import { AppsService } from '../apps/apps.service';
 import { CHEFU_APP_HEADER, ChefuAppId } from '../apps/app-registry';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { AuthenticatedUser } from './authenticated-user';
+import { AdminGuard } from './admin.guard';
 import { AuthGuard } from './auth.guard';
 import { ADMIN_ROLE } from './roles';
 import {
@@ -37,6 +38,7 @@ import {
   SessionMeta,
 } from './session.constants';
 import { MfaBackupCodeService } from './mfa-backup-code.service';
+import { SecurityEventsService } from './security-events.service';
 import { SessionSignerService } from './session-signer.service';
 import { ResendService } from '../email/resend.service';
 import {
@@ -115,6 +117,8 @@ export class AuthController {
     private readonly resendService: ResendService,
     @Inject(AppsService)
     private readonly appsService: AppsService,
+    @Inject(SecurityEventsService)
+    private readonly securityEvents: SecurityEventsService,
   ) {}
 
   @Get('me')
@@ -146,6 +150,38 @@ export class AuthController {
       email: request.user?.email,
       uid: request.user?.uid,
     });
+  }
+
+  @Post('security-events/revoke')
+  @UseGuards(AuthGuard, AdminGuard)
+  async revokeSubjectSessions(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Body()
+    body: {
+      email?: string;
+      reason?: string;
+      uid?: string;
+    },
+  ) {
+    const event = await this.securityEvents.publishSubjectRevocation({
+      actor: request.user?.uid || request.user?.email || 'admin',
+      email: body.email,
+      reason: body.reason || 'admin_session_terminated',
+      uid: body.uid,
+    });
+
+    this.logger.warn(
+      JSON.stringify({
+        event: 'security_subject_revoked',
+        actorHash: hashForAudit(request.user?.uid || request.user?.email),
+        reason: body.reason || 'admin_session_terminated',
+        targetEmailHash: hashForAudit(body.email),
+        targetUidHash: hashForAudit(body.uid),
+        ...auditRequestContext(request),
+      }),
+    );
+
+    return event;
   }
 
   @Patch('profile')
@@ -598,6 +634,12 @@ export class AuthController {
 
       await this.firebaseAdmin.auth().revokeRefreshTokens(decoded.uid);
       await this.recordSessionRevocation(decoded.email, decoded.uid);
+      await this.securityEvents.publishSubjectRevocation({
+        actor: decoded.uid,
+        email: decoded.email,
+        reason: 'global_logout',
+        uid: decoded.uid,
+      });
 
       return {
         revoked: true,

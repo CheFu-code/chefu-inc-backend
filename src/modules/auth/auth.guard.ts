@@ -10,6 +10,7 @@ import { Request } from 'express';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { AuthenticatedUser } from './authenticated-user';
+import { HoneytokenService } from './honeytoken.service';
 import { OAuthService } from './oauth.service';
 import { SESSION_COOKIE_NAME } from './session.constants';
 
@@ -32,10 +33,14 @@ export class AuthGuard implements CanActivate {
     private readonly firebaseAdmin: FirebaseAdminService,
     @Inject(OAuthService)
     private readonly oauthService: OAuthService,
+    @Inject(HoneytokenService)
+    private readonly honeytokens: HoneytokenService,
   ) {}
 
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<RequestWithUser>();
+    await this.honeytokens.inspectRequest(request);
+
     const token = this.getBearerToken(request);
     const sessionCookie = request.cookies?.[SESSION_COOKIE_NAME];
 

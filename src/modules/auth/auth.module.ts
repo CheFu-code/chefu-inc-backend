@@ -6,6 +6,8 @@ import { AuthGuard } from './auth.guard';
 import { MfaBackupCodeService } from './mfa-backup-code.service';
 import { OAuthService } from './oauth.service';
 import { SessionSignerService } from './session-signer.service';
+import { HoneytokenService } from './honeytoken.service';
+import { SecurityEventsService } from './security-events.service';
 import { AppsModule } from '../apps/apps.module';
 import { EmailModule } from '../email/email.module';
 
@@ -18,7 +20,15 @@ import { EmailModule } from '../email/email.module';
     SessionSignerService,
     MfaBackupCodeService,
     OAuthService,
+    SecurityEventsService,
+    HoneytokenService,
   ],
-  exports: [AuthGuard, AdminGuard, OAuthService, SessionSignerService],
+  exports: [
+    AuthGuard,
+    AdminGuard,
+    OAuthService,
+    SessionSignerService,
+    SecurityEventsService,
+  ],
 })
 export class AuthModule {}
