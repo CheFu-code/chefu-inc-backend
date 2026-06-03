@@ -123,6 +123,51 @@ export class FlowController {
     return this.flowService.getMessages(folder);
   }
 
+  @Get('messages/stream')
+  async messageStream(
+    @Headers('x-flow-api-key') flowApiKey: string | undefined,
+    @Req() request: Request,
+    @Res() response: Response,
+    @Query('folder') folder?: string,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+
+    response.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    response.setHeader('Cache-Control', 'no-cache, no-transform');
+    response.setHeader('Connection', 'keep-alive');
+    response.flushHeaders();
+
+    const writeEvent = (event: string, payload: unknown) => {
+      if (response.writableEnded) return;
+      response.write(`event: ${event}\n`);
+      response.write(`data: ${JSON.stringify(payload)}\n\n`);
+    };
+    const heartbeat = setInterval(() => {
+      if (response.writableEnded) return;
+      response.write(': keepalive\n\n');
+    }, 25_000);
+    const unsubscribe = this.flowService.watchMessages(
+      folder,
+      payload => writeEvent('messages', payload),
+      error => {
+        writeEvent('error', {
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Flow message stream failed.',
+        });
+      },
+    );
+
+    writeEvent('ready', { ok: true });
+
+    request.on('close', () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+      if (!response.writableEnded) response.end();
+    });
+  }
+
   @Get('messages/:messageId/attachments')
   async attachments(
     @Param('messageId') messageId: string,

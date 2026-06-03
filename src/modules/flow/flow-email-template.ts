@@ -62,7 +62,7 @@ export function renderFlowEmailShell({
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;background:#ffffff;border:1px solid #dfe4ea;border-radius:18px;overflow:hidden;">
             <tr>
               <td style="padding:26px 30px;border-bottom:1px solid #dfe4ea;">
-                <div style="font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#1a73e8;">Flow Mail</div>
+                <div style="font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#1a73e8;">Flow</div>
                 <h1 style="margin:12px 0 0;font-size:26px;line-height:1.25;color:#202124;">${escapeHtml(title)}</h1>
               </td>
             </tr>
@@ -74,7 +74,7 @@ export function renderFlowEmailShell({
             </tr>
             <tr>
               <td style="background:#f8fafc;border-top:1px solid #dfe4ea;padding:18px 30px;color:#5f6368;font-size:12px;line-height:1.6;">
-                Sent with Flow Mail by CheFu Inc.
+                Sent with Flow by CheFu Inc.
               </td>
             </tr>
           </table>

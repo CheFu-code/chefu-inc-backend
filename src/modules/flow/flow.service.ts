@@ -6,6 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { FieldValue } from 'firebase-admin/firestore';
+import { randomUUID } from 'node:crypto';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
   applyVariables,
@@ -26,6 +27,18 @@ type ResendEmailPayload = {
   html: string;
   reply_to?: string;
   tags?: Array<{ name: string; value: string }>;
+};
+
+type FlowFolderCounts = {
+  allmail: number;
+  archived: number;
+  campaigns: number;
+  drafts: number;
+  inbox: number;
+  scheduled: number;
+  sent: number;
+  starred: number;
+  trash: number;
 };
 
 @Injectable()
@@ -81,6 +94,35 @@ export class FlowService {
     };
   }
 
+  watchMessages(
+    folder = 'inbox',
+    onMessages: (payload: {
+      counts: FlowFolderCounts;
+      folder: string;
+      messages: FlowMessage[];
+      updatedAt: string;
+    }) => void,
+    onError: (error: Error) => void,
+  ) {
+    const requestedFolder = String(folder || 'inbox').toLowerCase();
+
+    return this.messagesCollection()
+      .orderBy('createdAt', 'desc')
+      .limit(100)
+      .onSnapshot(snapshot => {
+        const allMessages = snapshot.docs.map(doc =>
+          this.toMessage(doc.id, doc.data()),
+        );
+
+        onMessages({
+          counts: this.countFolders(allMessages),
+          folder: requestedFolder,
+          messages: this.filterMessagesByFolder(allMessages, requestedFolder),
+          updatedAt: new Date().toISOString(),
+        });
+      }, onError);
+  }
+
   async send(payload: FlowSendPayload) {
     if (!this.resendApiKey) {
       throw new InternalServerErrorException('RESEND_API_KEY is not configured.');
@@ -110,9 +152,12 @@ export class FlowService {
       );
     }
 
-    const emails = recipients.map(recipient =>
-      this.createResendEmail(normalized, recipient),
-    );
+    const renderedEmails = recipients.map(recipient => ({
+      body: this.renderRecipientBody(normalized, recipient),
+      email: this.createResendEmail(normalized, recipient),
+      recipient,
+    }));
+    const emails = renderedEmails.map(item => item.email);
     const response =
       emails.length === 1
         ? await this.postToResend('/emails', emails[0])
@@ -120,30 +165,31 @@ export class FlowService {
             'x-batch-validation': 'permissive',
           });
     const sentAt = new Date().toISOString();
+    const sendGroupId = randomUUID();
 
-    await this.messagesCollection().add({
-      attachments: 0,
-      createdAt: FieldValue.serverTimestamp(),
-      direction: 'outbound',
-      folder: 'sent',
-      from: normalized.from,
-      html: renderFlowEmailShell({
-        body: textToHtml(normalized.html),
-        ctaLabel: normalized.ctaLabel || undefined,
-        ctaUrl: normalized.ctaUrl || undefined,
-        preheader: normalized.preheader,
-        title: normalized.subject,
-      }),
-      label: normalized.action === 'test' ? 'Test' : 'Campaign',
-      preview: this.previewFromText(normalized.html),
-      sentAt,
-      starred: false,
-      subject: normalized.subject,
-      text: normalized.html,
-      to: recipients.map(recipient => recipient.email),
-      unread: false,
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    await Promise.all(
+      renderedEmails.map(({ body, email, recipient }, index) =>
+        this.messagesCollection().add({
+          attachments: 0,
+          createdAt: FieldValue.serverTimestamp(),
+          direction: 'outbound',
+          folder: 'sent',
+          from: normalized.from,
+          html: email.html,
+          label: normalized.action === 'test' ? 'Test' : 'Sent',
+          preview: this.previewFromText(body),
+          resendEmailId: this.sentEmailId(response, index),
+          sendGroupId,
+          sentAt,
+          starred: false,
+          subject: email.subject,
+          text: body,
+          to: [recipient.email],
+          unread: false,
+          updatedAt: FieldValue.serverTimestamp(),
+        }),
+      ),
+    );
 
     return {
       action: normalized.action,
@@ -155,6 +201,23 @@ export class FlowService {
   }
 
   async receiveInbound(payload: unknown) {
+    const eventType = this.webhookEventType(payload);
+
+    if (eventType && !this.isInboundEmailEvent(eventType)) {
+      this.logger.log(
+        JSON.stringify({
+          event: 'flow_inbound_event_ignored',
+          eventType,
+        }),
+      );
+
+      return {
+        eventType,
+        ignored: true,
+        received: false,
+      };
+    }
+
     const message = this.normalizeInbound(
       await this.enrichInboundPayload(payload),
     );
@@ -165,6 +228,17 @@ export class FlowService {
       : 'inbox';
 
     try {
+      const existingId = await this.findExistingInboundMessage(message);
+      if (existingId) {
+        return {
+          id: existingId,
+          deduped: true,
+          received: true,
+          receivedAt: message.receivedAt,
+          folder,
+        };
+      }
+
       const doc = await this.messagesCollection().add({
         ...inboundData,
         attachments: message.attachments || 0,
@@ -174,6 +248,7 @@ export class FlowService {
         label: isInternalSender ? 'Internal' : message.label,
         unread: !isInternalSender,
         starred: false,
+        webhookEventType: eventType || 'manual',
         updatedAt: FieldValue.serverTimestamp(),
       });
 
@@ -560,6 +635,74 @@ export class FlowService {
     };
   }
 
+  private renderRecipientBody(
+    payload: ReturnType<FlowService['normalizePayload']>,
+    recipient: FlowRecipient,
+  ) {
+    return applyVariables(payload.html, {
+      audienceName: payload.audienceName,
+      company: recipient.company || 'CheFu Inc',
+      email: recipient.email,
+      firstName: recipient.firstName || recipient.email.split('@')[0],
+      lastName: recipient.lastName || '',
+    });
+  }
+
+  private sentEmailId(response: unknown, index: number) {
+    if (!response || typeof response !== 'object') return undefined;
+
+    const payload = response as Record<string, unknown>;
+    if (index === 0 && typeof payload.id === 'string') return payload.id;
+
+    const data = Array.isArray(payload.data)
+      ? payload.data
+      : Array.isArray(payload.emails)
+        ? payload.emails
+        : Array.isArray(response)
+          ? response
+          : [];
+    const item = data[index];
+
+    if (item && typeof item === 'object') {
+      const email = item as Record<string, unknown>;
+      if (typeof email.id === 'string') return email.id;
+      if (typeof email.email_id === 'string') return email.email_id;
+    }
+
+    return undefined;
+  }
+
+  private webhookEventType(payload: unknown) {
+    if (!payload || typeof payload !== 'object') return '';
+
+    const input = payload as Record<string, unknown>;
+    const data =
+      input.data && typeof input.data === 'object'
+        ? (input.data as Record<string, unknown>)
+        : {};
+
+    return String(
+      input.type ||
+        input.event ||
+        input.eventType ||
+        data.type ||
+        data.event ||
+        data.eventType ||
+        '',
+    )
+      .trim()
+      .toLowerCase();
+  }
+
+  private isInboundEmailEvent(eventType: string) {
+    return [
+      'email.received',
+      'email.inbound',
+      'email.delivered_to_inbox',
+      'inbound.email.received',
+    ].includes(eventType);
+  }
+
   private async postToResend(
     path: string,
     body: unknown,
@@ -753,8 +896,35 @@ export class FlowService {
     return this.firebaseAdmin.db().collection('flowMessages');
   }
 
+  private async findExistingInboundMessage(message: {
+    messageId?: string;
+    resendEmailId?: string;
+  }) {
+    if (message.resendEmailId) {
+      const snapshot = await this.messagesCollection()
+        .where('resendEmailId', '==', message.resendEmailId)
+        .limit(1)
+        .get();
+
+      if (!snapshot.empty) return snapshot.docs[0].id;
+    }
+
+    if (message.messageId) {
+      const snapshot = await this.messagesCollection()
+        .where('messageId', '==', message.messageId)
+        .limit(1)
+        .get();
+
+      if (!snapshot.empty) return snapshot.docs[0].id;
+    }
+
+    return '';
+  }
+
   private normalizeFolder(value?: string) {
     const folder = String(value || 'inbox').toLowerCase();
+    if (folder === 'bin') return 'trash';
+
     if (
       [
         'inbox',
@@ -772,7 +942,7 @@ export class FlowService {
     return 'inbox';
   }
 
-  private countFolders(messages: FlowMessage[]) {
+  private countFolders(messages: FlowMessage[]): FlowFolderCounts {
     const counts = {
       allmail: 0,
       inbox: 0,
@@ -788,7 +958,7 @@ export class FlowService {
     messages.forEach(message => {
       const folder = this.normalizeFolder(message.folder);
       counts[folder] += 1;
-      if (message.folder !== 'trash') counts.allmail += 1;
+      if (folder !== 'trash') counts.allmail += 1;
       if (message.starred) counts.starred += 1;
     });
 
@@ -797,7 +967,9 @@ export class FlowService {
 
   private filterMessagesByFolder(messages: FlowMessage[], folder: string) {
     if (folder === 'allmail') {
-      return messages.filter(message => message.folder !== 'trash');
+      return messages.filter(
+        message => this.normalizeFolder(message.folder) !== 'trash',
+      );
     }
 
     if (folder === 'starred') {
