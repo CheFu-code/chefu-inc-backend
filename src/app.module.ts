@@ -12,6 +12,7 @@ import { EmailModule } from './modules/email/email.module';
 import { FirebaseAdminModule } from './modules/firebase-admin/firebase-admin.module';
 import { FlowModule } from './modules/flow/flow.module';
 import { HealthController } from './modules/health/health.controller';
+import { MuzaloModule } from './modules/muzalo/muzalo.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { QuantumModule } from './modules/quantum/quantum.module';
 
@@ -33,6 +34,7 @@ const productModules = [
   AcademySdkModule,
   CoursesModule,
   FlowModule,
+  MuzaloModule,
   QuantumModule,
 ];
 

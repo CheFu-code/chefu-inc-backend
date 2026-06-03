@@ -2,16 +2,27 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   Inject,
   InternalServerErrorException,
   Logger,
+  Param,
   Post,
   Patch,
+  Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import { Request } from 'express';
+import { AuthenticatedUser } from '../auth/authenticated-user';
 import { AdminGuard } from '../auth/admin.guard';
 import { AuthGuard } from '../auth/auth.guard';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
+import { AdminAppsService } from './admin-apps.service';
+
+type RequestWithUser = Request & {
+  user?: AuthenticatedUser;
+};
 
 @Controller('admin')
 @UseGuards(AuthGuard, AdminGuard)
@@ -21,7 +32,32 @@ export class AdminController {
   constructor(
     @Inject(FirebaseAdminService)
     private readonly firebaseAdmin: FirebaseAdminService,
+    @Inject(AdminAppsService)
+    private readonly adminApps: AdminAppsService,
   ) {}
+
+  @Get('apps')
+  apps() {
+    return this.adminApps.listApps();
+  }
+
+  @Get('apps/muzalo/artist-requests')
+  listMuzaloArtistRequests(@Query('status') status?: string) {
+    return this.adminApps.listMuzaloArtistRequests(status);
+  }
+
+  @Patch('apps/muzalo/artist-requests/:email')
+  reviewMuzaloArtistRequest(
+    @Param('email') email: string,
+    @Body() body: { reviewNote?: string; status?: string },
+    @Req() request: RequestWithUser,
+  ) {
+    return this.adminApps.reviewMuzaloArtistRequest(
+      email,
+      body,
+      request.user,
+    );
+  }
 
   @Post('delete-user')
   async deleteUser(@Body() body: { uid?: string; email?: string }) {
