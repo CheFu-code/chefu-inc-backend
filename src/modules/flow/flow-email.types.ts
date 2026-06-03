@@ -38,9 +38,13 @@ export type FlowMessage = {
   preview: string;
   text?: string;
   html?: string;
+  isReaction?: boolean;
   label?: string;
   inReplyTo?: string;
   messageId?: string;
+  reactionCount?: number;
+  reactionEmoji?: string;
+  reactionFrom?: string;
   references?: string[];
   resendEmailId?: string;
   threadKey?: string;

@@ -270,7 +270,7 @@ export class FlowService {
         folder,
         direction: 'inbound',
         label: isInternalSender ? 'Internal' : message.label,
-        unread: !isInternalSender,
+        unread: !isInternalSender && !message.isReaction,
         starred: false,
         webhookEventType: eventType || 'manual',
         updatedAt: FieldValue.serverTimestamp(),
@@ -1064,6 +1064,8 @@ export class FlowService {
     };
 
     messages.forEach(message => {
+      if (message.isReaction) return;
+
       const folder = this.normalizeFolder(message.folder);
       counts[folder] += 1;
       if (folder !== 'trash') counts.allmail += 1;
@@ -1129,7 +1131,8 @@ export class FlowService {
     data: Record<string, unknown>,
   ): FlowMessage {
     const attachmentItems = this.normalizeAttachments(data.attachmentItems);
-    const isReactionMessage = this.isGmailReactionStoredMessage(data);
+    const isReactionMessage =
+      data.isReaction === true || this.isGmailReactionStoredMessage(data);
     const visibleAttachmentItems = isReactionMessage ? [] : attachmentItems;
     const direction = data.direction === 'outbound' ? 'outbound' : 'inbound';
     const from = String(data.from || '');
@@ -1152,6 +1155,17 @@ export class FlowService {
       typeof data.threadKey === 'string' && data.threadKey.trim()
         ? data.threadKey
         : this.threadKeyForMessage(subject, from, to);
+    const reactionEmoji =
+      typeof data.reactionEmoji === 'string' && data.reactionEmoji.trim()
+        ? data.reactionEmoji
+        : isReactionMessage
+          ? this.gmailReactionEmoji(
+              [data.text, data.preview, data.subject, data.html]
+                .filter(value => typeof value === 'string')
+                .map(value => this.stripHtml(String(value)))
+                .join('\n'),
+            )
+          : undefined;
 
     return {
       id,
@@ -1170,9 +1184,19 @@ export class FlowService {
           : typeof data.in_reply_to === 'string'
             ? data.in_reply_to
             : undefined,
+      isReaction: isReactionMessage,
       label: typeof data.label === 'string' ? data.label : undefined,
       messageId,
       preview: String(data.preview || ''),
+      reactionCount: isReactionMessage
+        ? Number(data.reactionCount) || 1
+        : undefined,
+      reactionEmoji,
+      reactionFrom: isReactionMessage
+        ? typeof data.reactionFrom === 'string'
+          ? data.reactionFrom
+          : from
+        : undefined,
       receivedAt:
         typeof data.receivedAt === 'string'
           ? data.receivedAt
@@ -1267,9 +1291,13 @@ export class FlowService {
       throw new BadRequestException('Inbound email sender is required.');
     }
 
-    const isReactionMessage = this.isGmailReactionText(
-      [text, this.stripHtml(html || ''), subject].join('\n'),
+    const reactionSource = [text, this.stripHtml(html || ''), subject].join(
+      '\n',
     );
+    const isReactionMessage = this.isGmailReactionText(reactionSource);
+    const reactionEmoji = isReactionMessage
+      ? this.gmailReactionEmoji(reactionSource)
+      : '';
     const attachmentItems = isReactionMessage
       ? []
       : this.normalizeAttachments(email.attachments);
@@ -1280,9 +1308,15 @@ export class FlowService {
       from,
       html,
       inReplyTo: inReplyTo || undefined,
+      isReaction: isReactionMessage || undefined,
       label: 'Inbound',
       messageId: messageId || undefined,
-      preview,
+      preview: isReactionMessage
+        ? `Reacted with ${reactionEmoji || 'reaction'}`
+        : preview,
+      reactionCount: isReactionMessage ? 1 : undefined,
+      reactionEmoji: reactionEmoji || undefined,
+      reactionFrom: isReactionMessage ? from : undefined,
       references: references.length ? references : undefined,
       receivedAt:
         typeof email.created_at === 'string'
@@ -1297,7 +1331,7 @@ export class FlowService {
             ? email.email_id
             : undefined,
       subject,
-      text,
+      text: isReactionMessage ? '' : text,
       threadKey: this.threadKeyForMessage(subject, from, to),
       to,
     };
@@ -1461,11 +1495,21 @@ export class FlowService {
   }
 
   private isGmailReactionStoredMessage(data: Record<string, unknown>) {
+    if (data.isReaction === true) return true;
+
     return this.isGmailReactionText(
       [data.text, data.preview, data.subject, data.html]
         .filter(value => typeof value === 'string')
         .map(value => this.stripHtml(String(value)))
         .join('\n'),
+    );
+  }
+
+  private gmailReactionEmoji(value: string) {
+    return (
+      value.match(
+        /\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/u,
+      )?.[0] || ''
     );
   }
 
