@@ -73,6 +73,7 @@ Set these on the backend host:
 - `WHATSAPP_SYSTEM_USER_TOKEN`
 - `RESEND_API_KEY` for security notification emails
 - `FLOW_ACCESS_SECRET=<long random secret shared with the Flow frontend>`
+- `FLOW_SENDERS="CheFu Inc <hello@chefuinc.com>;Flow Mail <mail@chefuinc.com>;Support <support@chefuinc.com>;Security <security@chefuinc.com>;Muzalo <muzalo@chefuinc.com>;CheFu Academy <academy@chefuinc.com>;CheFu Quantum <quantum@chefuinc.com>"`
 - `SIGNIN_ALERT_TEMPLATE_ID` if using a saved Resend template for sign-in alerts
 - `PASSWORD_CHANGED_TEMPLATE_ID` if using a saved Resend template for password-change alerts
 
