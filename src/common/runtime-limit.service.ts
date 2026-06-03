@@ -34,21 +34,19 @@ export class RuntimeLimitService {
   async reserve(options: LimitOptions): Promise<LimitResult> {
     const safeLimit = Math.max(1, Math.floor(options.limit));
     const safeWindowMs = Math.max(1_000, Math.floor(options.windowMs));
+    const normalizedOptions = {
+      ...options,
+      collection: options.collection || 'runtime_rate_limits',
+      limit: safeLimit,
+      windowMs: safeWindowMs,
+    };
 
     if (!this.useFirestore) {
-      return this.reserveLocal({
-        ...options,
-        limit: safeLimit,
-        windowMs: safeWindowMs,
-      });
+      return this.reserveLocal(normalizedOptions);
     }
 
     try {
-      return await this.reserveFirestore({
-        ...options,
-        limit: safeLimit,
-        windowMs: safeWindowMs,
-      });
+      return await this.reserveFirestore(normalizedOptions);
     } catch (error) {
       this.logger.warn(
         JSON.stringify({
@@ -56,11 +54,7 @@ export class RuntimeLimitService {
           reason: error instanceof Error ? error.message : 'unknown',
         }),
       );
-      return this.reserveLocal({
-        ...options,
-        limit: safeLimit,
-        windowMs: safeWindowMs,
-      });
+      return this.reserveLocal(normalizedOptions);
     }
   }
 

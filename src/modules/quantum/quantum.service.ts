@@ -96,6 +96,48 @@ export class QuantumService {
     };
   }
 
+  async upsertConversation(
+    user: AuthenticatedUser,
+    conversation: QuantumConversation | undefined,
+    conversationId?: string,
+  ) {
+    if (!conversation) {
+      throw new BadRequestException('conversation is required.');
+    }
+
+    const normalized = this.normalizeConversation({
+      ...conversation,
+      id: conversationId || conversation.id,
+    });
+
+    await this.conversationsCollection(user).doc(normalized.id).set(
+      {
+        ...normalized,
+        ownerUid: user.uid,
+        ownerEmail: user.email,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    return {
+      conversation: normalized,
+      saved: true,
+    };
+  }
+
+  async deleteConversation(user: AuthenticatedUser, conversationId: string) {
+    const id = this.cleanId(conversationId);
+    if (!id) throw new BadRequestException('Conversation id is required.');
+
+    await this.conversationsCollection(user).doc(id).delete();
+
+    return {
+      deleted: true,
+      id,
+    };
+  }
+
   private conversationsCollection(user: AuthenticatedUser) {
     return this.firebaseAdmin
       .db()

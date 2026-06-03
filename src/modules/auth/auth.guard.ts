@@ -12,7 +12,11 @@ import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { AuthenticatedUser } from './authenticated-user';
 import { HoneytokenService } from './honeytoken.service';
 import { OAuthService } from './oauth.service';
-import { SESSION_COOKIE_NAME } from './session.constants';
+import {
+  SESSION_COOKIE_NAME,
+  SESSION_META_COOKIE_NAME,
+} from './session.constants';
+import { SessionSignerService } from './session-signer.service';
 
 type RequestWithUser = Request & {
   user?: AuthenticatedUser;
@@ -35,6 +39,8 @@ export class AuthGuard implements CanActivate {
     private readonly oauthService: OAuthService,
     @Inject(HoneytokenService)
     private readonly honeytokens: HoneytokenService,
+    @Inject(SessionSignerService)
+    private readonly sessionSigner: SessionSignerService,
   ) {}
 
   async canActivate(context: ExecutionContext) {
@@ -48,7 +54,7 @@ export class AuthGuard implements CanActivate {
       const resolution = token
         ? await this.resolveBearerUser(token, request)
         : sessionCookie
-          ? await this.resolveSessionUser(sessionCookie)
+          ? await this.resolveSessionUser(sessionCookie, request)
           : null;
 
       if (!resolution) {
@@ -124,24 +130,38 @@ export class AuthGuard implements CanActivate {
         user: {
           uid: claims.sub,
           email,
-          roles: email ? await this.getUserRoles(email) : claims.roles || [],
+          roles: Array.isArray(claims.roles)
+            ? claims.roles.map(String)
+            : email
+              ? await this.getUserRoles(email)
+              : [],
         },
       };
     }
   }
 
-  private async resolveSessionUser(sessionCookie: string): Promise<AuthResolution> {
+  private async resolveSessionUser(
+    sessionCookie: string,
+    request?: RequestWithUser,
+  ): Promise<AuthResolution> {
     const decoded = await this.firebaseAdmin
       .auth()
       .verifySessionCookie(sessionCookie, true);
     const email = decoded.email || '';
+    const meta = this.sessionSigner.verify(
+      request?.cookies?.[SESSION_META_COOKIE_NAME],
+    );
+    const roles =
+      meta?.uid === decoded.uid && meta.email === email
+        ? meta.roles
+        : await this.getUserRoles(email);
 
     return {
       source: 'session_cookie',
       user: {
         uid: decoded.uid,
         email,
-        roles: await this.getUserRoles(email),
+        roles,
       },
     };
   }

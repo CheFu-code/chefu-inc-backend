@@ -21,6 +21,7 @@ import {
 import { Request, Response } from 'express';
 import { FieldValue } from 'firebase-admin/firestore';
 import { createHash } from 'node:crypto';
+import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { AppsService } from '../apps/apps.service';
 import { CHEFU_APP_HEADER, ChefuAppId } from '../apps/app-registry';
@@ -104,7 +105,6 @@ type SignInAlertDecision = {
 @Controller('auth')
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
-  private readonly otpAttempts = new Map<string, number[]>();
 
   constructor(
     @Inject(FirebaseAdminService)
@@ -119,6 +119,8 @@ export class AuthController {
     private readonly appsService: AppsService,
     @Inject(SecurityEventsService)
     private readonly securityEvents: SecurityEventsService,
+    @Inject(RuntimeLimitService)
+    private readonly runtimeLimits: RuntimeLimitService,
   ) {}
 
   @Get('me')
@@ -484,7 +486,7 @@ export class AuthController {
       );
     }
 
-    this.enforceOtpThrottle(request.ip || 'unknown');
+    await this.enforceOtpThrottle(request.ip || 'unknown');
     this.logger.log(
       JSON.stringify({
         event: 'otp_send_started',
@@ -1371,19 +1373,16 @@ export class AuthController {
     return digits;
   }
 
-  private enforceOtpThrottle(ip: string) {
-    const now = Date.now();
-    const windowMs = 10 * 60 * 1000;
-    const maxAttempts = 5;
-    const recentAttempts = (this.otpAttempts.get(ip) || []).filter(
-      timestamp => now - timestamp < windowMs,
-    );
+  private async enforceOtpThrottle(ip: string) {
+    const result = await this.runtimeLimits.reserve({
+      collection: 'runtime_otp_send_limits',
+      key: ip,
+      limit: 5,
+      windowMs: 10 * 60 * 1000,
+    });
 
-    if (recentAttempts.length >= maxAttempts) {
+    if (result.limited) {
       throw new BadRequestException('Too many OTP requests. Try again later.');
     }
-
-    recentAttempts.push(now);
-    this.otpAttempts.set(ip, recentAttempts);
   }
 }

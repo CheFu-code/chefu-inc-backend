@@ -34,6 +34,7 @@ type LeakReportBody = {
 type ListQuery = {
   query?: string;
   category?: string;
+  cursor?: string;
   limit?: string;
 };
 

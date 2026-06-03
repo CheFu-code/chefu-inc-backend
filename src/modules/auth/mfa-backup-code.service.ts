@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import admin from 'firebase-admin';
+import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { hashForAudit } from '../../common/security-audit';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 
@@ -27,11 +28,11 @@ type BackupCodeState = {
 @Injectable()
 export class MfaBackupCodeService {
   private readonly logger = new Logger(MfaBackupCodeService.name);
-  private readonly attempts = new Map<string, number[]>();
 
   constructor(
     @Inject(FirebaseAdminService)
     private readonly firebaseAdmin: FirebaseAdminService,
+    private readonly runtimeLimits: RuntimeLimitService,
   ) {}
 
   async securitySummary({
@@ -145,7 +146,7 @@ export class MfaBackupCodeService {
       throw new BadRequestException('A recent MFA challenge is required.');
     }
 
-    this.enforceThrottle(`${ip || 'unknown'}:${normalizedEmail}`);
+    await this.enforceThrottle(`${ip || 'unknown'}:${normalizedEmail}`);
 
     const userRecord = await this.firebaseAdmin
       .auth()
@@ -253,22 +254,19 @@ export class MfaBackupCodeService {
     return first.length === second.length && timingSafeEqual(first, second);
   }
 
-  private enforceThrottle(key: string) {
-    const now = Date.now();
-    const windowMs = 10 * 60 * 1000;
-    const maxAttempts = 5;
-    const attempts = (this.attempts.get(key) || []).filter(
-      timestamp => now - timestamp < windowMs,
-    );
+  private async enforceThrottle(key: string) {
+    const result = await this.runtimeLimits.reserve({
+      collection: 'runtime_mfa_recovery_limits',
+      key,
+      limit: 5,
+      windowMs: 10 * 60 * 1000,
+    });
 
-    if (attempts.length >= maxAttempts) {
+    if (result.limited) {
       throw new HttpException(
         'Too many recovery attempts. Try again later.',
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
-
-    attempts.push(now);
-    this.attempts.set(key, attempts);
   }
 }

@@ -8,6 +8,7 @@ import { FirebaseAdminService } from '../../firebase-admin/firebase-admin.servic
 type ListQuery = {
   query?: string;
   category?: string;
+  cursor?: string | number;
   limit?: string | number;
 };
 
@@ -36,16 +37,23 @@ type VideoDocument = Record<string, unknown> & {
   visibility?: string;
 };
 
+const CATALOG_CACHE_TTL_MS = 60_000;
+
 @Injectable()
 export class AcademySdkCatalogService {
+  private coursesCache: { courses: CourseDocument[]; expiresAt: number } | null = null;
+  private videosCache: { expiresAt: number; videos: VideoDocument[] } | null = null;
+
   constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
 
   async listCourses(options: ListQuery = {}) {
     const courses = await this.loadCourses();
     const filtered = this.filterCourses(courses, options);
+    const window = this.sliceWindow(filtered, options, 50, 100);
 
     return {
-      courses: filtered.slice(0, this.parseLimit(options.limit, 50, 100)),
+      courses: window.items,
+      nextCursor: window.nextCursor,
       total: filtered.length,
     };
   }
@@ -58,9 +66,11 @@ export class AcademySdkCatalogService {
     const courses = (await this.loadCourses())
       .filter(course => this.isCanonicalCourse(course))
       .sort((a, b) => this.courseQualityScore(b) - this.courseQualityScore(a));
+    const window = this.sliceWindow(courses, options, 12, 50);
 
     return {
-      courses: courses.slice(0, this.parseLimit(options.limit, 12, 50)),
+      courses: window.items,
+      nextCursor: window.nextCursor,
       total: courses.length,
     };
   }
@@ -167,10 +177,12 @@ export class AcademySdkCatalogService {
 
   async listVideos(options: ListQuery = {}) {
     const videos = this.filterVideos(await this.loadVideos(), options);
+    const window = this.sliceWindow(videos, options, 50, 100);
 
     return {
-      videos: videos.slice(0, this.parseLimit(options.limit, 50, 100)),
+      nextCursor: window.nextCursor,
       total: videos.length,
+      videos: window.items,
     };
   }
 
@@ -213,14 +225,25 @@ export class AcademySdkCatalogService {
   }
 
   private async loadCourses() {
+    if (this.coursesCache && this.coursesCache.expiresAt > Date.now()) {
+      return this.coursesCache.courses;
+    }
+
     const snapshot = await this.firebaseAdmin.db().collection('course').get();
-    return snapshot.docs
+    const courses = snapshot.docs
       .map(doc => this.toCourse(doc.id, doc.data()))
       .filter(course => this.isCanonicalCourse(course))
       .sort(
         (a, b) =>
           this.timestampMillis(b.createdOn) - this.timestampMillis(a.createdOn),
       );
+
+    this.coursesCache = {
+      courses,
+      expiresAt: Date.now() + this.catalogCacheTtlMs(),
+    };
+
+    return courses;
   }
 
   private toCourse(id: string, data: FirebaseFirestore.DocumentData) {
@@ -312,13 +335,17 @@ export class AcademySdkCatalogService {
   }
 
   private async loadVideos() {
+    if (this.videosCache && this.videosCache.expiresAt > Date.now()) {
+      return this.videosCache.videos;
+    }
+
     const db = this.firebaseAdmin.db();
     const [uploadedSnap, youtubeSnap] = await Promise.all([
       db.collection('videos').get(),
       db.collection('youTubeVideos').get(),
     ]);
 
-    return [
+    const videos = [
       ...uploadedSnap.docs
         .map(doc => this.toUploadedVideo(doc.id, doc.data()))
         .filter(video => video.visibility === 'public'),
@@ -327,6 +354,13 @@ export class AcademySdkCatalogService {
       (a, b) =>
         this.timestampMillis(b.uploadedAt) - this.timestampMillis(a.uploadedAt),
     );
+
+    this.videosCache = {
+      expiresAt: Date.now() + this.catalogCacheTtlMs(),
+      videos,
+    };
+
+    return videos;
   }
 
   private toUploadedVideo(id: string, data: FirebaseFirestore.DocumentData) {
@@ -434,6 +468,36 @@ export class AcademySdkCatalogService {
     if (!Number.isFinite(parsed) || parsed <= 0) return defaultValue;
 
     return Math.min(Math.floor(parsed), max);
+  }
+
+  private parseCursor(value: string | number | undefined) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) return 0;
+
+    return Math.floor(parsed);
+  }
+
+  private sliceWindow<T>(
+    items: T[],
+    options: Pick<ListQuery, 'cursor' | 'limit'>,
+    defaultLimit: number,
+    maxLimit: number,
+  ) {
+    const limit = this.parseLimit(options.limit, defaultLimit, maxLimit);
+    const start = this.parseCursor(options.cursor);
+    const nextStart = start + limit;
+
+    return {
+      items: items.slice(start, nextStart),
+      nextCursor: nextStart < items.length ? String(nextStart) : null,
+    };
+  }
+
+  private catalogCacheTtlMs() {
+    const configured = Number(process.env.ACADEMY_SDK_CATALOG_CACHE_TTL_MS);
+    if (!Number.isFinite(configured)) return CATALOG_CACHE_TTL_MS;
+
+    return Math.min(Math.max(Math.floor(configured), 5_000), 10 * 60_000);
   }
 
   private arrayValue(value: unknown) {

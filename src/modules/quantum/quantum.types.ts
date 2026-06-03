@@ -27,3 +27,7 @@ export type QuantumConversation = {
 export type ReplaceQuantumConversationsPayload = {
   conversations?: QuantumConversation[];
 };
+
+export type UpsertQuantumConversationPayload = {
+  conversation?: QuantumConversation;
+};

@@ -8,6 +8,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import crypto from 'crypto';
+import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { ACADEMY_SDK_API_KEY_PREFIX } from './academy-sdk.constants';
 import { AcademySdkRequest } from './academy-sdk.types';
@@ -19,16 +20,12 @@ type ParsedApiKey = {
   publicId: string;
 };
 
-type RateLimitBucket = {
-  resetAt: number;
-  count: number;
-};
-
 @Injectable()
 export class AcademySdkApiKeyGuard implements CanActivate {
-  private readonly buckets = new Map<string, RateLimitBucket>();
-
-  constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
+  constructor(
+    private readonly firebaseAdmin: FirebaseAdminService,
+    private readonly runtimeLimits: RuntimeLimitService,
+  ) {}
 
   async canActivate(context: ExecutionContext) {
     const request = context.switchToHttp().getRequest<AcademySdkRequest>();
@@ -44,7 +41,7 @@ export class AcademySdkApiKeyGuard implements CanActivate {
     }
 
     const keyHash = this.hashKey(rawKey);
-    this.enforceRateLimit(keyHash);
+    await this.enforceRateLimit(keyHash);
 
     const apiKeyDoc = await this.firebaseAdmin
       .db()
@@ -65,9 +62,11 @@ export class AcademySdkApiKeyGuard implements CanActivate {
       throw new ForbiddenException('Invalid API key.');
     }
 
-    await apiKeyDoc.ref.update({
-      lastUsedAt: new Date(),
-    });
+    if (this.shouldTouchLastUsedAt(apiKey?.lastUsedAt)) {
+      await apiKeyDoc.ref.update({
+        lastUsedAt: new Date(),
+      });
+    }
 
     request.apiKey = {
       id: apiKeyDoc.id,
@@ -109,25 +108,35 @@ export class AcademySdkApiKeyGuard implements CanActivate {
     return { publicId };
   }
 
-  private enforceRateLimit(bucketKey: string) {
-    const now = Date.now();
-    const current = this.buckets.get(bucketKey);
+  private async enforceRateLimit(bucketKey: string) {
+    const result = await this.runtimeLimits.reserve({
+      collection: 'runtime_sdk_api_key_limits',
+      key: bucketKey,
+      limit: RATE_LIMIT_MAX_REQUESTS,
+      windowMs: RATE_LIMIT_WINDOW_MS,
+    });
 
-    if (!current || current.resetAt <= now) {
-      this.buckets.set(bucketKey, {
-        count: 1,
-        resetAt: now + RATE_LIMIT_WINDOW_MS,
-      });
-      return;
-    }
-
-    if (current.count >= RATE_LIMIT_MAX_REQUESTS) {
+    if (result.limited) {
       throw new HttpException(
         'Rate limit exceeded. Please slow down your requests.',
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
+  }
 
-    current.count += 1;
+  private shouldTouchLastUsedAt(value: unknown) {
+    const date =
+      value instanceof Date
+        ? value
+        : value &&
+            typeof value === 'object' &&
+            'toDate' in value &&
+            typeof value.toDate === 'function'
+          ? (value.toDate() as Date)
+          : null;
+
+    if (!date) return true;
+
+    return Date.now() - date.getTime() > 5 * 60 * 1000;
   }
 }

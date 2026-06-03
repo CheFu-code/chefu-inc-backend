@@ -41,6 +41,8 @@ type CourseDocument = {
 
 @Injectable()
 export class CoursesService {
+  private activePdfJobs = 0;
+
   constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
 
   async getLearningCourse(
@@ -115,45 +117,92 @@ export class CoursesService {
   }
 
   async generateCoursePdf(user: AuthenticatedUser, courseId: string) {
+    this.acquirePdfSlot();
+
     const { course, userProfile, userRef } = await this.getDownloadableCourse(
       user,
       courseId,
     );
-    await this.reserveFreeCourseDownload(userProfile, userRef, courseId);
-
-    const html = this.renderCourseHtml(courseId, course);
-    const { default: puppeteer } = await import('puppeteer');
-    const browser = await puppeteer.launch({
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      headless: true,
-    });
 
     try {
-      const page = await browser.newPage();
-      await page.setContent(html, { waitUntil: 'load' });
-      const pdf = await page.pdf({
-        format: 'A4',
-        printBackground: true,
-        displayHeaderFooter: true,
-        margin: {
-          top: '18mm',
-          right: '16mm',
-          bottom: '20mm',
-          left: '16mm',
-        },
-        headerTemplate: '<div></div>',
-        footerTemplate:
-          '<div style="width:100%;font-size:9px;color:#64748b;padding:0 16mm;display:flex;justify-content:space-between;font-family:Inter,Arial,sans-serif;"><span>CheFu Academy</span><span class="pageNumber"></span></div>',
+      await this.reserveFreeCourseDownload(userProfile, userRef, courseId);
+
+      const html = this.renderCourseHtml(courseId, course);
+      const { default: puppeteer } = await import('puppeteer');
+      const browser = await puppeteer.launch({
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+        args: this.puppeteerArgs(),
+        headless: true,
       });
 
-      return {
-        buffer: Buffer.from(pdf),
-        fileName: `${this.safeFileName(String(course.courseTitle || 'course'))}.pdf`,
-      };
+      try {
+        const page = await browser.newPage();
+        page.setDefaultTimeout(this.pdfTimeoutMs());
+        await page.setContent(html, { waitUntil: 'load' });
+        const pdf = await page.pdf({
+          format: 'A4',
+          printBackground: true,
+          displayHeaderFooter: true,
+          margin: {
+            top: '18mm',
+            right: '16mm',
+            bottom: '20mm',
+            left: '16mm',
+          },
+          headerTemplate: '<div></div>',
+          footerTemplate:
+            '<div style="width:100%;font-size:9px;color:#64748b;padding:0 16mm;display:flex;justify-content:space-between;font-family:Inter,Arial,sans-serif;"><span>CheFu Academy</span><span class="pageNumber"></span></div>',
+        });
+
+        return {
+          buffer: Buffer.from(pdf),
+          fileName: `${this.safeFileName(String(course.courseTitle || 'course'))}.pdf`,
+        };
+      } finally {
+        await browser.close();
+      }
     } finally {
-      await browser.close();
+      this.releasePdfSlot();
     }
+  }
+
+  private acquirePdfSlot() {
+    const maxConcurrent = this.safeNumber(
+      process.env.COURSE_PDF_MAX_CONCURRENT,
+      2,
+      1,
+      10,
+    );
+
+    if (this.activePdfJobs >= maxConcurrent) {
+      throw new HttpException(
+        'Course exports are busy. Please try again in a moment.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    this.activePdfJobs += 1;
+  }
+
+  private releasePdfSlot() {
+    this.activePdfJobs = Math.max(0, this.activePdfJobs - 1);
+  }
+
+  private pdfTimeoutMs() {
+    return this.safeNumber(
+      process.env.COURSE_PDF_TIMEOUT_MS,
+      30_000,
+      5_000,
+      120_000,
+    );
+  }
+
+  private puppeteerArgs() {
+    const baseArgs = ['--disable-setuid-sandbox'];
+
+    return process.env.PUPPETEER_NO_SANDBOX === 'false'
+      ? baseArgs
+      : ['--no-sandbox', ...baseArgs];
   }
 
   private async getOwnedCourseAndProfile(
@@ -653,6 +702,18 @@ export class CoursesService {
 
   private safeFileName(value: string) {
     return value.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim();
+  }
+
+  private safeNumber(
+    value: string | undefined,
+    fallback: number,
+    minimum: number,
+    maximum: number,
+  ) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+
+    return Math.min(Math.max(Math.floor(parsed), minimum), maximum);
   }
 
   private escapeHtml(value: unknown) {

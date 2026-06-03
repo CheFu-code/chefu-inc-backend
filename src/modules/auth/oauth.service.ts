@@ -22,6 +22,7 @@ import {
   auditRequestContext,
   hashForAudit,
 } from '../../common/security-audit';
+import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { AppsService } from '../apps/apps.service';
 import { ChefuOauthClient } from '../apps/app-registry';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -235,9 +236,6 @@ export class OAuthService {
     3600,
   );
   private readonly signingKeys: SigningKey[];
-  private readonly dpopReplayCache = new Map<string, number>();
-  private readonly clientAssertionReplayCache = new Map<string, number>();
-  private readonly m2mRateBuckets = new Map<string, { count: number; resetAt: number }>();
   private readonly m2mClients = this.parseM2mClients();
 
   constructor(
@@ -247,6 +245,7 @@ export class OAuthService {
     private readonly appsService: AppsService,
     @Inject(SecurityEventsService)
     private readonly securityEvents: SecurityEventsService,
+    private readonly runtimeLimits: RuntimeLimitService,
   ) {
     this.signingKeys = this.loadSigningKeys();
   }
@@ -842,7 +841,7 @@ export class OAuthService {
       throw new UnauthorizedException('Unknown M2M client.');
     }
 
-    this.enforceM2mRateLimit(client, request);
+    await this.enforceM2mRateLimit(client, request);
     await this.verifyClientAssertion(body, client);
 
     const audience = this.assertM2mAudience(body.audience, client);
@@ -1217,7 +1216,7 @@ export class OAuthService {
     }
 
     const jkt = this.jwkThumbprint(header.jwk);
-    this.enforceReplayCache(this.dpopReplayCache, `dpop:${jkt}:${proof.jti}`, 300);
+    await this.enforceReplayCache(`dpop:${jkt}:${proof.jti}`, 300);
 
     return {
       jkt,
@@ -1342,26 +1341,21 @@ export class OAuthService {
       throw new UnauthorizedException('Invalid client assertion claims.');
     }
 
-    this.enforceReplayCache(
-      this.clientAssertionReplayCache,
+    await this.enforceReplayCache(
       `client_assertion:${client.id}:${claims.jti}`,
       300,
     );
   }
 
-  private enforceM2mRateLimit(client: M2mClient, request: Request) {
-    const now = Date.now();
-    const key = `${client.id}:${request.path}`;
-    const existing = this.m2mRateBuckets.get(key);
-    const bucket =
-      existing && existing.resetAt > now
-        ? existing
-        : { count: 0, resetAt: now + 60_000 };
+  private async enforceM2mRateLimit(client: M2mClient, request: Request) {
+    const result = await this.runtimeLimits.reserve({
+      collection: 'runtime_oauth_m2m_limits',
+      key: `${client.id}:${request.path}`,
+      limit: client.rateLimitPerMinute,
+      windowMs: 60_000,
+    });
 
-    bucket.count += 1;
-    this.m2mRateBuckets.set(key, bucket);
-
-    if (bucket.count > client.rateLimitPerMinute) {
+    if (result.limited) {
       this.logger.warn(
         JSON.stringify({
           event: 'oauth_m2m_rate_limit_denied',
@@ -1526,22 +1520,10 @@ export class OAuthService {
     throw new UnauthorizedException('Unsupported JWK type.');
   }
 
-  private enforceReplayCache(
-    cache: Map<string, number>,
-    key: string,
-    ttlSeconds: number,
-  ) {
-    const now = Date.now();
-
-    for (const [cacheKey, expiresAt] of cache.entries()) {
-      if (expiresAt <= now) cache.delete(cacheKey);
-    }
-
-    if (cache.has(key)) {
+  private async enforceReplayCache(key: string, ttlSeconds: number) {
+    if (!(await this.runtimeLimits.assertNotReplay(key, ttlSeconds))) {
       throw new UnauthorizedException('Replay detected.');
     }
-
-    cache.set(key, now + ttlSeconds * 1000);
   }
 
   private absoluteRequestUrl(request: Request) {

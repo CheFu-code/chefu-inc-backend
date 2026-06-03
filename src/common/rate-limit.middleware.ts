@@ -1,52 +1,39 @@
 import { Injectable, Logger, NestMiddleware } from '@nestjs/common';
 import { NextFunction, Request, Response } from 'express';
-import { auditRequestContext } from './security-audit';
-
-type RateLimitBucket = {
-  count: number;
-  resetAt: number;
-};
+import { auditRequestContext, getClientIp } from './security-audit';
+import { RuntimeLimitService } from './runtime-limit.service';
 
 @Injectable()
 export class RateLimitMiddleware implements NestMiddleware {
-  private readonly buckets = new Map<string, RateLimitBucket>();
   private readonly logger = new Logger(RateLimitMiddleware.name);
   private readonly limit = Number(process.env.API_RATE_LIMIT_PER_MINUTE || 300);
   private readonly windowMs = Number(process.env.API_RATE_LIMIT_WINDOW_MS || 60_000);
 
-  use(request: Request, response: Response, next: NextFunction) {
+  constructor(private readonly runtimeLimits: RuntimeLimitService) {}
+
+  async use(request: Request, response: Response, next: NextFunction) {
     if (request.method === 'OPTIONS' || request.path === '/health') {
       next();
       return;
     }
 
-    const now = Date.now();
-    const key = `${request.ip}:${request.method}:${request.path}`;
-    const current = this.buckets.get(key);
-    const bucket =
-      current && current.resetAt > now
-        ? current
-        : { count: 0, resetAt: now + this.windowMs };
-
-    bucket.count += 1;
-    this.buckets.set(key, bucket);
-
-    const retryAfterSeconds = Math.max(
-      1,
-      Math.ceil((bucket.resetAt - now) / 1000),
-    );
-    const remaining = Math.max(0, this.limit - bucket.count);
+    const result = await this.runtimeLimits.reserve({
+      collection: 'runtime_api_rate_limits',
+      key: `${getClientIp(request) || 'unknown'}:${request.method}:${request.path}`,
+      limit: this.limit,
+      windowMs: this.windowMs,
+    });
 
     response.setHeader('RateLimit-Limit', String(this.limit));
-    response.setHeader('RateLimit-Remaining', String(remaining));
-    response.setHeader('RateLimit-Reset', String(retryAfterSeconds));
+    response.setHeader('RateLimit-Remaining', String(result.remaining));
+    response.setHeader('RateLimit-Reset', String(result.retryAfterSeconds));
 
-    if (bucket.count <= this.limit) {
+    if (!result.limited) {
       next();
       return;
     }
 
-    response.setHeader('Retry-After', String(retryAfterSeconds));
+    response.setHeader('Retry-After', String(result.retryAfterSeconds));
     const auditContext = auditRequestContext(request);
     this.logger.warn(
       JSON.stringify({
@@ -54,7 +41,7 @@ export class RateLimitMiddleware implements NestMiddleware {
         method: request.method,
         path: auditContext.path,
         ipHash: auditContext.ipHash,
-        retryAfterSeconds,
+        retryAfterSeconds: result.retryAfterSeconds,
       }),
     );
 
