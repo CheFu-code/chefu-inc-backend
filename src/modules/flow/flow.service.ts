@@ -473,6 +473,25 @@ export class FlowService {
     };
   }
 
+  async markUnread(messageId: string) {
+    const ref = this.messagesCollection().doc(messageId);
+    const snapshot = await ref.get();
+
+    if (!snapshot.exists) {
+      throw new BadRequestException('Message not found.');
+    }
+
+    await ref.update({
+      unread: true,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    return {
+      id: messageId,
+      unread: true,
+    };
+  }
+
   async setStarred(messageId: string, starred: boolean) {
     const ref = this.messagesCollection().doc(messageId);
     const snapshot = await ref.get();
@@ -489,6 +508,49 @@ export class FlowService {
     return {
       id: messageId,
       starred,
+    };
+  }
+
+  async moveToFolder(messageId: string, folder: string) {
+    const normalizedFolder = this.normalizeMutableFolder(folder);
+    const ref = this.messagesCollection().doc(messageId);
+    const snapshot = await ref.get();
+
+    if (!snapshot.exists) {
+      throw new BadRequestException('Message not found.');
+    }
+
+    await ref.update({
+      folder: normalizedFolder,
+      unread: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    return {
+      folder: normalizedFolder,
+      id: messageId,
+    };
+  }
+
+  async reportMessage(messageId: string) {
+    const ref = this.messagesCollection().doc(messageId);
+    const snapshot = await ref.get();
+
+    if (!snapshot.exists) {
+      throw new BadRequestException('Message not found.');
+    }
+
+    await ref.update({
+      folder: 'archived',
+      reportedSpam: true,
+      unread: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    return {
+      folder: 'archived',
+      id: messageId,
+      reportedSpam: true,
     };
   }
 
@@ -1269,6 +1331,17 @@ export class FlowService {
     }
 
     return 'inbox';
+  }
+
+  private normalizeMutableFolder(value?: string) {
+    const folder = this.normalizeFolder(value);
+
+    if (folder === 'trash') return folder;
+    if (['inbox', 'sent', 'drafts', 'scheduled', 'campaigns', 'archived'].includes(folder)) {
+      return folder;
+    }
+
+    throw new BadRequestException('Folder is not valid.');
   }
 
   private countFolders(messages: FlowMessage[]): FlowFolderCounts {

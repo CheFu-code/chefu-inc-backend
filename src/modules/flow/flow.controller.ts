@@ -199,6 +199,16 @@ export class FlowController {
     return this.flowService.markRead(messageId);
   }
 
+  @Post('messages/:messageId/unread')
+  async markUnread(
+    @Param('messageId') messageId: string,
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    return this.flowService.markUnread(messageId);
+  }
+
   @Post('messages/:messageId/star')
   async star(
     @Param('messageId') messageId: string,
@@ -208,6 +218,37 @@ export class FlowController {
   ) {
     await this.assertFlowAccess(flowApiKey, request);
     return this.flowService.setStarred(messageId, Boolean(body.starred));
+  }
+
+  @Post('messages/:messageId/archive')
+  async archive(
+    @Param('messageId') messageId: string,
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    return this.flowService.moveToFolder(messageId, 'archived');
+  }
+
+  @Post('messages/:messageId/report')
+  async report(
+    @Param('messageId') messageId: string,
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    return this.flowService.reportMessage(messageId);
+  }
+
+  @Post('messages/:messageId/folder')
+  async moveToFolder(
+    @Param('messageId') messageId: string,
+    @Body() body: { folder?: string },
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    return this.flowService.moveToFolder(messageId, body.folder || 'inbox');
   }
 
   @Post('messages/:messageId/trash')
