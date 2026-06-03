@@ -61,6 +61,7 @@ function decodeJwtPayload(token: string) {
       auth_time?: number;
       iat?: number;
       exp?: number;
+      picture?: string;
       firebase?: {
         sign_in_provider?: string;
       };
@@ -94,6 +95,22 @@ type AcademyProfileUpdate = {
     personalizedAiRecommendations?: boolean;
   };
   emailPreferences?: Record<string, boolean>;
+};
+
+type ProfileUpdateBody = {
+  name?: string;
+  profilePicture?: unknown;
+  photoURL?: unknown;
+  avatarUrl?: unknown;
+  emailPreferences?: {
+    security?: boolean;
+  };
+  academyProfile?: AcademyProfileUpdate;
+};
+
+type ProfilePictureUpdate = {
+  shouldUpdate: boolean;
+  value: string;
 };
 
 type SignInAlertDecision = {
@@ -190,14 +207,7 @@ export class AuthController {
   @UseGuards(AuthGuard)
   async updateCurrentUserProfile(
     @Req() request: Request & { user?: AuthenticatedUser },
-    @Body()
-    body: {
-      name?: string;
-      emailPreferences?: {
-        security?: boolean;
-      };
-      academyProfile?: AcademyProfileUpdate;
-    },
+    @Body() body: ProfileUpdateBody,
     @Res({ passthrough: true }) response: Response,
   ) {
     const user = request.user;
@@ -209,6 +219,10 @@ export class AuthController {
     const updates: Record<string, unknown> = {
       updatedAt: FieldValue.serverTimestamp(),
     };
+    const authUpdates: {
+      displayName?: string;
+      photoURL?: string | null;
+    } = {};
 
     if (body.name !== undefined) {
       const name = body.name.trim().replace(/\s+/g, ' ');
@@ -223,10 +237,15 @@ export class AuthController {
 
       updates.name = name;
       updates.fullname = name;
+      authUpdates.displayName = name;
+    }
 
-      await this.firebaseAdmin.auth().updateUser(user.uid, {
-        displayName: name,
-      });
+    const profilePictureUpdate = this.normalizeProfilePictureUpdate(body);
+    if (profilePictureUpdate.shouldUpdate) {
+      updates.profilePicture = profilePictureUpdate.value;
+      updates.profilePictureSource = 'profile_api';
+      updates.profilePictureUpdatedAt = FieldValue.serverTimestamp();
+      authUpdates.photoURL = profilePictureUpdate.value || null;
     }
 
     if (body.emailPreferences?.security !== undefined) {
@@ -251,6 +270,10 @@ export class AuthController {
     }
 
     Object.assign(updates, this.serverDetectedCountryUpdates(request));
+
+    if (Object.keys(authUpdates).length > 0) {
+      await this.firebaseAdmin.auth().updateUser(user.uid, authUpdates);
+    }
 
     await this.firebaseAdmin
       .db()
@@ -954,6 +977,103 @@ export class AuthController {
     };
   }
 
+  private normalizeProfilePictureUpdate(
+    body: ProfileUpdateBody,
+  ): ProfilePictureUpdate {
+    const fields = ['profilePicture', 'photoURL', 'avatarUrl'] as const;
+    const providedValues = fields
+      .filter(field => Object.prototype.hasOwnProperty.call(body, field))
+      .map(field => this.normalizeProfilePictureUrl(body[field]));
+
+    if (providedValues.length === 0) {
+      return {
+        shouldUpdate: false,
+        value: '',
+      };
+    }
+
+    if (new Set(providedValues).size > 1) {
+      throw new BadRequestException(
+        'Profile picture fields must resolve to the same URL.',
+      );
+    }
+
+    return {
+      shouldUpdate: true,
+      value: providedValues[0] || '',
+    };
+  }
+
+  private normalizeFirebaseProfilePicture(decodedToken: FirebaseDecodedToken) {
+    const token = decodedToken as FirebaseDecodedToken & {
+      photoURL?: unknown;
+      picture?: unknown;
+    };
+
+    try {
+      return this.normalizeProfilePictureUrl(token.picture ?? token.photoURL);
+    } catch {
+      return '';
+    }
+  }
+
+  private normalizeProfilePictureUrl(value: unknown) {
+    if (value === null || value === undefined) return '';
+    if (typeof value !== 'string') {
+      throw new BadRequestException('Profile picture must be a URL string.');
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+
+    if (trimmed.length > 2048) {
+      throw new BadRequestException(
+        'Profile picture URL must be 2048 characters or less.',
+      );
+    }
+
+    if (this.hasUnsafeUrlCharacters(trimmed)) {
+      throw new BadRequestException(
+        'Profile picture URL contains unsafe characters.',
+      );
+    }
+
+    let url: URL;
+    try {
+      url = new URL(trimmed);
+    } catch {
+      throw new BadRequestException('Profile picture must be a valid URL.');
+    }
+
+    if (url.username || url.password || url.hash) {
+      throw new BadRequestException(
+        'Profile picture URL must not include credentials or fragments.',
+      );
+    }
+
+    if (url.protocol !== 'https:' && !this.isLocalDevelopmentUrl(url)) {
+      throw new BadRequestException('Profile picture URL must use HTTPS.');
+    }
+
+    return url.toString();
+  }
+
+  private hasUnsafeUrlCharacters(value: string) {
+    return (
+      /%(?:00|0a|0d|5c)/i.test(value) ||
+      Array.from(value).some(
+        character => character === '\\' || character.charCodeAt(0) < 0x20,
+      )
+    );
+  }
+
+  private isLocalDevelopmentUrl(url: URL) {
+    return (
+      url.protocol === 'http:' &&
+      (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
+    );
+  }
+
   private stringValue(value: unknown) {
     return typeof value === 'string' ? value : '';
   }
@@ -1089,6 +1209,10 @@ export class AuthController {
           : decodedToken.name || email.split('@')[0] || '';
     const now = FieldValue.serverTimestamp();
     const detectedCountry = this.getDetectedCountry(request);
+    const firebaseProfilePicture =
+      this.normalizeFirebaseProfilePicture(decodedToken);
+    const shouldSeedProfilePicture =
+      firebaseProfilePicture && !this.stringValue(existingUser?.profilePicture);
 
     await userRef.set(
       {
@@ -1102,6 +1226,13 @@ export class AuthController {
             ? existingRoles.map(String)
             : ['user'],
         authProvider: decodedToken.firebase?.sign_in_provider || 'unknown',
+        ...(shouldSeedProfilePicture
+          ? {
+              profilePicture: firebaseProfilePicture,
+              profilePictureSource: 'firebase_auth',
+              profilePictureUpdatedAt: now,
+            }
+          : {}),
         ...(detectedCountry
           ? {
               detectedCountryCode: detectedCountry.code,
