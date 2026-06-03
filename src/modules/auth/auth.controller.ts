@@ -25,6 +25,7 @@ import { CHEFU_APP_HEADER, ChefuAppId } from '../apps/app-registry';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { AuthenticatedUser } from './authenticated-user';
 import { AuthGuard } from './auth.guard';
+import { ADMIN_ROLE } from './roles';
 import {
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE_SECONDS,
@@ -310,6 +311,25 @@ export class AuthController {
       throw new ForbiddenException(FLOW_ACCESS_DENIED_MESSAGE);
     }
 
+    const profileForAccess = await this.getUserProfile(decodedToken.email);
+    if (
+      sessionAppId === 'admin' &&
+      !profileForAccess.roles.some(
+        role => role.trim().toLowerCase() === ADMIN_ROLE,
+      )
+    ) {
+      this.clearSessionCookies(response);
+      this.logger.warn(
+        JSON.stringify({
+          event: 'admin_session_denied',
+          uid: decodedToken.uid,
+          email: decodedToken.email || null,
+          roles: profileForAccess.roles,
+        }),
+      );
+      throw new ForbiddenException('Admin access required.');
+    }
+
     try {
       const expiresIn = SESSION_MAX_AGE_SECONDS * 1000;
       sessionCookie = await this.firebaseAdmin
@@ -494,6 +514,12 @@ export class AuthController {
   @Delete('session')
   @HttpCode(200)
   clearSession(@Res({ passthrough: true }) response: Response) {
+    this.clearSessionCookies(response);
+    this.logger.log(JSON.stringify({ event: 'auth_session_cleared' }));
+    return { ok: true };
+  }
+
+  private clearSessionCookies(response: Response) {
     for (const options of this.getClearCookieOptionsList()) {
       response.clearCookie(SESSION_COOKIE_NAME, options);
       response.clearCookie(SESSION_META_COOKIE_NAME, options);
@@ -508,8 +534,6 @@ export class AuthController {
         maxAge: 0,
       });
     }
-    this.logger.log(JSON.stringify({ event: 'auth_session_cleared' }));
-    return { ok: true };
   }
 
   private getCookieOptions() {

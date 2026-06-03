@@ -184,6 +184,9 @@ export class FlowService {
           starred: false,
           subject: email.subject,
           text: body,
+          threadKey: this.threadKeyForMessage(email.subject, normalized.from, [
+            recipient.email,
+          ]),
           to: [recipient.email],
           unread: false,
           updatedAt: FieldValue.serverTimestamp(),
@@ -516,6 +519,7 @@ export class FlowService {
       starred: false,
       subject,
       text: body,
+      threadKey: this.threadKeyForMessage(subject, from, to),
       to,
       unread: false,
       updatedAt: FieldValue.serverTimestamp(),
@@ -533,6 +537,7 @@ export class FlowService {
         starred: false,
         subject,
         text: body,
+        threadKey: this.threadKeyForMessage(subject, from, to),
         to,
         unread: false,
       }),
@@ -973,14 +978,47 @@ export class FlowService {
     }
 
     if (folder === 'starred') {
-      return messages.filter(message => message.starred);
+      const starred = messages.filter(
+        message =>
+          message.starred && this.normalizeFolder(message.folder) !== 'trash',
+      );
+
+      return this.includeThreadSiblings(messages, starred);
     }
 
     const normalizedFolder = this.normalizeFolder(
       folder === 'bin' ? 'trash' : folder,
     );
+    const folderMessages = messages.filter(
+      message => message.folder === normalizedFolder,
+    );
 
-    return messages.filter(message => message.folder === normalizedFolder);
+    if (normalizedFolder === 'trash') return folderMessages;
+
+    return this.includeThreadSiblings(messages, folderMessages);
+  }
+
+  private includeThreadSiblings(
+    messages: FlowMessage[],
+    primaryMessages: FlowMessage[],
+  ) {
+    if (!primaryMessages.length) return primaryMessages;
+
+    const primaryIds = new Set(primaryMessages.map(message => message.id));
+    const threadKeys = new Set(
+      primaryMessages
+        .map(message => message.threadKey)
+        .filter((threadKey): threadKey is string => Boolean(threadKey)),
+    );
+
+    if (!threadKeys.size) return primaryMessages;
+
+    return messages.filter(message => {
+      if (primaryIds.has(message.id)) return true;
+      if (!message.threadKey || !threadKeys.has(message.threadKey)) return false;
+
+      return this.normalizeFolder(message.folder) !== 'trash';
+    });
   }
 
   private toMessage(
@@ -999,6 +1037,18 @@ export class FlowService {
       this.isInternalSender(from)
         ? 'archived'
         : storedFolder;
+    const to = Array.isArray(data.to) ? data.to.map(String) : [];
+    const messageId =
+      typeof data.messageId === 'string'
+        ? data.messageId
+        : typeof data.message_id === 'string'
+          ? data.message_id
+          : undefined;
+    const subject = String(data.subject || '(no subject)');
+    const threadKey =
+      typeof data.threadKey === 'string' && data.threadKey.trim()
+        ? data.threadKey
+        : this.threadKeyForMessage(subject, from, to);
 
     return {
       id,
@@ -1011,13 +1061,14 @@ export class FlowService {
       folder,
       from,
       html: typeof data.html === 'string' ? data.html : undefined,
-      label: typeof data.label === 'string' ? data.label : undefined,
-      messageId:
-        typeof data.messageId === 'string'
-          ? data.messageId
-          : typeof data.message_id === 'string'
-            ? data.message_id
+      inReplyTo:
+        typeof data.inReplyTo === 'string'
+          ? data.inReplyTo
+          : typeof data.in_reply_to === 'string'
+            ? data.in_reply_to
             : undefined,
+      label: typeof data.label === 'string' ? data.label : undefined,
+      messageId,
       preview: String(data.preview || ''),
       receivedAt:
         typeof data.receivedAt === 'string'
@@ -1029,14 +1080,16 @@ export class FlowService {
           : typeof data.email_id === 'string'
             ? data.email_id
             : undefined,
+      references: this.normalizeReferenceList(data.references),
       sentAt:
         typeof data.sentAt === 'string'
           ? data.sentAt
           : this.timestampToIso(data.sentAt),
       starred: Boolean(data.starred),
-      subject: String(data.subject || '(no subject)'),
+      subject,
       text: typeof data.text === 'string' ? data.text : undefined,
-      to: Array.isArray(data.to) ? data.to.map(String) : [],
+      threadKey,
+      to,
       unread: Boolean(data.unread),
     };
   }
@@ -1054,6 +1107,39 @@ export class FlowService {
       data.email && typeof data.email === 'object'
         ? (data.email as Record<string, unknown>)
         : data;
+    const messageId = this.firstString(
+      email.message_id,
+      email.messageId,
+      data.message_id,
+      data.messageId,
+      input.message_id,
+      input.messageId,
+      this.headerValue(
+        [email.headers, data.headers, input.headers],
+        ['message-id'],
+      ),
+    );
+    const inReplyTo = this.firstString(
+      email.in_reply_to,
+      email.inReplyTo,
+      data.in_reply_to,
+      data.inReplyTo,
+      input.in_reply_to,
+      input.inReplyTo,
+      this.headerValue(
+        [email.headers, data.headers, input.headers],
+        ['in-reply-to'],
+      ),
+    );
+    const references = this.normalizeReferenceList(
+      email.references ||
+        data.references ||
+        input.references ||
+        this.headerValue(
+          [email.headers, data.headers, input.headers],
+          ['references'],
+        ),
+    );
     const from = this.normalizeAddress(email.from || data.from || input.from);
     const to = this.normalizeAddressList(email.to || data.to || input.to);
     const subject = String(
@@ -1090,14 +1176,11 @@ export class FlowService {
       attachmentItems,
       from,
       html,
+      inReplyTo: inReplyTo || undefined,
       label: 'Inbound',
-      messageId:
-        typeof email.message_id === 'string'
-          ? email.message_id
-          : typeof data.message_id === 'string'
-            ? data.message_id
-            : undefined,
+      messageId: messageId || undefined,
       preview,
+      references: references.length ? references : undefined,
       receivedAt:
         typeof email.created_at === 'string'
           ? email.created_at
@@ -1112,6 +1195,7 @@ export class FlowService {
             : undefined,
       subject,
       text,
+      threadKey: this.threadKeyForMessage(subject, from, to),
       to,
     };
   }
@@ -1132,6 +1216,99 @@ export class FlowService {
     }
     const address = this.normalizeAddress(value);
     return address ? [address] : [];
+  }
+
+  private firstString(...values: unknown[]) {
+    for (const value of values) {
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+
+    return '';
+  }
+
+  private headerValue(sources: unknown[], names: string[]) {
+    const wanted = new Set(names.map(name => name.toLowerCase()));
+
+    for (const source of sources) {
+      const value = this.readHeaderValue(source, wanted);
+      if (value) return value;
+    }
+
+    return '';
+  }
+
+  private readHeaderValue(source: unknown, wanted: Set<string>): string {
+    if (!source) return '';
+
+    if (Array.isArray(source)) {
+      for (const item of source) {
+        const value = this.readHeaderValue(item, wanted);
+        if (value) return value;
+      }
+
+      return '';
+    }
+
+    if (typeof source !== 'object') return '';
+
+    const headers = source as Record<string, unknown>;
+    const namedHeader = this.firstString(
+      headers.name,
+      headers.key,
+      headers.header,
+    ).toLowerCase();
+
+    if (namedHeader && wanted.has(namedHeader)) {
+      return this.firstString(headers.value, headers.text);
+    }
+
+    for (const [key, value] of Object.entries(headers)) {
+      if (wanted.has(key.toLowerCase())) {
+        return this.firstString(value);
+      }
+    }
+
+    return '';
+  }
+
+  private normalizeReferenceList(value: unknown) {
+    const values = Array.isArray(value) ? value : [value];
+
+    return [
+      ...new Set(
+        values
+          .flatMap(item => String(item || '').split(/\s+/))
+          .map(item => item.trim())
+          .filter(Boolean),
+      ),
+    ];
+  }
+
+  private threadKeyForMessage(subject: string, from: string, to: string[]) {
+    const subjectKey = this.normalizedThreadSubject(subject) || 'no-subject';
+    const participants = [from, ...to]
+      .map(value => this.emailAddress(value))
+      .filter(Boolean);
+    const externalParticipants = participants.filter(
+      participant => !this.isInternalSender(participant),
+    );
+    const threadParticipants = externalParticipants.length
+      ? externalParticipants
+      : participants;
+    const peopleKey =
+      [...new Set(threadParticipants)].sort().join(',') || 'unknown';
+
+    return `subject:${subjectKey}|people:${peopleKey}`;
+  }
+
+  private normalizedThreadSubject(subject: string) {
+    let value = subject.replace(/\s+/g, ' ').trim().toLowerCase();
+
+    while (/^(re|fw|fwd)\s*:/i.test(value)) {
+      value = value.replace(/^(re|fw|fwd)\s*:\s*/i, '').trim();
+    }
+
+    return value;
   }
 
   private normalizeAttachments(value: unknown): FlowAttachment[] {
