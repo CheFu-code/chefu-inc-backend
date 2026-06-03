@@ -17,17 +17,23 @@ type RequestWithUser = Request & {
 };
 
 @Controller('muzalo')
-@UseGuards(AuthGuard)
 export class MuzaloController {
   constructor(private readonly muzaloService: MuzaloService) {}
 
+  @Get('catalog')
+  async catalog() {
+    return this.muzaloService.getCatalog();
+  }
+
   @Get('profile')
+  @UseGuards(AuthGuard)
   async profile(@Req() request: RequestWithUser) {
     const user = this.requireUser(request);
     return this.muzaloService.getProfile(user);
   }
 
   @Post('artist-profile-request')
+  @UseGuards(AuthGuard)
   async requestArtistProfile(
     @Req() request: RequestWithUser,
     @Body()

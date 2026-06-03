@@ -79,13 +79,31 @@ export class AdminAppsService {
         status === 'approved' && !roles.includes('artist')
           ? [...roles, 'artist']
           : roles;
+      const spotifyArtistId =
+        status === 'approved'
+          ? this.extractSpotifyArtistId(requestData.spotifyUrl)
+          : this.stringValue(requestData.spotifyArtistId);
+
+      if (status === 'approved' && !spotifyArtistId) {
+        throw new BadRequestException(
+          'A valid Spotify artist link is required before approving.',
+        );
+      }
+
       const reviewSummary = {
         reviewNote,
         reviewedAt: now,
         reviewedBy,
+        ...(spotifyArtistId
+          ? {
+              spotifyArtistId,
+              spotifyUrl: this.spotifyArtistUrl(spotifyArtistId),
+            }
+          : {}),
         status,
         updatedAt: now,
       };
+      const artistName = this.stringValue(requestData.artistName);
 
       transaction.set(requestRef, reviewSummary, { merge: true });
       transaction.set(
@@ -105,11 +123,17 @@ export class AdminAppsService {
           apps: {
             muzalo: {
               artistProfileRequest: {
-                artistName: this.stringValue(requestData.artistName),
+                artistName,
                 requestId: this.stringValue(requestData.requestId),
                 reviewNote,
                 reviewedAt: now,
                 reviewedBy,
+                ...(spotifyArtistId
+                  ? {
+                      spotifyArtistId,
+                      spotifyUrl: this.spotifyArtistUrl(spotifyArtistId),
+                    }
+                  : {}),
                 status,
                 updatedAt: now,
               },
@@ -120,6 +144,27 @@ export class AdminAppsService {
         },
         { merge: true },
       );
+
+      if (status === 'approved' && spotifyArtistId) {
+        transaction.set(
+          db.collection('muzaloArtists').doc(spotifyArtistId),
+          {
+            artistName,
+            approvedAt: now,
+            approvedBy: reviewedBy,
+            email: normalizedEmail,
+            primaryGenre: this.stringValue(requestData.primaryGenre),
+            requestId: this.stringValue(requestData.requestId),
+            source: 'artist-profile-request',
+            spotifyArtistId,
+            spotifyUrl: this.spotifyArtistUrl(spotifyArtistId),
+            status: 'approved',
+            updatedAt: now,
+            websiteUrl: this.stringValue(requestData.websiteUrl),
+          },
+          { merge: true },
+        );
+      }
     });
 
     const updated = await requestRef.get();
@@ -185,6 +230,7 @@ export class AdminAppsService {
       reviewNote: this.stringValue(data.reviewNote),
       reviewedAt: this.toIsoString(data.reviewedAt),
       reviewedBy: this.stringValue(data.reviewedBy),
+      spotifyArtistId: this.stringValue(data.spotifyArtistId),
       spotifyUrl: this.stringValue(data.spotifyUrl),
       status: this.normalizeStoredStatus(data.status),
       uid: this.stringValue(data.uid),
@@ -239,6 +285,36 @@ export class AdminAppsService {
     return typeof value === 'string'
       ? value.replace(/\s+/g, ' ').trim().slice(0, maxLength)
       : '';
+  }
+
+  private extractSpotifyArtistId(value: unknown) {
+    const input = this.stringValue(value).trim();
+    if (!input) return '';
+
+    const uriMatch = input.match(/^spotify:artist:([A-Za-z0-9]{12,32})$/i);
+    if (uriMatch?.[1]) return uriMatch[1];
+
+    try {
+      const url = new URL(input);
+      const [, kind, artistId] = url.pathname.split('/');
+
+      if (
+        url.hostname.toLowerCase().endsWith('spotify.com') &&
+        kind === 'artist' &&
+        artistId &&
+        /^[A-Za-z0-9]{12,32}$/.test(artistId)
+      ) {
+        return artistId;
+      }
+    } catch {
+      return '';
+    }
+
+    return '';
+  }
+
+  private spotifyArtistUrl(spotifyArtistId: string) {
+    return `https://open.spotify.com/artist/${spotifyArtistId}`;
   }
 
   private stringValue(value: unknown) {

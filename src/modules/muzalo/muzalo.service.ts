@@ -20,6 +20,7 @@ type StoredArtistProfileRequest = {
   requestId?: unknown;
   reviewedAt?: unknown;
   reviewedBy?: unknown;
+  spotifyArtistId?: unknown;
   spotifyUrl?: unknown;
   status?: unknown;
   updatedAt?: unknown;
@@ -34,6 +35,21 @@ export class MuzaloService {
     @Inject(FirebaseAdminService)
     private readonly firebaseAdmin: FirebaseAdminService,
   ) {}
+
+  async getCatalog() {
+    const snapshot = await this.firebaseAdmin
+      .db()
+      .collection('muzaloArtists')
+      .where('status', '==', 'approved')
+      .limit(100)
+      .get();
+
+    const artists = snapshot.docs
+      .map(doc => this.catalogArtistSummary(doc.id, doc.data()))
+      .sort((left, right) => left.artistName.localeCompare(right.artistName));
+
+    return { artists };
+  }
 
   async getProfile(user: AuthenticatedUser) {
     const appProfile = await this.appProfileSnapshot(user.email);
@@ -169,15 +185,9 @@ export class MuzaloService {
     value: unknown,
     roles: string[],
   ) {
-    if (this.hasArtistRole(roles)) {
-      return {
-        status: 'approved',
-      };
-    }
-
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return {
-        status: 'none',
+        status: this.hasArtistRole(roles) ? 'approved' : 'none',
       };
     }
 
@@ -192,12 +202,27 @@ export class MuzaloService {
       requestId: this.stringValue(request.requestId),
       reviewedAt: this.timestampToIso(request.reviewedAt),
       reviewedBy: this.stringValue(request.reviewedBy),
+      spotifyArtistId: this.stringValue(request.spotifyArtistId),
       spotifyUrl: this.stringValue(request.spotifyUrl),
-      status: ['pending', 'approved', 'rejected'].includes(status)
-        ? status
-        : 'none',
+      status: this.hasArtistRole(roles)
+        ? 'approved'
+        : ['pending', 'approved', 'rejected'].includes(status)
+          ? status
+          : 'none',
       updatedAt: this.timestampToIso(request.updatedAt),
       websiteUrl: this.stringValue(request.websiteUrl),
+    };
+  }
+
+  private catalogArtistSummary(id: string, data: Record<string, unknown>) {
+    return {
+      artistName: this.stringValue(data.artistName) || 'Muzalo Artist',
+      approvedAt: this.timestampToIso(data.approvedAt),
+      primaryGenre: this.stringValue(data.primaryGenre),
+      spotifyArtistId: this.stringValue(data.spotifyArtistId) || id,
+      spotifyUrl: this.stringValue(data.spotifyUrl),
+      updatedAt: this.timestampToIso(data.updatedAt),
+      websiteUrl: this.stringValue(data.websiteUrl),
     };
   }
 
