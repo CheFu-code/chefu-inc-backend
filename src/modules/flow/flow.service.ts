@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
   applyVariables,
+  createFlowTemplateVariables,
   renderFlowEmailShell,
   textToHtml,
 } from './flow-email-template';
@@ -22,11 +23,15 @@ import {
 
 type ResendEmailPayload = {
   from: string;
-  to: string[];
-  subject: string;
-  html: string;
   reply_to?: string;
+  html?: string;
+  subject: string;
   tags?: Array<{ name: string; value: string }>;
+  template?: {
+    id: string;
+    variables: Record<string, string>;
+  };
+  to: string[];
 };
 
 type FlowFolderCounts = {
@@ -152,11 +157,27 @@ export class FlowService {
       );
     }
 
-    const renderedEmails = recipients.map(recipient => ({
-      body: this.renderRecipientBody(normalized, recipient),
-      email: this.createResendEmail(normalized, recipient),
-      recipient,
-    }));
+    const renderedEmails = recipients
+      .map(recipient => ({
+        body: this.renderRecipientBody(normalized, recipient),
+        recipient,
+        subject: this.renderRecipientSubject(normalized, recipient),
+      }))
+      .map(item => ({
+        ...item,
+        email: this.createResendEmail(
+          normalized,
+          item.recipient,
+          item.body,
+          item.subject,
+        ),
+        html: this.renderRecipientHtml(
+          normalized,
+          item.recipient,
+          item.body,
+          item.subject,
+        ),
+      }));
     const emails = renderedEmails.map(item => item.email);
     const response =
       emails.length === 1
@@ -168,23 +189,23 @@ export class FlowService {
     const sendGroupId = randomUUID();
 
     await Promise.all(
-      renderedEmails.map(({ body, email, recipient }, index) =>
+      renderedEmails.map(({ body, email, html, recipient, subject }, index) =>
         this.messagesCollection().add({
           attachments: 0,
           createdAt: FieldValue.serverTimestamp(),
           direction: 'outbound',
           folder: 'sent',
           from: normalized.from,
-          html: email.html,
+          html,
           label: normalized.action === 'test' ? 'Test' : 'Sent',
           preview: this.previewFromText(body),
           resendEmailId: this.sentEmailId(response, index),
           sendGroupId,
           sentAt,
           starred: false,
-          subject: email.subject,
+          subject,
           text: body,
-          threadKey: this.threadKeyForMessage(email.subject, normalized.from, [
+          threadKey: this.threadKeyForMessage(subject, normalized.from, [
             recipient.email,
           ]),
           to: [recipient.email],
@@ -603,28 +624,15 @@ export class FlowService {
   private createResendEmail(
     payload: ReturnType<FlowService['normalizePayload']>,
     recipient: FlowRecipient,
+    body: string,
+    subject: string,
   ): ResendEmailPayload {
-    const variables = {
-      audienceName: payload.audienceName,
-      company: recipient.company || 'CheFu Inc',
-      email: recipient.email,
-      firstName: recipient.firstName || recipient.email.split('@')[0],
-      lastName: recipient.lastName || '',
-    };
-    const subject = applyVariables(payload.subject, variables);
-    const body = applyVariables(payload.html, variables);
-
-    return {
+    const bodyHtml = textToHtml(body);
+    const emailTemplateId = this.flowEmailTemplateId();
+    const baseEmail = {
       from: payload.from,
       to: [recipient.email],
       subject,
-      html: renderFlowEmailShell({
-        body: textToHtml(body),
-        ctaLabel: payload.ctaLabel || undefined,
-        ctaUrl: payload.ctaUrl || undefined,
-        preheader: payload.preheader,
-        title: subject,
-      }),
       reply_to: payload.replyTo || undefined,
       tags: [
         { name: 'app', value: 'flow' },
@@ -638,19 +646,90 @@ export class FlowService {
         })),
       ],
     };
+
+    if (emailTemplateId) {
+      const templatePayload = createFlowTemplateVariables({
+        audienceName: payload.audienceName,
+        bodyHtml,
+        ctaLabel: payload.ctaLabel || undefined,
+        ctaUrl: payload.ctaUrl || undefined,
+        preheader: payload.preheader || this.previewFromText(body),
+        recipientName: this.recipientDisplayName(recipient),
+        senderName: this.senderDisplayName(payload.from),
+        title: subject,
+      });
+
+      if (templatePayload.fitsResendTemplateLimits) {
+        return {
+          ...baseEmail,
+          template: {
+            id: emailTemplateId,
+            variables: templatePayload.variables,
+          },
+        };
+      }
+
+      this.logger.warn(
+        JSON.stringify({
+          event: 'flow_template_payload_too_large',
+          recipient: recipient.email,
+          templateId: emailTemplateId,
+        }),
+      );
+    }
+
+    return {
+      ...baseEmail,
+      html: this.renderRecipientHtml(payload, recipient, body, subject),
+    };
   }
 
   private renderRecipientBody(
     payload: ReturnType<FlowService['normalizePayload']>,
     recipient: FlowRecipient,
   ) {
-    return applyVariables(payload.html, {
+    return applyVariables(payload.html, this.recipientVariables(payload, recipient));
+  }
+
+  private renderRecipientSubject(
+    payload: ReturnType<FlowService['normalizePayload']>,
+    recipient: FlowRecipient,
+  ) {
+    return applyVariables(
+      payload.subject,
+      this.recipientVariables(payload, recipient),
+    );
+  }
+
+  private renderRecipientHtml(
+    payload: ReturnType<FlowService['normalizePayload']>,
+    recipient: FlowRecipient,
+    body: string,
+    subject: string,
+  ) {
+    return renderFlowEmailShell({
+      audienceName: payload.audienceName,
+      body: textToHtml(body),
+      ctaLabel: payload.ctaLabel || undefined,
+      ctaUrl: payload.ctaUrl || undefined,
+      preheader: payload.preheader || this.previewFromText(body),
+      recipientName: this.recipientDisplayName(recipient),
+      senderName: this.senderDisplayName(payload.from),
+      title: subject,
+    });
+  }
+
+  private recipientVariables(
+    payload: ReturnType<FlowService['normalizePayload']>,
+    recipient: FlowRecipient,
+  ) {
+    return {
       audienceName: payload.audienceName,
       company: recipient.company || 'CheFu Inc',
       email: recipient.email,
       firstName: recipient.firstName || recipient.email.split('@')[0],
       lastName: recipient.lastName || '',
-    });
+    };
   }
 
   private sentEmailId(response: unknown, index: number) {
@@ -809,6 +888,30 @@ export class FlowService {
     if (!match) return sender;
 
     return `${match[1].replace(/^"|"$/g, '').trim()} (${match[2].trim()})`;
+  }
+
+  private senderDisplayName(sender: string) {
+    const match = sender.match(/^(.+?)\s*<(.+?)>$/);
+    if (match?.[1]) return match[1].replace(/^"|"$/g, '').trim();
+
+    return this.emailAddress(sender).split('@')[0] || 'CheFu Inc';
+  }
+
+  private recipientDisplayName(recipient: FlowRecipient) {
+    const name = [recipient.firstName, recipient.lastName]
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+      .join(' ');
+
+    return name || recipient.email.split('@')[0] || 'there';
+  }
+
+  private flowEmailTemplateId() {
+    return String(
+      process.env.FLOW_EMAIL_TEMPLATE_ID ||
+        process.env.RESEND_FLOW_TEMPLATE_ID ||
+        '',
+    ).trim();
   }
 
   private isInternalSender(sender: string) {

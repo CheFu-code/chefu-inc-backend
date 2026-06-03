@@ -8,8 +8,9 @@
     "start": "node dist/main.js",
     "start:prod": "node dist/main.js",
     "lint": "eslint \"src/**/*.ts\"",
-    "typecheck": "tsc --noEmit",
-    "smoke": "node scripts/smoke-routes.mjs"
+    "smoke": "node scripts/smoke-routes.mjs",
+    "sync:flow-template": "node scripts/sync-flow-resend-template.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@google/genai": "^1.38.0",
