@@ -29,6 +29,7 @@ import { EmailModule } from '../email/email.module';
     OAuthService,
     SessionSignerService,
     SecurityEventsService,
+    HoneytokenService,
   ],
 })
 export class AuthModule {}
