@@ -1,6 +1,6 @@
 export const CHEFU_APP_HEADER = 'x-chefu-app';
 
-export type ChefuAppId = 'academy' | 'flow' | 'muzalo' | 'quantum';
+export type ChefuAppId = 'academy' | 'admin' | 'flow' | 'muzalo' | 'quantum';
 type ChefuAppAlias = 'music';
 
 export type ChefuApp = {
@@ -27,6 +27,11 @@ export const CHEFU_APPS: ChefuApp[] = [
       'https://myaccount.chefuinc.com',
       'https://academy.chefuinc.com',
     ],
+  },
+  {
+    id: 'admin',
+    name: 'CheFu Admin',
+    origins: ['http://localhost:3004', 'https://admin.chefuinc.com'],
   },
   {
     id: 'flow',
@@ -81,6 +86,16 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
       'videos:read',
       'keys:manage',
     ],
+  },
+  {
+    id: 'chefu-admin-web',
+    appId: 'admin',
+    name: 'CheFu Admin',
+    redirectUris: [
+      'https://admin.chefuinc.com/auth/callback',
+      'http://localhost:3004/auth/callback',
+    ],
+    scopes: ['openid', 'profile', 'email', 'admin:manage'],
   },
   {
     id: 'flow-web',
