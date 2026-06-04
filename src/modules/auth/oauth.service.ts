@@ -561,7 +561,6 @@ export class OAuthService {
           uid: codeDoc.uid,
         })
       : null;
-
     this.logger.log(
       JSON.stringify({
         event: 'oauth_token_issued',

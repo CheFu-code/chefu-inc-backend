@@ -17,6 +17,7 @@ export class FirebaseAdminService {
       ? admin.app()
       : admin.initializeApp({
           credential: admin.credential.cert(serviceAccount),
+          storageBucket: process.env.FIREBASE_STORAGE_BUCKET || undefined,
         });
 
     this.logger.log(
@@ -36,6 +37,19 @@ export class FirebaseAdminService {
 
   db(): admin.firestore.Firestore {
     return admin.firestore(this.getApp());
+  }
+
+  messaging(): admin.messaging.Messaging {
+    return admin.messaging(this.getApp());
+  }
+
+  storageBucket() {
+    const configuredBucket = process.env.FIREBASE_STORAGE_BUCKET?.trim();
+    const storage = admin.storage(this.getApp());
+
+    return configuredBucket
+      ? storage.bucket(configuredBucket)
+      : storage.bucket();
   }
 
   projectId() {

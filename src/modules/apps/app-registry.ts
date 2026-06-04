@@ -88,6 +88,20 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
     ],
   },
   {
+    id: 'chefu-academy-mobile',
+    appId: 'academy',
+    name: 'CheFu Academy Mobile',
+    redirectUris: ['chefu-academy://auth/sso'],
+    scopes: [
+      'openid',
+      'profile',
+      'email',
+      'courses:read',
+      'videos:read',
+      'keys:manage',
+    ],
+  },
+  {
     id: 'chefu-admin-web',
     appId: 'admin',
     name: 'CheFu Admin',
