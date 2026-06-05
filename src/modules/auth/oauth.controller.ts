@@ -74,6 +74,21 @@ export class OAuthController {
     return this.oauthService.token(body, request, dpop);
   }
 
+  @Post('revoke')
+  @HttpCode(200)
+  async revoke(
+    @Body()
+    body: {
+      client_id?: string;
+      token?: string;
+      token_type_hint?: string;
+    },
+    @Headers('dpop') dpop: string | undefined,
+    @Req() request: Request,
+  ) {
+    return this.oauthService.revoke(body, request, dpop);
+  }
+
   @Get('userinfo')
   async userinfo(
     @Headers('authorization') authorization: string | undefined,

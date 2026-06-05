@@ -124,6 +124,12 @@ type TokenPayload = {
   subject_token_type?: string;
 };
 
+type TokenRevocationPayload = {
+  client_id?: string;
+  token?: string;
+  token_type_hint?: string;
+};
+
 type JwtHeader = {
   alg?: unknown;
   jwk?: unknown;
@@ -259,6 +265,7 @@ export class OAuthService {
       issuer: this.issuer,
       authorization_endpoint: `${this.issuer}/oauth/authorize`,
       token_endpoint: `${this.issuer}/oauth/token`,
+      revocation_endpoint: `${this.issuer}/oauth/revoke`,
       userinfo_endpoint: `${this.issuer}/oauth/userinfo`,
       jwks_uri: `${this.issuer}/oauth/jwks`,
       authorization_response_iss_parameter_supported: true,
@@ -274,6 +281,7 @@ export class OAuthService {
       subject_types_supported: ['public'],
       id_token_signing_alg_values_supported: ['RS256'],
       token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+      revocation_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
       code_challenge_methods_supported: ['S256'],
       dpop_signing_alg_values_supported: ['ES256', 'RS256'],
       require_signed_authorization_response: this.jarmRequired,
@@ -299,6 +307,7 @@ export class OAuthService {
       issuer: this.issuer,
       authorization_endpoint: `${this.issuer}/oauth/authorize`,
       token_endpoint: `${this.issuer}/oauth/token`,
+      revocation_endpoint: `${this.issuer}/oauth/revoke`,
       jwks_uri: `${this.issuer}/oauth/jwks`,
       authorization_response_iss_parameter_supported: true,
       authorization_signing_alg_values_supported: ['RS256'],
@@ -311,6 +320,7 @@ export class OAuthService {
         'urn:ietf:params:oauth:grant-type:token-exchange',
       ],
       token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+      revocation_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
       code_challenge_methods_supported: ['S256'],
       dpop_signing_alg_values_supported: ['ES256', 'RS256'],
       require_signed_authorization_response: this.jarmRequired,
@@ -349,6 +359,116 @@ export class OAuthService {
     }
 
     throw new BadRequestException('Unsupported grant_type.');
+  }
+
+  async revoke(
+    body: TokenRevocationPayload,
+    request: Request,
+    dpop?: string,
+  ) {
+    if (!this.issueRefreshTokens) {
+      return { ok: true };
+    }
+
+    if (!body.client_id || !body.token) {
+      throw new BadRequestException('client_id and token are required.');
+    }
+
+    const client = this.appsService.resolveOauthClient(body.client_id);
+    if (!client) {
+      throw new BadRequestException('Unknown OAuth client.');
+    }
+
+    const tokenHash = this.hash(body.token);
+    const refreshRef = this.refreshTokens().doc(tokenHash);
+    const preflightSnapshot = await refreshRef.get();
+    const preflightRecord = preflightSnapshot.exists
+      ? (preflightSnapshot.data() as RefreshTokenDocument)
+      : null;
+
+    if (!preflightRecord) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'oauth_refresh_token_revoke_unknown',
+          clientId: client.id,
+          tokenTypeHint: body.token_type_hint || null,
+          tokenHash: hashForAudit(tokenHash),
+          ...auditRequestContext(request),
+        }),
+      );
+      return { ok: true };
+    }
+
+    if (preflightRecord.clientId !== client.id) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'oauth_refresh_token_revoke_client_mismatch',
+          clientId: client.id,
+          tokenTypeHint: body.token_type_hint || null,
+          tokenHash: hashForAudit(tokenHash),
+          expectedClientId: preflightRecord.clientId,
+          ...auditRequestContext(request),
+        }),
+      );
+      return { ok: true };
+    }
+
+    if (preflightRecord.dpopJkt) {
+      const proof = await this.verifyDpopProof({
+        accessToken: body.token,
+        dpop,
+        expectedHtm: 'POST',
+        expectedHtu: `${this.issuer}/oauth/revoke`,
+      });
+
+      if (proof.jkt !== preflightRecord.dpopJkt) {
+        throw new UnauthorizedException('DPoP key mismatch.');
+      }
+    } else if (this.dpopRequired) {
+      throw new UnauthorizedException('DPoP proof required.');
+    }
+
+    const now = Date.now();
+    const result = await this.firebaseAdmin
+      .db()
+      .runTransaction(async transaction => {
+        const snapshot = await transaction.get(refreshRef);
+
+        if (!snapshot.exists) {
+          return { revoked: false, record: null as RefreshTokenDocument | null };
+        }
+
+        const current = snapshot.data() as RefreshTokenDocument;
+        if (current.clientId !== client.id) {
+          return { revoked: false, record: current };
+        }
+
+        if (!current.revokedAt) {
+          await this.revokeRefreshTokenFamily(
+            transaction,
+            current.familyId,
+            'mobile_logout',
+            now,
+          );
+        }
+
+        return { revoked: true, record: current };
+      });
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'oauth_refresh_token_family_revoked',
+        clientId: client.id,
+        tokenTypeHint: body.token_type_hint || null,
+        revoked: result.revoked,
+        familyIdHash: hashForAudit(result.record?.familyId),
+        uidHash: hashForAudit(result.record?.uid),
+        emailHash: hashForAudit(result.record?.email),
+        ...auditRequestContext(request),
+      }),
+    );
+
+    return { ok: true };
   }
 
   async authorize(params: AuthorizeParams, request: Request) {
