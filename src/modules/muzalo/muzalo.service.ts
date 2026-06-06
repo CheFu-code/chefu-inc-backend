@@ -1,6 +1,7 @@
 import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import { FieldValue } from 'firebase-admin/firestore';
 import { randomUUID } from 'node:crypto';
+import { hashForAudit } from '../../common/security-audit';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 
@@ -139,7 +140,7 @@ export class MuzaloService {
     this.logger.log(
       JSON.stringify({
         event: 'muzalo_artist_profile_requested',
-        email: user.email,
+        emailHash: hashForAudit(user.email),
         requestId,
       }),
     );

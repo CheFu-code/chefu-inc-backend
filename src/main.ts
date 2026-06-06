@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { Logger } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
@@ -32,7 +33,9 @@ function normalizeOrigin(origin: string) {
   if (!origin) return null;
 
   try {
-    return new URL(origin).origin;
+    const url = new URL(origin);
+    if (!isAllowedWebOrigin(url)) return null;
+    return url.origin;
   } catch {
     return null;
   }
@@ -48,6 +51,32 @@ function isAllowedOrigin(origin: string | undefined, allowedOrigins: string[]) {
   }
 }
 
+function isAllowedWebOrigin(url: URL) {
+  if (url.protocol === 'https:') return true;
+
+  return (
+    process.env.NODE_ENV !== 'production' &&
+    url.protocol === 'http:' &&
+    ['localhost', '127.0.0.1'].includes(url.hostname)
+  );
+}
+
+function shouldRejectInsecureRequest(request: Request) {
+  if (
+    process.env.NODE_ENV !== 'production' ||
+    process.env.ENFORCE_HTTPS === 'false'
+  ) {
+    return false;
+  }
+
+  const forwardedProto = String(request.headers['x-forwarded-proto'] || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+
+  return !request.secure && forwardedProto !== 'https';
+}
+
 function setSecurityHeaders(response: Response) {
   response.setHeader(
     'Content-Security-Policy',
@@ -58,10 +87,12 @@ function setSecurityHeaders(response: Response) {
     'Permissions-Policy',
     'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
   );
-  response.setHeader(
-    'Strict-Transport-Security',
-    'max-age=63072000; includeSubDomains; preload',
-  );
+  if (process.env.NODE_ENV === 'production') {
+    response.setHeader(
+      'Strict-Transport-Security',
+      'max-age=63072000; includeSubDomains; preload',
+    );
+  }
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('X-Frame-Options', 'SAMEORIGIN');
 }
@@ -70,9 +101,14 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const envValidation = validateProductionEnv();
 
-  if (envValidation.missing.length > 0) {
+  const envProblems = [
+    ...envValidation.missing.map(name => `missing ${name}`),
+    ...envValidation.invalid.map(name => `invalid ${name}`),
+  ];
+
+  if (envProblems.length > 0) {
     throw new Error(
-      `Missing required production environment variables: ${envValidation.missing.join(', ')}`,
+      `Production environment is not secure: ${envProblems.join(', ')}`,
     );
   }
 
@@ -80,6 +116,41 @@ async function bootstrap() {
     rawBody: true,
   });
   const allowedOrigins = getAllowedOrigins();
+  const allowedHeaders = [
+    'Content-Type',
+    'Authorization',
+    'DPoP',
+    CHEFU_APP_HEADER,
+    'x-api-key',
+    'x-flow-api-key',
+    'x-flow-session',
+    'x-flow-webhook-secret',
+    'x-request-id',
+  ];
+
+  app.set('trust proxy', 1);
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false,
+      frameguard: { action: 'sameorigin' },
+      hsts:
+        process.env.NODE_ENV === 'production'
+          ? { includeSubDomains: true, maxAge: 63072000, preload: true }
+          : false,
+      referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    }),
+  );
+  app.use((request: Request, response: Response, next: NextFunction) => {
+    if (shouldRejectInsecureRequest(request)) {
+      response.status(400).json({
+        error: 'HTTPS is required.',
+      });
+      return;
+    }
+
+    next();
+  });
 
   app.useBodyParser('json', { limit: '8mb' });
   app.useBodyParser('urlencoded', { extended: true, limit: '8mb' });
@@ -98,15 +169,9 @@ async function bootstrap() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-      CHEFU_APP_HEADER,
-      'x-api-key',
-      'x-flow-api-key',
-      'x-flow-session',
-      'x-flow-webhook-secret',
-    ],
+    allowedHeaders,
+    maxAge: 600,
+    optionsSuccessStatus: 204,
   });
   app.use((request: Request, response: Response, next: NextFunction) => {
     setSecurityHeaders(response);
@@ -118,7 +183,7 @@ async function bootstrap() {
       response.setHeader('Access-Control-Allow-Credentials', 'true');
       response.setHeader(
         'Access-Control-Allow-Headers',
-        `Content-Type,Authorization,${CHEFU_APP_HEADER},x-api-key,x-flow-api-key,x-flow-session,x-flow-webhook-secret`,
+        allowedHeaders.join(','),
       );
       response.setHeader(
         'Access-Control-Allow-Methods',

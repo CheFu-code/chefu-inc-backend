@@ -124,6 +124,12 @@ type TokenPayload = {
   subject_token_type?: string;
 };
 
+type TokenRevocationPayload = {
+  client_id?: string;
+  token?: string;
+  token_type_hint?: string;
+};
+
 type JwtHeader = {
   alg?: unknown;
   jwk?: unknown;
@@ -259,6 +265,7 @@ export class OAuthService {
       issuer: this.issuer,
       authorization_endpoint: `${this.issuer}/oauth/authorize`,
       token_endpoint: `${this.issuer}/oauth/token`,
+      revocation_endpoint: `${this.issuer}/oauth/revoke`,
       userinfo_endpoint: `${this.issuer}/oauth/userinfo`,
       jwks_uri: `${this.issuer}/oauth/jwks`,
       authorization_response_iss_parameter_supported: true,
@@ -274,9 +281,11 @@ export class OAuthService {
       subject_types_supported: ['public'],
       id_token_signing_alg_values_supported: ['RS256'],
       token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+      revocation_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
       code_challenge_methods_supported: ['S256'],
       dpop_signing_alg_values_supported: ['ES256', 'RS256'],
       require_signed_authorization_response: this.jarmRequired,
+      prompt_values_supported: ['login', 'none', 'select_account'],
       fapi_profile_enforced: this.fapiEnforced,
       scopes_supported: this.supportedScopes(),
       claims_supported: [
@@ -288,6 +297,7 @@ export class OAuthService {
         'name',
         'nbf',
         'nonce',
+        'picture',
         'roles',
         'sub',
       ],
@@ -299,6 +309,7 @@ export class OAuthService {
       issuer: this.issuer,
       authorization_endpoint: `${this.issuer}/oauth/authorize`,
       token_endpoint: `${this.issuer}/oauth/token`,
+      revocation_endpoint: `${this.issuer}/oauth/revoke`,
       jwks_uri: `${this.issuer}/oauth/jwks`,
       authorization_response_iss_parameter_supported: true,
       authorization_signing_alg_values_supported: ['RS256'],
@@ -311,9 +322,11 @@ export class OAuthService {
         'urn:ietf:params:oauth:grant-type:token-exchange',
       ],
       token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+      revocation_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
       code_challenge_methods_supported: ['S256'],
       dpop_signing_alg_values_supported: ['ES256', 'RS256'],
       require_signed_authorization_response: this.jarmRequired,
+      prompt_values_supported: ['login', 'none', 'select_account'],
       fapi_profile_enforced: this.fapiEnforced,
       scopes_supported: this.supportedScopes(),
     };
@@ -351,6 +364,116 @@ export class OAuthService {
     throw new BadRequestException('Unsupported grant_type.');
   }
 
+  async revoke(
+    body: TokenRevocationPayload,
+    request: Request,
+    dpop?: string,
+  ) {
+    if (!this.issueRefreshTokens) {
+      return { ok: true };
+    }
+
+    if (!body.client_id || !body.token) {
+      throw new BadRequestException('client_id and token are required.');
+    }
+
+    const client = this.appsService.resolveOauthClient(body.client_id);
+    if (!client) {
+      throw new BadRequestException('Unknown OAuth client.');
+    }
+
+    const tokenHash = this.hash(body.token);
+    const refreshRef = this.refreshTokens().doc(tokenHash);
+    const preflightSnapshot = await refreshRef.get();
+    const preflightRecord = preflightSnapshot.exists
+      ? (preflightSnapshot.data() as RefreshTokenDocument)
+      : null;
+
+    if (!preflightRecord) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'oauth_refresh_token_revoke_unknown',
+          clientId: client.id,
+          tokenTypeHint: body.token_type_hint || null,
+          tokenHash: hashForAudit(tokenHash),
+          ...auditRequestContext(request),
+        }),
+      );
+      return { ok: true };
+    }
+
+    if (preflightRecord.clientId !== client.id) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'oauth_refresh_token_revoke_client_mismatch',
+          clientId: client.id,
+          tokenTypeHint: body.token_type_hint || null,
+          tokenHash: hashForAudit(tokenHash),
+          expectedClientId: preflightRecord.clientId,
+          ...auditRequestContext(request),
+        }),
+      );
+      return { ok: true };
+    }
+
+    if (preflightRecord.dpopJkt) {
+      const proof = await this.verifyDpopProof({
+        accessToken: body.token,
+        dpop,
+        expectedHtm: 'POST',
+        expectedHtu: `${this.issuer}/oauth/revoke`,
+      });
+
+      if (proof.jkt !== preflightRecord.dpopJkt) {
+        throw new UnauthorizedException('DPoP key mismatch.');
+      }
+    } else if (this.dpopRequired) {
+      throw new UnauthorizedException('DPoP proof required.');
+    }
+
+    const now = Date.now();
+    const result = await this.firebaseAdmin
+      .db()
+      .runTransaction(async transaction => {
+        const snapshot = await transaction.get(refreshRef);
+
+        if (!snapshot.exists) {
+          return { revoked: false, record: null as RefreshTokenDocument | null };
+        }
+
+        const current = snapshot.data() as RefreshTokenDocument;
+        if (current.clientId !== client.id) {
+          return { revoked: false, record: current };
+        }
+
+        if (!current.revokedAt) {
+          await this.revokeRefreshTokenFamily(
+            transaction,
+            current.familyId,
+            'mobile_logout',
+            now,
+          );
+        }
+
+        return { revoked: true, record: current };
+      });
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'oauth_refresh_token_family_revoked',
+        clientId: client.id,
+        tokenTypeHint: body.token_type_hint || null,
+        revoked: result.revoked,
+        familyIdHash: hashForAudit(result.record?.familyId),
+        uidHash: hashForAudit(result.record?.uid),
+        emailHash: hashForAudit(result.record?.email),
+        ...auditRequestContext(request),
+      }),
+    );
+
+    return { ok: true };
+  }
+
   async authorize(params: AuthorizeParams, request: Request) {
     const client = this.validateAuthorizeParams(params);
     const codeChallenge = params.code_challenge;
@@ -360,11 +483,22 @@ export class OAuthService {
       throw new BadRequestException('code_challenge and redirect_uri are required.');
     }
 
+    const forceFreshLogin = this.requiresFreshLogin(params.prompt);
+    const silentLoginOnly = this.hasPromptValue(params.prompt, 'none');
     const decoded = await this.getSessionUser(request);
 
-    if (!decoded) {
+    if (!decoded || forceFreshLogin) {
+      if (!decoded && silentLoginOnly) {
+        this.redirectError(
+          params,
+          'login_required',
+          'No active CheFu session is available.',
+          client,
+        );
+      }
+
       return {
-        redirectTo: this.buildLoginRedirect(params, client),
+        redirectTo: this.buildLoginRedirect(params, client, forceFreshLogin),
       };
     }
 
@@ -451,6 +585,23 @@ export class OAuthService {
 
   private shouldUseJarm(params: AuthorizeParams) {
     return this.jarmRequired || params.response_mode === 'jwt';
+  }
+
+  private requiresFreshLogin(prompt?: string) {
+    return this.promptValues(prompt).some(
+      value => value === 'login' || value === 'select_account',
+    );
+  }
+
+  private hasPromptValue(prompt: string | undefined, expected: string) {
+    return this.promptValues(prompt).includes(expected);
+  }
+
+  private promptValues(prompt?: string) {
+    return (prompt || '')
+      .split(/\s+/)
+      .map(value => value.trim())
+      .filter(Boolean);
   }
 
   private async exchangeCode(body: TokenPayload, request: Request, dpop?: string) {
@@ -599,11 +750,16 @@ export class OAuthService {
       throw new UnauthorizedException('Access token required.');
     }
 
+    const profile = await this.getUserProfileSummary(claims.email);
+    const picture = profile.profilePicture || undefined;
+
     return {
       sub: claims.sub,
       email: claims.email,
-      name: claims.name,
-      roles: claims.roles || [],
+      name: profile.name || claims.name,
+      picture,
+      photoURL: picture,
+      roles: profile.roles.length > 0 ? profile.roles : claims.roles || [],
       app: claims.app,
       scope: claims.scope,
     };
@@ -885,6 +1041,11 @@ export class OAuthService {
       throw new BadRequestException('Invalid redirect_uri for this client.');
     }
 
+    const promptError = this.validatePromptParam(params.prompt);
+    if (promptError) {
+      return this.redirectError(params, 'invalid_request', promptError, client);
+    }
+
     if (params.response_mode && params.response_mode !== 'jwt' && params.response_mode !== 'query') {
       return this.redirectError(params, 'invalid_request', 'Unsupported response_mode.', client);
     }
@@ -956,6 +1117,22 @@ export class OAuthService {
     });
   }
 
+  private validatePromptParam(prompt?: string) {
+    const values = this.promptValues(prompt);
+    if (values.length === 0) return null;
+
+    const allowed = new Set(['login', 'none', 'select_account']);
+    if (values.some(value => !allowed.has(value))) {
+      return 'Unsupported prompt value.';
+    }
+
+    if (values.includes('none') && values.length > 1) {
+      return 'prompt=none cannot be combined with other prompt values.';
+    }
+
+    return null;
+  }
+
   private async getSessionUser(request: Request) {
     const sessionCookie = request.cookies?.[SESSION_COOKIE_NAME];
     if (!sessionCookie) return null;
@@ -967,9 +1144,16 @@ export class OAuthService {
     }
   }
 
-  private buildLoginRedirect(params: AuthorizeParams, client: ChefuOauthClient) {
+  private buildLoginRedirect(
+    params: AuthorizeParams,
+    client: ChefuOauthClient,
+    forceFreshLogin = false,
+  ) {
     const loginUrl = new URL('/login', this.accountUrl);
     loginUrl.searchParams.set('app', client.appId);
+    if (forceFreshLogin) {
+      loginUrl.searchParams.set('prompt', 'login');
+    }
     loginUrl.searchParams.set('returnTo', `${this.issuer}/oauth/authorize?${new URLSearchParams({
       ...(params.client_id ? { client_id: params.client_id } : {}),
       ...(params.code_challenge ? { code_challenge: params.code_challenge } : {}),
@@ -1707,6 +1891,32 @@ export class OAuthService {
       .get();
     const roles = snapshot.data()?.roles;
     return Array.isArray(roles) ? roles.map(String) : [];
+  }
+
+  private async getUserProfileSummary(email?: string) {
+    if (!email) return { name: '', profilePicture: '', roles: [] as string[] };
+
+    const snapshot = await this.firebaseAdmin
+      .db()
+      .collection('users')
+      .doc(email)
+      .get();
+    const data = snapshot.data() || {};
+    const roles = data.roles;
+    const name =
+      typeof data.fullname === 'string'
+        ? data.fullname
+        : typeof data.name === 'string'
+          ? data.name
+          : '';
+    const profilePicture =
+      typeof data.profilePicture === 'string' ? data.profilePicture : '';
+
+    return {
+      name,
+      profilePicture,
+      roles: Array.isArray(roles) ? roles.map(String).filter(Boolean) : [],
+    };
   }
 
   private parseJwtSegment(segment: string) {

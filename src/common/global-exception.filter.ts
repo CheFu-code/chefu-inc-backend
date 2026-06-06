@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import { getRequestId, RequestWithId } from './request-context';
-import { auditRequestContext } from './security-audit';
+import { auditRequestContext, redactSensitiveText } from './security-audit';
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
@@ -33,27 +33,42 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           ? (payload as { message?: unknown }).message
           : 'Request failed';
 
+    const safeMessage = this.safeMessage(message);
+    const clientMessage =
+      status >= HttpStatus.INTERNAL_SERVER_ERROR
+        ? 'Internal server error'
+        : safeMessage;
+
     const logPayload = JSON.stringify({
       event: 'request_error',
       requestId: getRequestId(request),
       method: request.method,
       path: auditRequestContext(request).path,
       statusCode: status,
-      message,
+      message: safeMessage,
     });
 
     if (status >= 500) {
       this.logger.error(
         logPayload,
-        exception instanceof Error ? exception.stack : undefined,
+        process.env.NODE_ENV === 'production'
+          ? undefined
+          : exception instanceof Error
+            ? exception.stack
+            : undefined,
       );
     } else {
       this.logger.warn(logPayload);
     }
 
     response.status(status).json({
-      error: message,
+      error: clientMessage,
       requestId: getRequestId(request),
     });
+  }
+
+  private safeMessage(value: unknown) {
+    const redacted = redactSensitiveText(value).trim();
+    return redacted || 'Request failed';
   }
 }

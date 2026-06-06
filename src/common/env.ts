@@ -1,4 +1,5 @@
 type EnvValidationResult = {
+  invalid: string[];
   missing: string[];
 };
 
@@ -12,9 +13,10 @@ function hasEnvWithMinLength(name: string, minLength: number) {
 
 export function validateProductionEnv(): EnvValidationResult {
   if (process.env.NODE_ENV !== 'production') {
-    return { missing: [] };
+    return { invalid: [], missing: [] };
   }
 
+  const invalid: string[] = [];
   const missing: string[] = [];
 
   if (!hasAnyEnv(['AUTH_SESSION_SECRET', 'SESSION_COOKIE_SECRET'])) {
@@ -51,11 +53,19 @@ export function validateProductionEnv(): EnvValidationResult {
 
   if (!hasAnyEnv(['FRONTEND_ORIGINS', 'FRONTEND_ORIGIN'])) {
     missing.push('FRONTEND_ORIGINS or FRONTEND_ORIGIN');
+  } else if (!hasOnlyHttpsUrls(process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN)) {
+    invalid.push('FRONTEND_ORIGINS/FRONTEND_ORIGIN must contain only HTTPS origins');
   }
 
   for (const name of ['CHEFU_ACCOUNT_URL', 'OAUTH_ISSUER', 'OAUTH_KEY_ID']) {
     if (!hasAnyEnv([name])) {
       missing.push(name);
+    }
+  }
+
+  for (const name of ['CHEFU_ACCOUNT_URL', 'OAUTH_ISSUER']) {
+    if (hasAnyEnv([name]) && !isHttpsUrl(process.env[name])) {
+      invalid.push(`${name} must be an HTTPS URL`);
     }
   }
 
@@ -65,7 +75,28 @@ export function validateProductionEnv(): EnvValidationResult {
 
   if (!hasAnyEnv(['FLOW_ACCESS_SECRET'])) {
     missing.push('FLOW_ACCESS_SECRET');
+  } else if (
+    !hasEnvWithMinLength('FLOW_ACCESS_SECRET', 32) ||
+    process.env.FLOW_ACCESS_SECRET === 'flow-local-development-secret'
+  ) {
+    invalid.push('FLOW_ACCESS_SECRET must be a non-default secret with at least 32 characters');
   }
 
-  return { missing };
+  return { invalid, missing };
+}
+
+function hasOnlyHttpsUrls(value: string | undefined) {
+  return String(value || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean)
+    .every(isHttpsUrl);
+}
+
+function isHttpsUrl(value: string | undefined) {
+  try {
+    return new URL(String(value || '')).protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
