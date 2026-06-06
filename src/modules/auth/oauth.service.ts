@@ -296,6 +296,7 @@ export class OAuthService {
         'name',
         'nbf',
         'nonce',
+        'picture',
         'roles',
         'sub',
       ],
@@ -480,11 +481,12 @@ export class OAuthService {
       throw new BadRequestException('code_challenge and redirect_uri are required.');
     }
 
+    const forceFreshLogin = this.requiresFreshLogin(params.prompt);
     const decoded = await this.getSessionUser(request);
 
-    if (!decoded) {
+    if (!decoded || forceFreshLogin) {
       return {
-        redirectTo: this.buildLoginRedirect(params, client),
+        redirectTo: this.buildLoginRedirect(params, client, forceFreshLogin),
       };
     }
 
@@ -571,6 +573,12 @@ export class OAuthService {
 
   private shouldUseJarm(params: AuthorizeParams) {
     return this.jarmRequired || params.response_mode === 'jwt';
+  }
+
+  private requiresFreshLogin(prompt?: string) {
+    return (prompt || '')
+      .split(/\s+/)
+      .some(value => value === 'login' || value === 'select_account');
   }
 
   private async exchangeCode(body: TokenPayload, request: Request, dpop?: string) {
@@ -719,11 +727,16 @@ export class OAuthService {
       throw new UnauthorizedException('Access token required.');
     }
 
+    const profile = await this.getUserProfileSummary(claims.email);
+    const picture = profile.profilePicture || undefined;
+
     return {
       sub: claims.sub,
       email: claims.email,
-      name: claims.name,
-      roles: claims.roles || [],
+      name: profile.name || claims.name,
+      picture,
+      photoURL: picture,
+      roles: profile.roles.length > 0 ? profile.roles : claims.roles || [],
       app: claims.app,
       scope: claims.scope,
     };
@@ -1087,9 +1100,16 @@ export class OAuthService {
     }
   }
 
-  private buildLoginRedirect(params: AuthorizeParams, client: ChefuOauthClient) {
+  private buildLoginRedirect(
+    params: AuthorizeParams,
+    client: ChefuOauthClient,
+    forceFreshLogin = false,
+  ) {
     const loginUrl = new URL('/login', this.accountUrl);
     loginUrl.searchParams.set('app', client.appId);
+    if (forceFreshLogin) {
+      loginUrl.searchParams.set('prompt', 'login');
+    }
     loginUrl.searchParams.set('returnTo', `${this.issuer}/oauth/authorize?${new URLSearchParams({
       ...(params.client_id ? { client_id: params.client_id } : {}),
       ...(params.code_challenge ? { code_challenge: params.code_challenge } : {}),
@@ -1827,6 +1847,32 @@ export class OAuthService {
       .get();
     const roles = snapshot.data()?.roles;
     return Array.isArray(roles) ? roles.map(String) : [];
+  }
+
+  private async getUserProfileSummary(email?: string) {
+    if (!email) return { name: '', profilePicture: '', roles: [] as string[] };
+
+    const snapshot = await this.firebaseAdmin
+      .db()
+      .collection('users')
+      .doc(email)
+      .get();
+    const data = snapshot.data() || {};
+    const roles = data.roles;
+    const name =
+      typeof data.fullname === 'string'
+        ? data.fullname
+        : typeof data.name === 'string'
+          ? data.name
+          : '';
+    const profilePicture =
+      typeof data.profilePicture === 'string' ? data.profilePicture : '';
+
+    return {
+      name,
+      profilePicture,
+      roles: Array.isArray(roles) ? roles.map(String).filter(Boolean) : [],
+    };
   }
 
   private parseJwtSegment(segment: string) {
