@@ -15,6 +15,12 @@ const SENSITIVE_QUERY_PARAMS = new Set([
   'token',
 ]);
 
+const SENSITIVE_TEXT_PATTERNS = [
+  /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi,
+  /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
+  /\b(refresh_token|access_token|id_token|code|code_verifier|token)=([^&\s]+)/gi,
+];
+
 export function hashForAudit(value?: string | null) {
   const normalized = value?.trim();
   if (!normalized) return null;
@@ -29,6 +35,25 @@ export function hashForAudit(value?: string | null) {
     .update(`${secret}:${normalized}`)
     .digest('hex')
     .slice(0, 24);
+}
+
+export function redactSensitiveText(value: unknown) {
+  const text =
+    Array.isArray(value)
+      ? value.map(item => String(item)).join('; ')
+      : typeof value === 'string'
+        ? value
+        : value == null
+          ? ''
+          : JSON.stringify(value);
+
+  return SENSITIVE_TEXT_PATTERNS.reduce(
+    (current, pattern) => current.replace(pattern, match => {
+      const prefix = match.includes('=') ? match.split('=')[0] : 'token';
+      return `${prefix}=[redacted]`;
+    }),
+    text,
+  );
 }
 
 export function auditRequestContext(request?: Request) {
