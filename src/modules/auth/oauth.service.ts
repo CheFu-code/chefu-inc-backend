@@ -285,6 +285,7 @@ export class OAuthService {
       code_challenge_methods_supported: ['S256'],
       dpop_signing_alg_values_supported: ['ES256', 'RS256'],
       require_signed_authorization_response: this.jarmRequired,
+      prompt_values_supported: ['login', 'none', 'select_account'],
       fapi_profile_enforced: this.fapiEnforced,
       scopes_supported: this.supportedScopes(),
       claims_supported: [
@@ -325,6 +326,7 @@ export class OAuthService {
       code_challenge_methods_supported: ['S256'],
       dpop_signing_alg_values_supported: ['ES256', 'RS256'],
       require_signed_authorization_response: this.jarmRequired,
+      prompt_values_supported: ['login', 'none', 'select_account'],
       fapi_profile_enforced: this.fapiEnforced,
       scopes_supported: this.supportedScopes(),
     };
@@ -482,9 +484,19 @@ export class OAuthService {
     }
 
     const forceFreshLogin = this.requiresFreshLogin(params.prompt);
+    const silentLoginOnly = this.hasPromptValue(params.prompt, 'none');
     const decoded = await this.getSessionUser(request);
 
     if (!decoded || forceFreshLogin) {
+      if (!decoded && silentLoginOnly) {
+        this.redirectError(
+          params,
+          'login_required',
+          'No active CheFu session is available.',
+          client,
+        );
+      }
+
       return {
         redirectTo: this.buildLoginRedirect(params, client, forceFreshLogin),
       };
@@ -576,9 +588,20 @@ export class OAuthService {
   }
 
   private requiresFreshLogin(prompt?: string) {
+    return this.promptValues(prompt).some(
+      value => value === 'login' || value === 'select_account',
+    );
+  }
+
+  private hasPromptValue(prompt: string | undefined, expected: string) {
+    return this.promptValues(prompt).includes(expected);
+  }
+
+  private promptValues(prompt?: string) {
     return (prompt || '')
       .split(/\s+/)
-      .some(value => value === 'login' || value === 'select_account');
+      .map(value => value.trim())
+      .filter(Boolean);
   }
 
   private async exchangeCode(body: TokenPayload, request: Request, dpop?: string) {
@@ -1018,6 +1041,11 @@ export class OAuthService {
       throw new BadRequestException('Invalid redirect_uri for this client.');
     }
 
+    const promptError = this.validatePromptParam(params.prompt);
+    if (promptError) {
+      return this.redirectError(params, 'invalid_request', promptError, client);
+    }
+
     if (params.response_mode && params.response_mode !== 'jwt' && params.response_mode !== 'query') {
       return this.redirectError(params, 'invalid_request', 'Unsupported response_mode.', client);
     }
@@ -1087,6 +1115,22 @@ export class OAuthService {
       error_description: description,
       redirect_to: url.toString(),
     });
+  }
+
+  private validatePromptParam(prompt?: string) {
+    const values = this.promptValues(prompt);
+    if (values.length === 0) return null;
+
+    const allowed = new Set(['login', 'none', 'select_account']);
+    if (values.some(value => !allowed.has(value))) {
+      return 'Unsupported prompt value.';
+    }
+
+    if (values.includes('none') && values.length > 1) {
+      return 'prompt=none cannot be combined with other prompt values.';
+    }
+
+    return null;
   }
 
   private async getSessionUser(request: Request) {

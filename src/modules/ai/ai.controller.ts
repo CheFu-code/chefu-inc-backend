@@ -66,7 +66,12 @@ export class AiController {
       return { result };
     } catch (error) {
       if (error instanceof BadGatewayException) throw error;
-      console.error('[AI Generate API] Failed:', error);
+      this.logger.error(
+        JSON.stringify({
+          event: 'ai_generate_failed',
+          error: error instanceof Error ? error.message : 'Unknown error',
+        }),
+      );
       throw new InternalServerErrorException('Failed to generate AI content.');
     }
   }

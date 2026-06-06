@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { DocumentData, FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { hashForAudit } from '../../common/security-audit';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
@@ -84,8 +85,8 @@ export class QuantumService {
     this.logger.log(
       JSON.stringify({
         event: 'quantum_conversations_saved',
-        uid: user.uid,
-        email: user.email,
+        uidHash: hashForAudit(user.uid),
+        emailHash: hashForAudit(user.email),
         count: normalized.length,
       }),
     );
