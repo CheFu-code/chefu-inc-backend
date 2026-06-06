@@ -10,7 +10,10 @@
     "lint": "eslint \"src/**/*.ts\"",
     "smoke": "node scripts/smoke-routes.mjs",
     "sync:flow-template": "node scripts/sync-flow-resend-template.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "jest --runInBand",
+    "test:security": "jest --runInBand test",
+    "build:production": "npm run lint && npm run typecheck && npm run test:security && npm run build"
   },
   "dependencies": {
     "@google/genai": "^1.38.0",
@@ -31,9 +34,15 @@
     "typescript": "^5.9.3"
   },
   "devDependencies": {
+    "@nestjs/testing": "^11.1.24",
+    "@types/jest": "^30.0.0",
+    "@types/supertest": "^7.2.0",
     "@typescript-eslint/eslint-plugin": "^8.49.0",
     "@typescript-eslint/parser": "^8.49.0",
     "eslint": "^9.39.1",
+    "jest": "^30.4.2",
+    "supertest": "^7.2.2",
+    "ts-jest": "^29.4.11",
     "tsx": "^4.21.0"
   }
 }

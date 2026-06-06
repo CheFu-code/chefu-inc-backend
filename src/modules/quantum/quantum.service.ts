@@ -239,10 +239,9 @@ export class QuantumService {
   }
 
   private cleanId(value: unknown) {
-    return String(value || '')
-      .trim()
-      .replace(/[^a-zA-Z0-9._:-]/g, '')
-      .slice(0, 140);
+    const id = String(value || '').trim();
+    if (!id || id.length > 140 || !/^[a-zA-Z0-9._:-]+$/.test(id)) return '';
+    return id;
   }
 
   private cleanText(value: unknown, maxLength: number) {

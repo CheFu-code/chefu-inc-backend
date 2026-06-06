@@ -1,0 +1,73 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  attestations: write
+  contents: read
+  id-token: write
+
+env:
+  NODE_ENV: production
+  NODE_VERSION: 22.13.x
+
+jobs:
+  verify-and-package:
+    name: Security, Tests, Audit, and Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          cache: npm
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run backend security integration tests
+        run: npm run test:security -- --silent
+
+      - name: Audit production dependency risk
+        run: npm audit --audit-level=high
+
+      - name: Build production API
+        run: npm run build
+
+      - name: Package backend artifact
+        run: |
+          set -euo pipefail
+          mkdir -p build-artifacts/backend
+          tar -czf build-artifacts/backend/chefu-api-dist-${{ github.sha }}.tgz dist package.json package-lock.json
+          (cd build-artifacts/backend && sha256sum *.tgz > SHA256SUMS)
+
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: chefu-api-production-${{ github.sha }}
+          path: build-artifacts/backend/*
+          retention-days: 30
+
+      - name: Attest backend artifact
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: build-artifacts/backend/*
