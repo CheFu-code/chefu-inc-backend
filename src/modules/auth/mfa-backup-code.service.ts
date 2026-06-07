@@ -87,6 +87,7 @@ export class MfaBackupCodeService {
 
     const codes = Array.from({ length: 10 }, () => this.createBackupCode());
     const now = admin.firestore.FieldValue.serverTimestamp();
+    const codeCreatedAt = admin.firestore.Timestamp.now();
 
     await this.firebaseAdmin
       .db()
@@ -97,7 +98,7 @@ export class MfaBackupCodeService {
           mfaBackupCodes: {
             codes: codes.map(code => ({
               hash: this.hashBackupCode(this.normalizeBackupCode(code), uid),
-              createdAt: now,
+              createdAt: codeCreatedAt,
               usedAt: null,
             })),
             remaining: codes.length,
@@ -174,11 +175,12 @@ export class MfaBackupCodeService {
 
       if (index < 0) return false;
 
+      const usedAt = admin.firestore.Timestamp.now();
       const nextCodes = codes.map((record, currentIndex) =>
         currentIndex === index
           ? {
               ...record,
-              usedAt: admin.firestore.FieldValue.serverTimestamp(),
+              usedAt,
             }
           : record,
       );
@@ -191,7 +193,7 @@ export class MfaBackupCodeService {
             ...backupState,
             codes: nextCodes,
             remaining,
-            lastUsedAt: admin.firestore.FieldValue.serverTimestamp(),
+            lastUsedAt: usedAt,
           },
         },
         { merge: true },
