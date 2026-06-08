@@ -122,14 +122,33 @@ export class EmailController {
       };
     }
 
-    await this.mfaSecurityEmail.send({
-      action,
-      email,
-      eventTime: new Date(),
-      ipAddress: this.getClientIp(request),
-      location: body?.location || profile.location,
-      userName: body?.userName || profile.name,
-    });
+    try {
+      await this.mfaSecurityEmail.send({
+        action,
+        email,
+        eventTime: new Date(),
+        ipAddress: this.getClientIp(request),
+        location: body?.location || profile.location,
+        userName: body?.userName || profile.name,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'unknown';
+
+      this.logger.error(
+        JSON.stringify({
+          event: 'mfa_changed_email_failed',
+          action,
+          email,
+          reason,
+        }),
+        error instanceof Error ? error.stack : undefined,
+      );
+
+      return {
+        sent: false,
+        reason,
+      };
+    }
 
     this.logger.log(
       JSON.stringify({

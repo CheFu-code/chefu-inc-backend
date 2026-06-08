@@ -24,10 +24,11 @@ export class MfaSecurityEmailService {
     process.env.TWO_FACTOR_DISABLED_TEMPLATE_ID ||
     process.env['2FA_DISABLED_TEMPLATE_ID'] ||
     '2fa-disabled';
-  private readonly fromAddress =
+  private readonly fromAddress = this.normalizeFromAddress(
     process.env.SECURITY_EMAIL_FROM ||
-    process.env.SIGNIN_ALERT_FROM ||
-    'CheFu Account <security@chefuinc.com>';
+      process.env.SIGNIN_ALERT_FROM ||
+      'CheFu Account <security@chefuinc.com>',
+  );
   private readonly securityUrl =
     process.env.SIGNIN_ALERT_SECURITY_URL ||
     'https://myaccount.chefuinc.com/account?section=security';
@@ -98,5 +99,15 @@ export class MfaSecurityEmailService {
       timeZoneName: 'short',
       year: 'numeric',
     });
+  }
+
+  private normalizeFromAddress(value: string) {
+    const trimmed = value.trim().replace(/\\"/g, '"');
+    const isDoubleQuoted = trimmed.startsWith('"') && trimmed.endsWith('"');
+    const isSingleQuoted = trimmed.startsWith("'") && trimmed.endsWith("'");
+
+    return isDoubleQuoted || isSingleQuoted
+      ? trimmed.slice(1, -1).trim()
+      : trimmed;
   }
 }
