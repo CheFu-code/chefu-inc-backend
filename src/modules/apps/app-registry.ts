@@ -1,6 +1,6 @@
 export const CHEFU_APP_HEADER = 'x-chefu-app';
 
-export type ChefuAppId = 'academy' | 'admin' | 'flow' | 'muzalo' | 'quantum' | 'synapse';
+export type ChefuAppId = 'academy' | 'admin' | 'flow' | 'muzalo' | 'quantum' | 'synapse' | 'drippybanks';
 type ChefuAppAlias = 'music';
 
 export type ChefuApp = {
@@ -56,6 +56,11 @@ export const CHEFU_APPS: ChefuApp[] = [
     id: 'synapse',
     name: 'Synapse',
     origins: ['http://localhost:3005', 'https://synapse.chefuinc.com'],
+  },
+  {
+    id: 'drippybanks',
+    name: 'Drippy Banks',
+    origins: ['http://localhost:3006', 'https://drippybanks.chefuinc.com'],
   },
 ];
 
@@ -153,6 +158,17 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
     name: 'Quantum Mobile',
     redirectUris: ['quantum://auth'],
     scopes: ['openid', 'profile', 'email', 'quantum:chat', 'quantum:read'],
+  },
+  {
+    id: 'drippybanks-web',
+    appId: 'drippybanks',
+    name: 'Drippy Banks',
+    redirectUris: [
+      'https://drippybanks.chefuinc.com/auth/callback',
+      'http://localhost:3006/auth/callback',
+      'https://myaccount.chefuinc.com/auth/callback',
+    ],
+    scopes: ['openid', 'profile', 'email'],
   },
 ];
 
