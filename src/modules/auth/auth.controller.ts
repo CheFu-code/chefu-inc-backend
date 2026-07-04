@@ -461,6 +461,7 @@ export class AuthController {
         userName: meta.name,
         provider: tokenPayload.firebase.sign_in_provider,
         request,
+        appId: sessionAppId,
       });
     }
 
@@ -1274,12 +1275,14 @@ export class AuthController {
     request,
     uid,
     userName,
+    appId,
   }: {
     email: string;
     provider: string;
     request: Request;
     uid: string;
     userName?: string;
+    appId?: ChefuAppId;
   }) {
     try {
       const decision = await this.reserveSignInAlert({
@@ -1308,6 +1311,7 @@ export class AuthController {
         deviceInfo: request.headers['user-agent'] || undefined,
         ipAddress: this.getClientIp(request),
         timestamp: new Date(),
+        appId,
       });
 
       this.logger.log(

@@ -7,6 +7,7 @@ export interface SignInNotificationData {
   deviceInfo?: string;
   ipAddress?: string;
   timestamp: Date;
+  appId?: string;
 }
 
 export interface PasswordChangedNotificationData {
@@ -185,10 +186,12 @@ export class ResendService {
 
   private getSignInPayload(data: SignInNotificationData) {
     const details = this.getDetails(data);
+    const appLabel = this.resolveAppLabel(data.appId);
+    const fromAddress = this.resolveFromAddress(data.appId);
     const basePayload = {
-      from: this.fromAddress,
+      from: fromAddress,
       to: [data.email],
-      subject: 'Security alert: new sign-in to CheFu Academy',
+      subject: `Security alert: new sign-in to ${appLabel}`,
     };
 
     if (this.signInTemplateId) {
@@ -198,7 +201,7 @@ export class ResendService {
           id: this.signInTemplateId,
           variables: {
             userName: details.userName,
-            APP_NAME: 'CheFu Academy',
+            APP_NAME: appLabel,
             provider: details.provider,
             time: details.time,
             device: details.device || 'Unknown device',
@@ -220,11 +223,12 @@ export class ResendService {
 
   private getSignInEmailText(data: SignInNotificationData): string {
     const details = this.getDetails(data);
+    const appLabel = this.resolveAppLabel(data.appId);
 
     return [
       `Hi ${details.userName},`,
       '',
-      'We noticed a new sign-in to your CheFu Academy account.',
+      `We noticed a new sign-in to your ${appLabel} account.`,
       '',
       `Method: ${details.provider}`,
       `Time: ${details.time}`,
@@ -236,7 +240,7 @@ export class ResendService {
       '',
       `Support: ${this.supportUrl}`,
       '',
-      'CheFu Academy Security',
+      `${appLabel} Security`,
     ]
       .filter(Boolean)
       .join('\n');
@@ -244,10 +248,11 @@ export class ResendService {
 
   private getPasswordChangedPayload(data: PasswordChangedNotificationData) {
     const details = this.getPasswordDetails(data);
+    const appLabel = 'CheFu Account';
     const basePayload = {
       from: this.fromAddress,
       to: [data.email],
-      subject: 'Security alert: your CheFu Academy password changed',
+      subject: `Security alert: your ${appLabel} password changed`,
     };
 
     if (this.passwordChangedTemplateId) {
@@ -257,7 +262,7 @@ export class ResendService {
           id: this.passwordChangedTemplateId,
           variables: {
             userName: details.userName,
-            APP_NAME: 'CheFu Academy',
+            APP_NAME: appLabel,
             time: details.time,
             device: details.device || 'Unknown device',
             ipAddress: details.ipAddress || 'Unknown IP address',
@@ -520,11 +525,12 @@ export class ResendService {
     data: PasswordChangedNotificationData,
   ): string {
     const details = this.getPasswordDetails(data);
+    const appLabel = 'CheFu Account';
 
     return [
       `Hi ${details.userName},`,
       '',
-      'Your CheFu Academy password was changed.',
+      `Your ${appLabel} password was changed.`,
       '',
       `Time: ${details.time}`,
       details.device ? `Device: ${details.device}` : '',
@@ -535,7 +541,7 @@ export class ResendService {
       '',
       `Support: ${this.supportUrl}`,
       '',
-      'CheFu Academy Security',
+      `${appLabel} Security`,
     ]
       .filter(Boolean)
       .join('\n');
@@ -545,6 +551,7 @@ export class ResendService {
     data: PasswordChangedNotificationData,
   ): string {
     const details = this.getPasswordDetails(data);
+    const appLabel = 'CheFu Account';
 
     return `
 <!doctype html>
@@ -552,7 +559,7 @@ export class ResendService {
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Password changed on CheFu Academy</title>
+    <title>Password changed on ${appLabel}</title>
   </head>
   <body style="margin:0;padding:0;background:#f5f7fb;color:#111827;font-family:Arial,Helvetica,sans-serif;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7fb;padding:24px 12px;">
@@ -568,7 +575,7 @@ export class ResendService {
                   Your password was changed
                 </h1>
                 <p style="margin:10px 0 0;color:#cbd5e1;font-size:15px;line-height:1.6;">
-                  We are letting you know because this protects your CheFu Academy account.
+                  We are letting you know because this protects your ${appLabel} account.
                 </p>
               </td>
             </tr>
@@ -617,14 +624,14 @@ export class ResendService {
                 </table>
 
                 <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
-                  This message was sent automatically by CheFu Academy to help protect your account.
+                  This message was sent automatically by ${appLabel} to help protect your account.
                 </p>
               </td>
             </tr>
 
             <tr>
               <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 28px;color:#6b7280;font-size:12px;line-height:1.6;">
-                <strong style="color:#374151;">CheFu Academy Security</strong><br>
+                <strong style="color:#374151;">${appLabel} Security</strong><br>
                 Copyright ${new Date().getUTCFullYear()} CheFu Inc. All rights reserved.
               </td>
             </tr>
@@ -639,13 +646,15 @@ export class ResendService {
   private getSignInEmailTemplate(data: SignInNotificationData): string {
     const details = this.getDetails(data);
 
+    const appLabel = this.resolveAppLabel(data.appId);
+
     return `
 <!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>New sign-in to CheFu Academy</title>
+    <title>New sign-in to ${appLabel}</title>
   </head>
   <body style="margin:0;padding:0;background:#f5f7fb;color:#111827;font-family:Arial,Helvetica,sans-serif;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7fb;padding:24px 12px;">
@@ -661,7 +670,7 @@ export class ResendService {
                   New sign-in detected
                 </h1>
                 <p style="margin:10px 0 0;color:#cbd5e1;font-size:15px;line-height:1.6;">
-                  We noticed access to your CheFu Academy account.
+                  We noticed access to your ${appLabel} account.
                 </p>
               </td>
             </tr>
@@ -711,14 +720,14 @@ export class ResendService {
                 </table>
 
                 <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
-                  This message was sent automatically by CheFu Academy to help protect your account.
+                  This message was sent automatically by ${appLabel} to help protect your account.
                 </p>
               </td>
             </tr>
 
             <tr>
               <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 28px;color:#6b7280;font-size:12px;line-height:1.6;">
-                <strong style="color:#374151;">CheFu Academy Security</strong><br>
+                <strong style="color:#374151;">${appLabel} Security</strong><br>
                 Copyright ${new Date().getUTCFullYear()} CheFu Inc. All rights reserved.
               </td>
             </tr>
@@ -728,6 +737,28 @@ export class ResendService {
     </table>
   </body>
 </html>`;
+  }
+
+  private resolveAppLabel(appId?: string) {
+    if (!appId) return 'CheFu Account';
+
+    const normalized = appId.trim().toLowerCase();
+    const labels: Record<string, string> = {
+      academy: 'CheFu Academy',
+      admin: 'CheFu Admin',
+      flow: 'Flow Mail',
+      muzalo: 'Muzalo',
+      quantum: 'Quantum',
+      synapse: 'Synapse',
+      drippybanks: 'Drippy Banks',
+    };
+
+    return labels[normalized] || 'CheFu Account';
+  }
+
+  private resolveFromAddress(appId?: string) {
+    const appLabel = this.resolveAppLabel(appId);
+    return `${appLabel} <security@chefuinc.com>`;
   }
 
   private getDetails(data: SignInNotificationData) {
