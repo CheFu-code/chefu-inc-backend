@@ -63,7 +63,7 @@ Set these on the backend:
 
 - `KEYCLOAK_ISSUER=https://auth.chefuinc.com/realms/chefu`
 - `KEYCLOAK_CLIENT_ID=chefu-backend`
-- `KEYCLOAK_AUDIENCE=chefu-backend`
+- `KEYCLOAK_AUDIENCE=chefu-backend,chefu-web`
 
 For local development:
 
@@ -71,9 +71,8 @@ For local development:
 docker compose -f docker-compose.keycloak.yml up
 ```
 
-Then open `http://localhost:8080`, create the `chefu` realm, create a
-confidential or bearer-only API client named `chefu-backend`, and set the
-backend env values shown in `.env.example`.
+Then open `http://localhost:8080`. The local setup uses the `chefu` realm,
+`chefu-backend` API client, and `chefu-web` public browser client.
 
 ## Backend Structure
 
