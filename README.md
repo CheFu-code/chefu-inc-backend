@@ -44,6 +44,37 @@ OAuth 2.0 Authorization Code flow with PKCE and OIDC discovery:
 Registered OAuth clients live in `src/modules/apps/app-registry.ts`. Public
 browser clients must use `code_challenge_method=S256`.
 
+## Keycloak Integration
+
+Keycloak should run as a separate identity server, not as a copied source tree
+or Node library. When `KEYCLOAK_ISSUER` or `KEYCLOAK_BASE_URL` +
+`KEYCLOAK_REALM` are configured, protected backend routes accept Keycloak
+Bearer access tokens through the existing `AuthGuard`.
+
+Recommended production shape:
+
+```txt
+Keycloak -> issues OIDC tokens
+CheFu API -> validates Keycloak JWKS and enforces app/API permissions
+CheFu apps -> sign in with Keycloak and call CheFu API with access tokens
+```
+
+Set these on the backend:
+
+- `KEYCLOAK_ISSUER=https://auth.chefuinc.com/realms/chefu`
+- `KEYCLOAK_CLIENT_ID=chefu-backend`
+- `KEYCLOAK_AUDIENCE=chefu-backend`
+
+For local development:
+
+```bash
+docker compose -f docker-compose.keycloak.yml up
+```
+
+Then open `http://localhost:8080`, create the `chefu` realm, create a
+confidential or bearer-only API client named `chefu-backend`, and set the
+backend env values shown in `.env.example`.
+
 ## Backend Structure
 
 This backend is organized as a shared CheFu platform plus product modules:

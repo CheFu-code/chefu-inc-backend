@@ -11,6 +11,7 @@ import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { AuthenticatedUser } from './authenticated-user';
 import { HoneytokenService } from './honeytoken.service';
+import { KeycloakJwtService } from './keycloak-jwt.service';
 import { OAuthService } from './oauth.service';
 import {
   SESSION_COOKIE_NAME,
@@ -24,7 +25,7 @@ type RequestWithUser = Request & {
 };
 
 type AuthResolution = {
-  source: 'firebase_bearer' | 'oauth_bearer' | 'session_cookie';
+  source: 'firebase_bearer' | 'keycloak_bearer' | 'oauth_bearer' | 'session_cookie';
   user: AuthenticatedUser;
 };
 
@@ -37,6 +38,8 @@ export class AuthGuard implements CanActivate {
     private readonly firebaseAdmin: FirebaseAdminService,
     @Inject(OAuthService)
     private readonly oauthService: OAuthService,
+    @Inject(KeycloakJwtService)
+    private readonly keycloakJwt: KeycloakJwtService,
     @Inject(HoneytokenService)
     private readonly honeytokens: HoneytokenService,
     @Inject(SessionSignerService)
@@ -117,6 +120,26 @@ export class AuthGuard implements CanActivate {
         },
       };
     } catch {
+      if (this.keycloakJwt.enabled()) {
+        try {
+          const keycloakUser = await this.keycloakJwt.verifyAccessToken(token);
+
+          return {
+            source: 'keycloak_bearer',
+            user: {
+              uid: keycloakUser.uid,
+              email: keycloakUser.email,
+              roles: this.mergeRoles(
+                keycloakUser.roles,
+                keycloakUser.email ? await this.getUserRoles(keycloakUser.email) : [],
+              ),
+            },
+          };
+        } catch {
+          // Fall through to the CheFu OAuth verifier so existing tokens keep working.
+        }
+      }
+
       const dpop = request.headers.dpop;
       const claims = await this.oauthService.verifyAccessToken(
         token,
@@ -177,5 +200,15 @@ export class AuthGuard implements CanActivate {
 
     const roles = snapshot.data()?.roles;
     return Array.isArray(roles) ? roles.map(String) : [];
+  }
+
+  private mergeRoles(primary: string[], secondary: string[]) {
+    return [
+      ...new Set(
+        [...primary, ...secondary]
+          .map(role => role.trim())
+          .filter(Boolean),
+      ),
+    ];
   }
 }
