@@ -1029,9 +1029,27 @@ export class OAuthService {
           JSON.stringify({
             event: 'invalid_oauth_private_key',
             hint: 'OAUTH_PRIVATE_KEY is not a supported PEM or base64-encoded PEM. Ensure it contains a PEM block (-----BEGIN ...-----) or is a base64 encoding of a PEM.',
+            sample: this.maskForLog(configuredPrivateKeyRaw),
           }),
         );
-        throw err;
+
+        // Fall back to a generated ephemeral key instead of crashing the process.
+        const generatedFallback = generateKeyPairSync('rsa', { modulusLength: 2048 });
+        this.logger.warn(
+          JSON.stringify({
+            event: 'using_ephemeral_oauth_signing_key',
+            hint: 'Falling back to an ephemeral RSA key because OAUTH_PRIVATE_KEY could not be loaded. Tokens will be invalid after restart.',
+          }),
+        );
+
+        return [
+          {
+            kid: process.env.OAUTH_KEY_ID || 'chefu-oauth-production-key',
+            privateKey: generatedFallback.privateKey,
+            publicKey: generatedFallback.publicKey,
+            status: 'active',
+          },
+        ];
       }
 
       return [
@@ -1073,14 +1091,24 @@ export class OAuthService {
       .map(item => {
         if (!item.kid || !item.privateKey) return null;
         const normalized = this.normalizePrivateKey(item.privateKey);
-        const privateKey = createPrivateKey(normalized);
-
-        return {
-          kid: item.kid,
-          privateKey,
-          publicKey: createPublicKey(privateKey),
-          status: item.status || 'next',
-        } satisfies SigningKey;
+        try {
+          const privateKey = createPrivateKey(normalized);
+          return {
+            kid: item.kid,
+            privateKey,
+            publicKey: createPublicKey(privateKey),
+            status: item.status || 'next',
+          } satisfies SigningKey;
+        } catch (err) {
+          this.logger.error(
+            JSON.stringify({
+              event: 'invalid_oauth_signing_key_in_json',
+              kid: item.kid,
+              sample: this.maskForLog(item.privateKey),
+            }),
+          );
+          return null;
+        }
       })
       .filter((key): key is SigningKey => Boolean(key));
 
@@ -1135,7 +1163,18 @@ export class OAuthService {
     // Replace escaped newlines (as commonly stored in env vars) with real newlines
     key = key.replace(/\\n/g, '\n');
 
-    // If the value is a base64-encoded PEM, attempt to decode it
+    // If header and footer are present on one line with the base64 body,
+    // reflow the body into 64-char lines so OpenSSL accepts it.
+    const singleLinePem = key.match(/(-----BEGIN [A-Z ]+-----)\s*([A-Za-z0-9+/=]+)\s*(-----END [A-Z ]+-----)/s);
+    if (singleLinePem) {
+      const header = singleLinePem[1];
+      const body = singleLinePem[2].replace(/\s+/g, '');
+      const footer = singleLinePem[3];
+      const reflowed = body.match(/.{1,64}/g)?.join('\n') || body;
+      return `${header}\n${reflowed}\n${footer}\n`;
+    }
+
+    // If the value looks like base64 of a PEM, attempt to decode it
     if (!/-----BEGIN [A-Z ]+-----/.test(key)) {
       try {
         const decoded = Buffer.from(key, 'base64').toString('utf8');
@@ -1148,6 +1187,13 @@ export class OAuthService {
     }
 
     return key;
+  }
+
+  private maskForLog(raw?: string) {
+    if (!raw) return '';
+    const s = String(raw).replace(/\s+/g, ' ');
+    if (s.length <= 80) return s.replace(/(.{10}).+(.{10})/, '$1...$2');
+    return `${s.slice(0, 40)}...${s.slice(-40)}`;
   }
 
   private async verifyTokenEndpointDpopProof(request: Request, dpop?: string) {
