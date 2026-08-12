@@ -61,7 +61,29 @@ export class FirebaseAdminService {
     const rawServiceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
 
     if (rawServiceAccount) {
-      return JSON.parse(rawServiceAccount) as admin.ServiceAccount;
+      const parsed = JSON.parse(rawServiceAccount) as Record<string, unknown>;
+
+      // Some deploy systems provide the service account JSON with
+      // escaped newlines in the private key ("\\n"). Normalize that
+      // so firebase-admin can parse the PEM correctly.
+      if (typeof parsed.private_key === 'string') {
+        parsed.private_key = (parsed.private_key as string).replace(/\\n/g, '\n');
+      }
+
+      // Normalize common JSON key names to the shape admin SDK expects.
+      if (!parsed.projectId && parsed.project_id) {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        parsed.projectId = parsed.project_id;
+      }
+
+      if (!parsed.clientEmail && parsed.client_email) {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        parsed.clientEmail = parsed.client_email;
+      }
+
+      return parsed as admin.ServiceAccount;
     }
 
     const projectId = process.env.FIREBASE_PROJECT_ID;
