@@ -61,16 +61,35 @@ export class FirebaseAdminService {
     const rawServiceAccount = process.env.FIREBASE_SERVICE_ACCOUNT;
 
     if (rawServiceAccount) {
-      const parsed = JSON.parse(rawServiceAccount) as Record<string, unknown>;
+      let parsed: Record<string, unknown> | null = null;
 
-      // Some deploy systems provide the service account JSON with
-      // escaped newlines in the private key ("\\n"). Normalize that
-      // so firebase-admin can parse the PEM correctly.
-      if (typeof parsed.private_key === 'string') {
-        parsed.private_key = (parsed.private_key as string).replace(/\\n/g, '\n');
+      // Try plain JSON parse first
+      try {
+        parsed = JSON.parse(rawServiceAccount) as Record<string, unknown>;
+      } catch (err) {
+        // If parsing fails, try base64 decode then parse (common in container envs)
+        try {
+          const decoded = Buffer.from(rawServiceAccount, 'base64').toString('utf8');
+          parsed = JSON.parse(decoded) as Record<string, unknown>;
+        } catch (err2) {
+          throw new Error(
+            'Failed to parse FIREBASE_SERVICE_ACCOUNT: not valid JSON or base64-encoded JSON.',
+          );
+        }
       }
 
-      // Normalize common JSON key names to the shape admin SDK expects.
+      // Normalize private key newlines — handle single- and double-escaped sequences
+      if (typeof parsed.private_key === 'string') {
+        let pk = parsed.private_key as string;
+        // Remove surrounding quotes if present
+        if (pk.startsWith('"') && pk.endsWith('"')) {
+          pk = pk.slice(1, -1);
+        }
+        pk = pk.replace(/\\\\n/g, '\n').replace(/\\n/g, '\n');
+        parsed.private_key = pk;
+      }
+
+      // Also accept alternative key names used by different formats
       if (!parsed.projectId && parsed.project_id) {
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
@@ -81,6 +100,16 @@ export class FirebaseAdminService {
         // eslint-disable-next-line @typescript-eslint/ban-ts-comment
         // @ts-ignore
         parsed.clientEmail = parsed.client_email;
+      }
+
+      // Validate private key looks like a PEM
+      if (typeof parsed.private_key === 'string') {
+        const key = parsed.private_key as string;
+        if (!key.includes('BEGIN') || !key.includes('PRIVATE KEY')) {
+          throw new Error(
+            'FIREBASE_SERVICE_ACCOUNT.private_key appears malformed; ensure newlines are correctly encoded (\\n) and the key includes PEM headers.',
+          );
+        }
       }
 
       return parsed as admin.ServiceAccount;
