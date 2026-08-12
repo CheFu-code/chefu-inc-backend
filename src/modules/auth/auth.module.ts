@@ -7,7 +7,6 @@ import { MfaBackupCodeService } from './mfa-backup-code.service';
 import { OAuthService } from './oauth.service';
 import { SessionSignerService } from './session-signer.service';
 import { HoneytokenService } from './honeytoken.service';
-import { KeycloakJwtService } from './keycloak-jwt.service';
 import { SecurityEventsService } from './security-events.service';
 import { AppsModule } from '../apps/apps.module';
 import { EmailModule } from '../email/email.module';
@@ -21,7 +20,6 @@ import { EmailModule } from '../email/email.module';
     SessionSignerService,
     MfaBackupCodeService,
     OAuthService,
-    KeycloakJwtService,
     SecurityEventsService,
     HoneytokenService,
   ],
@@ -29,7 +27,6 @@ import { EmailModule } from '../email/email.module';
     AuthGuard,
     AdminGuard,
     OAuthService,
-    KeycloakJwtService,
     SessionSignerService,
     SecurityEventsService,
     HoneytokenService,

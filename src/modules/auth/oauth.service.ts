@@ -1017,11 +1017,22 @@ export class OAuthService {
   private loadSigningKeys(): SigningKey[] {
     const configuredKeys = this.parseSigningKeysJson();
     if (configuredKeys.length > 0) return configuredKeys;
-
-    const configuredPrivateKey = process.env.OAUTH_PRIVATE_KEY?.replace(/\\n/g, '\n');
+    const configuredPrivateKeyRaw = process.env.OAUTH_PRIVATE_KEY;
+    const configuredPrivateKey = this.normalizePrivateKey(configuredPrivateKeyRaw);
 
     if (configuredPrivateKey) {
-      const privateKey = createPrivateKey(configuredPrivateKey);
+      let privateKey: KeyObject;
+      try {
+        privateKey = createPrivateKey(configuredPrivateKey);
+      } catch (err) {
+        this.logger.error(
+          JSON.stringify({
+            event: 'invalid_oauth_private_key',
+            hint: 'OAUTH_PRIVATE_KEY is not a supported PEM or base64-encoded PEM. Ensure it contains a PEM block (-----BEGIN ...-----) or is a base64 encoding of a PEM.',
+          }),
+        );
+        throw err;
+      }
 
       return [
         {
@@ -1061,7 +1072,8 @@ export class OAuthService {
     const keys = parsed
       .map(item => {
         if (!item.kid || !item.privateKey) return null;
-        const privateKey = createPrivateKey(item.privateKey.replace(/\\n/g, '\n'));
+        const normalized = this.normalizePrivateKey(item.privateKey);
+        const privateKey = createPrivateKey(normalized);
 
         return {
           kid: item.kid,
@@ -1109,6 +1121,33 @@ export class OAuthService {
     }
 
     return clients;
+  }
+
+  private normalizePrivateKey(raw?: string) {
+    if (!raw) return '';
+    let key = String(raw).trim();
+
+    // Strip surrounding quotes if accidentally included
+    if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+      key = key.slice(1, -1);
+    }
+
+    // Replace escaped newlines (as commonly stored in env vars) with real newlines
+    key = key.replace(/\\n/g, '\n');
+
+    // If the value is a base64-encoded PEM, attempt to decode it
+    if (!/-----BEGIN [A-Z ]+-----/.test(key)) {
+      try {
+        const decoded = Buffer.from(key, 'base64').toString('utf8');
+        if (/-----BEGIN [A-Z ]+-----/.test(decoded)) {
+          return decoded;
+        }
+      } catch {
+        // ignore and return original
+      }
+    }
+
+    return key;
   }
 
   private async verifyTokenEndpointDpopProof(request: Request, dpop?: string) {
