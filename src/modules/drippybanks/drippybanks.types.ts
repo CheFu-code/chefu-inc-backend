@@ -55,12 +55,22 @@ export interface UploadImageInput {
   contentType?: string;
 }
 
-export interface CreatePayPalOrderInput {
+export interface GeneratePayFastPaymentInput {
+  orderId: string;
   amount: number;
-  currency?: string;
-  items?: Array<{ name: string; quantity: number; price: number }>;
+  itemName: string;
+  itemDescription?: string;
+  customer: {
+    fullName: string;
+    email: string;
+    phone?: string;
+  };
+  returnUrl?: string;
+  cancelUrl?: string;
 }
 
-export interface CapturePayPalOrderInput {
-  orderId: string;
+export interface PayFastPaymentData {
+  processUrl: string;
+  fields: Record<string, string>;
 }
+

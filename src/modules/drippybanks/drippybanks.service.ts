@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { FieldValue } from 'firebase-admin/firestore';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { v2 as cloudinary, UploadApiOptions } from 'cloudinary';
 import { AuthenticatedUser } from '../auth/authenticated-user';
@@ -16,8 +16,8 @@ import {
   DrippyProductDocument,
   UpdateProductInput,
   UploadImageInput,
-  CreatePayPalOrderInput,
-  CapturePayPalOrderInput,
+  GeneratePayFastPaymentInput,
+  PayFastPaymentData,
 } from './drippybanks.types';
 
 const ALLOWED_IMAGE_TYPES = new Set([
@@ -497,129 +497,100 @@ export class DrippybanksService {
     );
   }
 
-  // ── PayPal Payment Integration ──
+  // ── PayFast Payment Integration (payfast.io) ──
 
-  private getPayPalBaseUrl(): string {
-    return process.env.PAYPAL_ENVIRONMENT === 'production'
-      ? 'https://api-m.paypal.com'
-      : 'https://api-m.sandbox.paypal.com';
-  }
+  generatePayFastPayment(input: GeneratePayFastPaymentInput): PayFastPaymentData {
+    const merchantId = process.env.PAYFAST_MERCHANT_ID || '10000100';
+    const merchantKey = process.env.PAYFAST_MERCHANT_KEY || '46f0cd694581a';
+    const passphrase = process.env.PAYFAST_PASSPHRASE || '';
+    const isSandbox = process.env.PAYFAST_SANDBOX !== 'false';
+    const processUrl = isSandbox
+      ? 'https://sandbox.payfast.co.za/eng/process'
+      : 'https://www.payfast.co.za/eng/process';
 
-  private async getPayPalAccessToken(): Promise<string> {
-    const clientId = process.env.PAYPAL_CLIENT_ID;
-    const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
-
-    if (!clientId || !clientSecret) {
-      throw new BadRequestException('PayPal is not configured on the server (missing PAYPAL_CLIENT_ID or PAYPAL_CLIENT_SECRET).');
-    }
-
-    const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-    const response = await fetch(`${this.getPayPalBaseUrl()}/v1/oauth2/token`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${auth}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: 'grant_type=client_credentials',
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      this.logger.error(`PayPal auth failed: ${response.status} - ${errorText}`);
-      throw new BadRequestException('Failed to authenticate with PayPal.');
-    }
-
-    const data = (await response.json()) as { access_token: string };
-    return data.access_token;
-  }
-
-  async createPayPalOrder(input: CreatePayPalOrderInput): Promise<{ id: string; status: string }> {
     const amount = Number(input.amount);
     if (isNaN(amount) || amount <= 0) {
       throw new BadRequestException('Valid payment amount is required.');
     }
 
-    const currency = (input.currency || 'USD').toUpperCase();
-    const token = await this.getPayPalAccessToken();
+    const names = (input.customer?.fullName || 'Customer').trim().split(' ');
+    const name_first = names[0] || 'Valued';
+    const name_last = names.slice(1).join(' ') || 'Customer';
 
-    const response = await fetch(`${this.getPayPalBaseUrl()}/v2/checkout/orders`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        intent: 'CAPTURE',
-        purchase_units: [
-          {
-            amount: {
-              currency_code: currency,
-              value: amount.toFixed(2),
-            },
-            description: 'DrippyBanks Streetwear Order',
-          },
-        ],
-      }),
-    });
-
-    const data = (await response.json()) as { id?: string; status?: string; message?: string };
-
-    if (!response.ok || !data.id) {
-      this.logger.error(`PayPal order creation failed: ${JSON.stringify(data)}`);
-      throw new BadRequestException(data.message || 'Failed to create PayPal order.');
-    }
-
-    this.logger.log(
-      JSON.stringify({
-        event: 'drippybanks_paypal_order_created',
-        paypalOrderId: data.id,
-        amount,
-        currency,
-      }),
-    );
-
-    return { id: data.id, status: data.status || 'CREATED' };
-  }
-
-  async capturePayPalOrder(orderId: string): Promise<{ id: string; status: string; payer?: Record<string, unknown> }> {
-    if (!orderId || typeof orderId !== 'string') {
-      throw new BadRequestException('PayPal Order ID is required.');
-    }
-
-    const token = await this.getPayPalAccessToken();
-
-    const response = await fetch(`${this.getPayPalBaseUrl()}/v2/checkout/orders/${orderId}/capture`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    const data = (await response.json()) as {
-      id?: string;
-      status?: string;
-      payer?: Record<string, unknown>;
-      message?: string;
+    const fields: Record<string, string> = {
+      merchant_id: merchantId,
+      merchant_key: merchantKey,
+      return_url:
+        input.returnUrl ||
+        `${process.env.DRIPPYBANKS_APP_URL || 'https://drippybanks.chefuinc.com'}/checkout?payfast_success=true&order_id=${input.orderId}`,
+      cancel_url:
+        input.cancelUrl ||
+        `${process.env.DRIPPYBANKS_APP_URL || 'https://drippybanks.chefuinc.com'}/checkout?cancelled=true`,
+      notify_url:
+        `${process.env.BACKEND_PUBLIC_URL || 'https://api.chefuinc.com'}/drippybanks/payfast/notify`,
+      name_first,
+      name_last,
+      email_address: input.customer?.email?.trim() || 'customer@drippybanks.com',
+      m_payment_id: input.orderId,
+      amount: amount.toFixed(2),
+      item_name: (input.itemName || `DrippyBanks Order ${input.orderId}`).slice(0, 100),
     };
 
-    if (!response.ok || !data.id) {
-      this.logger.error(`PayPal order capture failed: ${JSON.stringify(data)}`);
-      throw new BadRequestException(data.message || 'Failed to capture PayPal order.');
+    if (input.customer?.phone) {
+      fields.cell_number = input.customer.phone.trim();
     }
+    if (input.itemDescription) {
+      fields.item_description = input.itemDescription.slice(0, 255);
+    }
+
+    // Build PayFast parameter string for MD5 signature
+    let pfOutput = '';
+    for (const key in fields) {
+      if (Object.prototype.hasOwnProperty.call(fields, key) && fields[key] !== '') {
+        pfOutput += `${key}=${encodeURIComponent(fields[key].trim()).replace(/%20/g, '+')}&`;
+      }
+    }
+
+    let getString = pfOutput.slice(0, -1);
+    if (passphrase) {
+      getString += `&passphrase=${encodeURIComponent(passphrase.trim()).replace(/%20/g, '+')}`;
+    }
+
+    const signature = createHash('md5').update(getString).digest('hex');
+    fields.signature = signature;
 
     this.logger.log(
       JSON.stringify({
-        event: 'drippybanks_paypal_order_captured',
-        paypalOrderId: data.id,
-        status: data.status,
+        event: 'drippybanks_payfast_payment_generated',
+        orderId: input.orderId,
+        amount: fields.amount,
+        isSandbox,
       }),
     );
 
     return {
-      id: data.id,
-      status: data.status || 'COMPLETED',
-      payer: data.payer,
+      processUrl,
+      fields,
     };
+  }
+
+  async handlePayFastNotify(body: Record<string, unknown>): Promise<{ status: string }> {
+    this.logger.log(
+      JSON.stringify({
+        event: 'drippybanks_payfast_itn_received',
+        paymentId: body.m_payment_id,
+        pfPaymentId: body.pf_payment_id,
+        paymentStatus: body.payment_status,
+      }),
+    );
+
+    const paymentStatus = String(body.payment_status || '').toUpperCase();
+    const orderId = String(body.m_payment_id || '');
+
+    if (paymentStatus === 'COMPLETE' && orderId) {
+      this.logger.log(`PayFast payment confirmed for order ${orderId}`);
+    }
+
+    return { status: 'OK' };
   }
 }

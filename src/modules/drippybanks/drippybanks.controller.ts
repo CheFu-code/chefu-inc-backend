@@ -19,8 +19,7 @@ import {
   CreateProductInput,
   UpdateProductInput,
   UploadImageInput,
-  CreatePayPalOrderInput,
-  CapturePayPalOrderInput,
+  GeneratePayFastPaymentInput,
 } from './drippybanks.types';
 
 type RequestWithUser = Request & {
@@ -92,20 +91,19 @@ export class DrippybanksController {
     return this.drippybanksService.toggleStock(user, id);
   }
 
-  @Post('paypal/create-order')
+  @Post('payfast/generate-payment')
   @UseGuards(AuthGuard)
-  async createPayPalOrder(
-    @Body() body: CreatePayPalOrderInput,
+  generatePayFastPayment(
+    @Body() body: GeneratePayFastPaymentInput,
   ) {
-    return this.drippybanksService.createPayPalOrder(body);
+    return this.drippybanksService.generatePayFastPayment(body);
   }
 
-  @Post('paypal/capture-order')
-  @UseGuards(AuthGuard)
-  async capturePayPalOrder(
-    @Body() body: CapturePayPalOrderInput,
+  @Post('payfast/notify')
+  async payfastNotify(
+    @Body() body: Record<string, unknown>,
   ) {
-    return this.drippybanksService.capturePayPalOrder(body.orderId);
+    return this.drippybanksService.handlePayFastNotify(body);
   }
 
   private requireUser(request: RequestWithUser): AuthenticatedUser {
