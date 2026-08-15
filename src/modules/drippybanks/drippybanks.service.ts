@@ -25,85 +25,6 @@ const ALLOWED_IMAGE_TYPES = new Set([
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
 
-const DEFAULT_SEED_PRODUCTS: Omit<DrippyProductDocument, 'createdAt'>[] = [
-  {
-    id: 'prod_seed_1',
-    name: 'White Portrait Graphic Tee',
-    price: 400,
-    category: 'Tops',
-    image: '/blindManWhite.jpeg',
-    sizes: ['S', 'M', 'L', 'XL'],
-    colors: ['White', 'Midnight Black'],
-    badge: 'New Drop',
-    description: 'Premium heavyweight cotton streetwear tee with signature high-density print.',
-    fit: 'Boxy oversized streetwear fit',
-    inStock: true,
-    stock: 45,
-    featured: true,
-  },
-  {
-    id: 'prod_seed_2',
-    name: 'Black Thug Graphic Tee',
-    price: 400,
-    category: 'Tops',
-    image: '/thug.png',
-    sizes: ['S', 'M', 'L', 'XL'],
-    colors: ['Midnight Black'],
-    badge: 'Bestseller',
-    description: 'Iconic street graphic silhouette printed on vintage-washed luxury cotton.',
-    fit: 'Boxy oversized streetwear fit',
-    inStock: true,
-    stock: 30,
-    featured: true,
-  },
-  {
-    id: 'prod_seed_3',
-    name: 'Classic Black Cap',
-    price: 150,
-    category: 'Caps',
-    image: '/cap.jpeg',
-    sizes: ['One Size'],
-    colors: ['Midnight Black'],
-    badge: 'Essential',
-    description: 'Structured 6-panel low profile cap with embroidered Drippy Banks emblem.',
-    fit: 'Adjustable strapback fit',
-    inStock: true,
-    stock: 50,
-    featured: false,
-  },
-  {
-    id: 'prod_seed_4',
-    name: 'Midnight Mosaic Hoodie',
-    price: 750,
-    originalPrice: 850,
-    category: 'Hoodies',
-    image: '/hoodieBlackFront.png',
-    sizes: ['S', 'M', 'L', 'XL', 'XXL'],
-    colors: ['Midnight Black', 'Smoke Grey'],
-    badge: '🏷️ On Sale',
-    description: 'Heavyweight 450 GSM French terry hoodie with custom ribbing and double-layer hood.',
-    fit: 'Relaxed drop-shoulder fit',
-    inStock: true,
-    stock: 25,
-    featured: true,
-  },
-  {
-    id: 'prod_seed_5',
-    name: 'Essential Street Tote Bag',
-    price: 250,
-    category: 'Bags',
-    image: '/bag.jpeg',
-    sizes: ['One Size'],
-    colors: ['Midnight Black'],
-    badge: 'Staff Pick',
-    description: 'Reinforced canvas daily tote with internal zip pocket and key clip.',
-    fit: 'Heavy-duty shoulder carry',
-    inStock: true,
-    stock: 40,
-    featured: false,
-  },
-];
-
 @Injectable()
 export class DrippybanksService {
   private readonly logger = new Logger(DrippybanksService.name);
@@ -119,12 +40,7 @@ export class DrippybanksService {
     const snapshot = await db.collection(this.collectionName).get();
 
     if (snapshot.empty) {
-      await this.seedDefaultProducts();
-      const seededSnapshot = await db.collection(this.collectionName).get();
-      const products = seededSnapshot.docs.map(doc =>
-        this.serializeProduct(doc.id, doc.data()),
-      );
-      return { products: this.sortProducts(products) };
+      return { products: [] };
     }
 
     const products = snapshot.docs.map(doc =>
@@ -336,25 +252,6 @@ export class DrippybanksService {
       url: downloadUrl,
       path: objectPath,
     };
-  }
-
-  private async seedDefaultProducts(): Promise<void> {
-    const db = this.firebaseAdmin.db();
-    const batch = db.batch();
-    const now = Date.now();
-
-    DEFAULT_SEED_PRODUCTS.forEach((item, index) => {
-      const ref = db.collection(this.collectionName).doc(item.id);
-      const createdAt = new Date(now - index * 3600000).toISOString();
-      batch.set(ref, {
-        ...item,
-        createdAt,
-        updatedAt: createdAt,
-      });
-    });
-
-    await batch.commit();
-    this.logger.log('Seeded default DrippyBanks catalog into Firestore.');
   }
 
   private parseImageBody(rawInput: string, explicitContentType?: string) {
