@@ -54,3 +54,13 @@ export interface UploadImageInput {
   imageBase64: string;
   contentType?: string;
 }
+
+export interface CreatePayPalOrderInput {
+  amount: number;
+  currency?: string;
+  items?: Array<{ name: string; quantity: number; price: number }>;
+}
+
+export interface CapturePayPalOrderInput {
+  orderId: string;
+}

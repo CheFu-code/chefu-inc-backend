@@ -16,6 +16,8 @@ import {
   DrippyProductDocument,
   UpdateProductInput,
   UploadImageInput,
+  CreatePayPalOrderInput,
+  CapturePayPalOrderInput,
 } from './drippybanks.types';
 
 const ALLOWED_IMAGE_TYPES = new Set([
@@ -493,5 +495,131 @@ export class DrippybanksService {
       (a, b) =>
         new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
     );
+  }
+
+  // ── PayPal Payment Integration ──
+
+  private getPayPalBaseUrl(): string {
+    return process.env.PAYPAL_ENVIRONMENT === 'production'
+      ? 'https://api-m.paypal.com'
+      : 'https://api-m.sandbox.paypal.com';
+  }
+
+  private async getPayPalAccessToken(): Promise<string> {
+    const clientId = process.env.PAYPAL_CLIENT_ID;
+    const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      throw new BadRequestException('PayPal is not configured on the server (missing PAYPAL_CLIENT_ID or PAYPAL_CLIENT_SECRET).');
+    }
+
+    const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+    const response = await fetch(`${this.getPayPalBaseUrl()}/v1/oauth2/token`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${auth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: 'grant_type=client_credentials',
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      this.logger.error(`PayPal auth failed: ${response.status} - ${errorText}`);
+      throw new BadRequestException('Failed to authenticate with PayPal.');
+    }
+
+    const data = (await response.json()) as { access_token: string };
+    return data.access_token;
+  }
+
+  async createPayPalOrder(input: CreatePayPalOrderInput): Promise<{ id: string; status: string }> {
+    const amount = Number(input.amount);
+    if (isNaN(amount) || amount <= 0) {
+      throw new BadRequestException('Valid payment amount is required.');
+    }
+
+    const currency = (input.currency || 'USD').toUpperCase();
+    const token = await this.getPayPalAccessToken();
+
+    const response = await fetch(`${this.getPayPalBaseUrl()}/v2/checkout/orders`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        intent: 'CAPTURE',
+        purchase_units: [
+          {
+            amount: {
+              currency_code: currency,
+              value: amount.toFixed(2),
+            },
+            description: 'DrippyBanks Streetwear Order',
+          },
+        ],
+      }),
+    });
+
+    const data = (await response.json()) as { id?: string; status?: string; message?: string };
+
+    if (!response.ok || !data.id) {
+      this.logger.error(`PayPal order creation failed: ${JSON.stringify(data)}`);
+      throw new BadRequestException(data.message || 'Failed to create PayPal order.');
+    }
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'drippybanks_paypal_order_created',
+        paypalOrderId: data.id,
+        amount,
+        currency,
+      }),
+    );
+
+    return { id: data.id, status: data.status || 'CREATED' };
+  }
+
+  async capturePayPalOrder(orderId: string): Promise<{ id: string; status: string; payer?: Record<string, unknown> }> {
+    if (!orderId || typeof orderId !== 'string') {
+      throw new BadRequestException('PayPal Order ID is required.');
+    }
+
+    const token = await this.getPayPalAccessToken();
+
+    const response = await fetch(`${this.getPayPalBaseUrl()}/v2/checkout/orders/${orderId}/capture`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const data = (await response.json()) as {
+      id?: string;
+      status?: string;
+      payer?: Record<string, unknown>;
+      message?: string;
+    };
+
+    if (!response.ok || !data.id) {
+      this.logger.error(`PayPal order capture failed: ${JSON.stringify(data)}`);
+      throw new BadRequestException(data.message || 'Failed to capture PayPal order.');
+    }
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'drippybanks_paypal_order_captured',
+        paypalOrderId: data.id,
+        status: data.status,
+      }),
+    );
+
+    return {
+      id: data.id,
+      status: data.status || 'COMPLETED',
+      payer: data.payer,
+    };
   }
 }

@@ -59,6 +59,29 @@ export class AdminController {
         );
     }
 
+    @Get('users')
+    async listUsers() {
+        const snapshot = await this.firebaseAdmin
+            .db()
+            .collection('users')
+            .orderBy('createdAt', 'desc')
+            .limit(200)
+            .get();
+
+        const users = snapshot.docs.map((doc) => {
+            const data = doc.data();
+            return {
+                id: doc.id,
+                fullname: String(data.fullname || data.fullName || data.displayName || 'Unknown'),
+                email: String(data.email || doc.id),
+                roles: Array.isArray(data.roles) ? data.roles : [String(data.role || 'customer')],
+                createdAt: data.createdAt?.toDate?.()?.toISOString() ?? null,
+            };
+        });
+
+        return { users };
+    }
+
     @Post('delete-user')
     async deleteUser(@Body() body: { uid?: string; email?: string }) {
         if (!body.uid) {
