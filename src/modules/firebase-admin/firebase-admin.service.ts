@@ -54,6 +54,7 @@ function normalizePrivateKey(raw: unknown): string {
 export class FirebaseAdminService {
   private readonly logger = new Logger(FirebaseAdminService.name);
   private app?: admin.app.App;
+  private firestoreInstance?: admin.firestore.Firestore;
   private serviceAccountProjectId?: string;
 
   getApp() {
@@ -85,7 +86,13 @@ export class FirebaseAdminService {
   }
 
   db(): admin.firestore.Firestore {
-    return admin.firestore(this.getApp());
+    if (!this.firestoreInstance) {
+      this.firestoreInstance = admin.firestore(this.getApp());
+      // Allow undefined field values to be silently omitted rather than
+      // throwing "Cannot use undefined as a Firestore value".
+      this.firestoreInstance.settings({ ignoreUndefinedProperties: true });
+    }
+    return this.firestoreInstance;
   }
 
   messaging(): admin.messaging.Messaging {
