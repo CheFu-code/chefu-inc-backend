@@ -20,6 +20,7 @@
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
     "@types/node": "^20.19.25",
+    "cloudinary": "^2.10.0",
     "cookie-parser": "^1.4.7",
     "firebase-admin": "^13.6.0",
     "node-cron": "^4.2.1",

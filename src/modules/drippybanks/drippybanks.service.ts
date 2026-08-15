@@ -7,6 +7,8 @@ import {
 } from '@nestjs/common';
 import { FieldValue } from 'firebase-admin/firestore';
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
+import { v2 as cloudinary, UploadApiOptions } from 'cloudinary';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
@@ -33,7 +35,14 @@ export class DrippybanksService {
   constructor(
     @Inject(FirebaseAdminService)
     private readonly firebaseAdmin: FirebaseAdminService,
-  ) {}
+  ) {
+    cloudinary.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET,
+      secure: true,
+    });
+  }
 
   async listProducts(): Promise<{ products: DrippyProductDocument[] }> {
     const db = this.firebaseAdmin.db();
@@ -148,9 +157,9 @@ export class DrippybanksService {
 
     const product = await this.getProductById(id);
 
-    // If product image is in Firebase Storage, try deleting it
-    if (product.image && product.image.includes('firebasestorage.googleapis.com')) {
-      await this.deleteStorageUrl(product.image);
+    // If product image is hosted on Cloudinary, delete it from the media library
+    if (product.image && product.image.includes('res.cloudinary.com')) {
+      await this.deleteCloudinaryImage(product.image);
     }
 
     await this.firebaseAdmin.db().collection(this.collectionName).doc(id).delete();
@@ -217,40 +226,27 @@ export class DrippybanksService {
       throw new BadRequestException('Image exceeds the maximum allowed size of 5 MB.');
     }
 
-    const extension = this.resolveExtension(parsed.contentType);
-    const objectPath = `drippybanks/products/${Date.now()}_${randomUUID()}.${extension}`;
-    const token = randomUUID();
-    const bucket = this.firebaseAdmin.storageBucket();
-    const file = bucket.file(objectPath);
+    const publicId = `drippybanks/products/${Date.now()}_${randomUUID()}`;
 
-    await file.save(buffer, {
-      metadata: {
-        contentType: parsed.contentType,
-        metadata: {
-          firebaseStorageDownloadTokens: token,
-          uploadedBy: user.email,
-        },
-      },
-      resumable: false,
+    const result = await this.uploadBufferToCloudinary(buffer, {
+      public_id: publicId,
+      resource_type: 'image',
+      folder: undefined, // already encoded in publicId
+      overwrite: false,
+      tags: ['drippybanks', 'product', user.email],
     });
-
-    const downloadUrl = this.firebaseStorageDownloadUrl(
-      bucket.name,
-      objectPath,
-      token,
-    );
 
     this.logger.log(
       JSON.stringify({
         event: 'drippybanks_image_uploaded',
-        objectPath,
+        publicId: result.public_id,
         admin: user.email,
       }),
     );
 
     return {
-      url: downloadUrl,
-      path: objectPath,
+      url: result.secure_url,
+      path: result.public_id,
     };
   }
 
@@ -283,32 +279,41 @@ export class DrippybanksService {
     return 'jpg';
   }
 
-  private firebaseStorageDownloadUrl(
-    bucketName: string,
-    objectPath: string,
-    token: string,
-  ): string {
-    return `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucketName)}/o/${encodeURIComponent(objectPath)}?alt=media&token=${encodeURIComponent(token)}`;
+  /**
+   * Uploads a Buffer to Cloudinary using upload_stream (no temp file needed).
+   */
+  private uploadBufferToCloudinary(
+    buffer: Buffer,
+    options: UploadApiOptions,
+  ): Promise<{ secure_url: string; public_id: string }> {
+    return new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        options,
+        (error, result) => {
+          if (error) return reject(new Error(error.message));
+          if (!result) return reject(new Error('Cloudinary returned no result.'));
+          resolve({ secure_url: result.secure_url, public_id: result.public_id });
+        },
+      );
+      Readable.from(buffer).pipe(stream);
+    });
   }
 
-  private async deleteStorageUrl(value: string): Promise<void> {
+  /**
+   * Deletes a Cloudinary asset given its public URL.
+   * Extracts the public_id from the URL path (everything after /upload/[version]/,
+   * minus the file extension).
+   */
+  private async deleteCloudinaryImage(url: string): Promise<void> {
     try {
-      const parsed = new URL(value);
-      let objectPath: string | null = null;
-
-      if (parsed.hostname === 'firebasestorage.googleapis.com') {
-        const match = parsed.pathname.match(/\/o\/([^/]+)/);
-        objectPath = match ? decodeURIComponent(match[1]) : null;
-      } else if (parsed.hostname === 'storage.googleapis.com') {
-        const parts = parsed.pathname.split('/').filter(Boolean);
-        objectPath = parts.length > 1 ? decodeURIComponent(parts.slice(1).join('/')) : null;
-      }
-
-      if (objectPath) {
-        await this.firebaseAdmin.storageBucket().file(objectPath).delete();
+      // e.g. https://res.cloudinary.com/<cloud>/image/upload/v123/drippybanks/products/xyz.jpg
+      const match = url.match(/\/upload\/(?:v\d+\/)?(.+?)(?:\.[a-z]+)?$/);
+      const publicId = match?.[1] ?? null;
+      if (publicId) {
+        await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });
       }
     } catch (err) {
-      this.logger.warn(`Could not delete storage file from URL: ${value}`, err);
+      this.logger.warn(`Could not delete Cloudinary image: ${url}`, err);
     }
   }
 
