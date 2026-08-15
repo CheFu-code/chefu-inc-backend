@@ -117,3 +117,11 @@ On the frontend host, set:
 - `GET /flow/admin/access-keys` admin only
 - `POST /flow/admin/access-keys` admin only
 - `POST /flow/admin/access-keys/:keyId/revoke` admin only
+- `GET /drippybanks/products`
+- `GET /drippybanks/products/:id`
+- `POST /drippybanks/upload-image` admin only
+- `POST /drippybanks/products` admin only
+- `PUT /drippybanks/products/:id` admin only
+- `DELETE /drippybanks/products/:id` admin only
+- `POST /drippybanks/products/:id/toggle-stock` admin only
+

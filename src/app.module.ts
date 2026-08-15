@@ -11,6 +11,7 @@ import { BillingModule } from './modules/billing/billing.module';
 import { CoursesModule } from './modules/courses/courses.module';
 import { EmailModule } from './modules/email/email.module';
 import { FirebaseAdminModule } from './modules/firebase-admin/firebase-admin.module';
+import { DrippybanksModule } from './modules/drippybanks/drippybanks.module';
 import { FlowModule } from './modules/flow/flow.module';
 import { HealthController } from './modules/health/health.controller';
 import { MuzaloModule } from './modules/muzalo/muzalo.module';
@@ -35,6 +36,7 @@ const productModules = [
   AcademyMobileModule,
   AcademySdkModule,
   CoursesModule,
+  DrippybanksModule,
   FlowModule,
   MuzaloModule,
   QuantumModule,
