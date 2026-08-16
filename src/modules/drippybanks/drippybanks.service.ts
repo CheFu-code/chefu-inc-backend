@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Inject,
   Injectable,
   Logger,
@@ -12,7 +13,11 @@ import { v2 as cloudinary, UploadApiOptions } from 'cloudinary';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
+  CreateOrderInput,
   CreateProductInput,
+  DrippybanksOrderDocument,
+  DrippybanksOrderStatus,
+  DrippybanksPaymentStatus,
   DrippyProductDocument,
   UpdateProductInput,
   UploadImageInput,
@@ -28,11 +33,19 @@ const ALLOWED_IMAGE_TYPES = new Set([
 ]);
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
+const ORDER_STATUSES: DrippybanksOrderStatus[] = [
+  'Processing',
+  'Packed',
+  'Shipped',
+  'Delivered',
+  'Cancelled',
+];
 
 @Injectable()
 export class DrippybanksService {
   private readonly logger = new Logger(DrippybanksService.name);
   private readonly collectionName = 'drippybanksProducts';
+  private readonly ordersCollectionName = 'drippybanksOrders';
 
   constructor(
     @Inject(FirebaseAdminService)
@@ -497,9 +510,152 @@ export class DrippybanksService {
     );
   }
 
+  async createOrder(
+    user: AuthenticatedUser,
+    input: CreateOrderInput,
+  ): Promise<DrippybanksOrderDocument> {
+    const validated = this.validateOrderInput(input, user.email);
+    const now = new Date().toISOString();
+    const orderRef = this.firebaseAdmin
+      .db()
+      .collection(this.ordersCollectionName)
+      .doc(validated.id);
+
+    const existing = await orderRef.get();
+    if (existing.exists) {
+      throw new BadRequestException(`Order ${validated.id} already exists.`);
+    }
+
+    const orderDoc: DrippybanksOrderDocument = {
+      ...validated,
+      paymentStatus: 'pending',
+      createdAt: now,
+      updatedAt: now,
+      createdByUid: user.uid,
+      createdByEmail: user.email.trim().toLowerCase(),
+    };
+
+    await orderRef.set(orderDoc);
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'drippybanks_order_created',
+        orderId: orderDoc.id,
+        customerEmail: orderDoc.createdByEmail,
+        total: orderDoc.total,
+      }),
+    );
+
+    return orderDoc;
+  }
+
+  async listMyOrders(
+    user: AuthenticatedUser,
+  ): Promise<{ orders: DrippybanksOrderDocument[] }> {
+    const customerEmail = user.email.trim().toLowerCase();
+    const snapshot = await this.firebaseAdmin
+      .db()
+      .collection(this.ordersCollectionName)
+      .where('createdByEmail', '==', customerEmail)
+      .get();
+
+    const orders = snapshot.docs
+      .map((doc) => this.serializeOrder(doc.id, doc.data()))
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
+      );
+
+    return { orders };
+  }
+
+  async listOrdersForAdmin(): Promise<{ orders: DrippybanksOrderDocument[] }> {
+    const snapshot = await this.firebaseAdmin
+      .db()
+      .collection(this.ordersCollectionName)
+      .get();
+
+    const orders = snapshot.docs
+      .map((doc) => this.serializeOrder(doc.id, doc.data()))
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
+      );
+
+    return { orders };
+  }
+
+  async getOrderByIdForUser(
+    user: AuthenticatedUser,
+    orderId: string,
+  ): Promise<{ order: DrippybanksOrderDocument }> {
+    const order = await this.getOrderById(orderId);
+    const isAdmin = user.roles.map((role) => role.toLowerCase()).includes('admin');
+    const customerEmail = user.email.trim().toLowerCase();
+
+    if (!isAdmin && order.createdByEmail !== customerEmail) {
+      throw new ForbiddenException('You do not have access to this order.');
+    }
+
+    return { order };
+  }
+
+  async updateOrderStatus(
+    user: AuthenticatedUser,
+    orderId: string,
+    nextStatus: DrippybanksOrderStatus,
+  ): Promise<{ order: DrippybanksOrderDocument }> {
+    if (!ORDER_STATUSES.includes(nextStatus)) {
+      throw new BadRequestException('Invalid order status.');
+    }
+
+    const order = await this.getOrderById(orderId);
+    const updatedAt = new Date().toISOString();
+
+    const nextOrder: DrippybanksOrderDocument = {
+      ...order,
+      status: nextStatus,
+      updatedAt,
+    };
+
+    await this.firebaseAdmin
+      .db()
+      .collection(this.ordersCollectionName)
+      .doc(orderId)
+      .set(
+        {
+          status: nextStatus,
+          updatedAt,
+        },
+        { merge: true },
+      );
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'drippybanks_order_status_updated',
+        orderId,
+        updatedBy: user.email,
+        status: nextStatus,
+      }),
+    );
+
+    return { order: nextOrder };
+  }
+
   // ── PayFast Payment Integration (payfast.io) ──
 
-  generatePayFastPayment(input: GeneratePayFastPaymentInput): PayFastPaymentData {
+  async generatePayFastPayment(
+    user: AuthenticatedUser,
+    input: GeneratePayFastPaymentInput,
+  ): Promise<PayFastPaymentData> {
+    const order = await this.getOrderById(input.orderId);
+    const customerEmail = user.email.trim().toLowerCase();
+    const isAdmin = user.roles.map((role) => role.toLowerCase()).includes('admin');
+
+    if (!isAdmin && order.createdByEmail !== customerEmail) {
+      throw new ForbiddenException('You do not have access to this order payment request.');
+    }
+
     const merchantId = process.env.PAYFAST_MERCHANT_ID || '10000100';
     const merchantKey = process.env.PAYFAST_MERCHANT_KEY || '46f0cd694581a';
     const passphrase = process.env.PAYFAST_PASSPHRASE || '';
@@ -586,11 +742,268 @@ export class DrippybanksService {
 
     const paymentStatus = String(body.payment_status || '').toUpperCase();
     const orderId = String(body.m_payment_id || '');
+    const payfastPaymentId = String(body.pf_payment_id || '');
+
+    if (orderId) {
+      const orderRef = this.firebaseAdmin
+        .db()
+        .collection(this.ordersCollectionName)
+        .doc(orderId);
+      const orderDoc = await orderRef.get();
+
+      if (orderDoc.exists) {
+        const now = new Date().toISOString();
+        const updates: Partial<DrippybanksOrderDocument> = {
+          updatedAt: now,
+          payfastRawStatus: paymentStatus || 'UNKNOWN',
+          payfastPaymentId: payfastPaymentId || undefined,
+        };
+
+        if (paymentStatus === 'COMPLETE') {
+          updates.paymentStatus = 'paid';
+          updates.paidAt = now;
+          updates.status = 'Processing';
+        } else if (paymentStatus === 'CANCELLED') {
+          updates.paymentStatus = 'cancelled';
+          updates.status = 'Cancelled';
+        } else if (paymentStatus === 'FAILED') {
+          updates.paymentStatus = 'failed';
+        }
+
+        await orderRef.set(updates, { merge: true });
+      } else {
+        this.logger.warn(`PayFast notification received for unknown order ${orderId}`);
+      }
+    }
 
     if (paymentStatus === 'COMPLETE' && orderId) {
       this.logger.log(`PayFast payment confirmed for order ${orderId}`);
     }
 
     return { status: 'OK' };
+  }
+
+  private async getOrderById(orderId: string): Promise<DrippybanksOrderDocument> {
+    if (!orderId || typeof orderId !== 'string') {
+      throw new BadRequestException('Order ID is required.');
+    }
+
+    const orderDoc = await this.firebaseAdmin
+      .db()
+      .collection(this.ordersCollectionName)
+      .doc(orderId)
+      .get();
+
+    if (!orderDoc.exists) {
+      throw new NotFoundException(`Order ${orderId} was not found.`);
+    }
+
+    return this.serializeOrder(orderDoc.id, orderDoc.data() || {});
+  }
+
+  private validateOrderInput(
+    input: CreateOrderInput,
+    requestEmail: string,
+  ): CreateOrderInput {
+    if (!input || typeof input !== 'object') {
+      throw new BadRequestException('Order payload is required.');
+    }
+
+    const id = String(input.id || '').trim();
+    if (!id) {
+      throw new BadRequestException('Order ID is required.');
+    }
+
+    if (input.fulfillmentMethod !== 'collect' && input.fulfillmentMethod !== 'deliver') {
+      throw new BadRequestException('Fulfillment method must be collect or deliver.');
+    }
+
+    if (input.paymentMethod !== 'payfast') {
+      throw new BadRequestException('Only payfast payment method is supported.');
+    }
+
+    if (!ORDER_STATUSES.includes(input.status)) {
+      throw new BadRequestException('Order status is invalid.');
+    }
+
+    const total = Number(input.total);
+    const subtotal = Number(input.subtotal);
+    const shipping = Number(input.shipping);
+    const tax = Number(input.tax);
+    const deliveryFee = Number(input.deliveryFee);
+
+    if ([total, subtotal, shipping, tax, deliveryFee].some((n) => Number.isNaN(n) || n < 0)) {
+      throw new BadRequestException('Order amounts must be valid non-negative numbers.');
+    }
+
+    if (!Array.isArray(input.items) || input.items.length === 0) {
+      throw new BadRequestException('Order items are required.');
+    }
+
+    const items = input.items.map((item) => {
+      const itemId = String(item.id || '').trim();
+      const name = String(item.name || '').trim();
+      const image = String(item.image || '').trim();
+      const quantity = Number(item.quantity);
+      const price = Number(item.price);
+
+      if (!itemId || !name || !image) {
+        throw new BadRequestException('Each order item must include id, name, and image.');
+      }
+      if (Number.isNaN(quantity) || quantity <= 0) {
+        throw new BadRequestException('Each order item must include a valid quantity.');
+      }
+      if (Number.isNaN(price) || price < 0) {
+        throw new BadRequestException('Each order item must include a valid price.');
+      }
+
+      return {
+        id: itemId,
+        name,
+        image,
+        quantity,
+        price,
+      };
+    });
+
+    if (!input.customer || typeof input.customer !== 'object') {
+      throw new BadRequestException('Customer details are required.');
+    }
+
+    const normalizedRequestEmail = requestEmail.trim().toLowerCase();
+    const customerEmail = String(input.customer.email || '').trim().toLowerCase();
+    if (!customerEmail || customerEmail !== normalizedRequestEmail) {
+      throw new BadRequestException('Customer email must match the authenticated account.');
+    }
+
+    const customer = {
+      fullName: String(input.customer.fullName || '').trim(),
+      email: customerEmail,
+      phone: String(input.customer.phone || '').trim(),
+      address: String(input.customer.address || '').trim(),
+      city: String(input.customer.city || '').trim(),
+      postalCode: String(input.customer.postalCode || '').trim(),
+      country: String(input.customer.country || '').trim(),
+      paymentMethod: 'payfast' as const,
+    };
+
+    if (!customer.fullName || !customer.email || !customer.phone) {
+      throw new BadRequestException('Customer full name, email, and phone are required.');
+    }
+
+    if (input.fulfillmentMethod === 'deliver') {
+      if (!customer.address || !customer.city || !customer.postalCode || !customer.country) {
+        throw new BadRequestException('Delivery orders require full delivery address details.');
+      }
+    }
+
+    return {
+      id,
+      date: input.date ? String(input.date) : new Date().toISOString(),
+      status: input.status,
+      total,
+      subtotal,
+      shipping,
+      tax,
+      deliveryFee,
+      fulfillmentMethod: input.fulfillmentMethod,
+      paymentMethod: 'payfast',
+      items,
+      customer,
+      promoCode: input.promoCode ? String(input.promoCode).trim().toUpperCase() : undefined,
+      promoDiscountPercent:
+        input.promoDiscountPercent !== undefined
+          ? Number(input.promoDiscountPercent)
+          : undefined,
+    };
+  }
+
+  private serializeOrder(
+    id: string,
+    data: Record<string, unknown>,
+  ): DrippybanksOrderDocument {
+    const rawItems = Array.isArray(data.items) ? data.items : [];
+    const items = rawItems
+      .map((item) => {
+        if (!item || typeof item !== 'object') {
+          return null;
+        }
+        const typedItem = item as Record<string, unknown>;
+        return {
+          id: String(typedItem.id || ''),
+          name: String(typedItem.name || ''),
+          image: String(typedItem.image || ''),
+          quantity: Number(typedItem.quantity || 0),
+          price: Number(typedItem.price || 0),
+        };
+      })
+      .filter(
+        (
+          item,
+        ): item is {
+          id: string;
+          name: string;
+          image: string;
+          quantity: number;
+          price: number;
+        } => !!item && !!item.id && !!item.name,
+      );
+
+    const customerData =
+      data.customer && typeof data.customer === 'object'
+        ? (data.customer as Record<string, unknown>)
+        : {};
+
+    const paymentStatusValue = String(data.paymentStatus || 'pending').toLowerCase();
+    const paymentStatus: DrippybanksPaymentStatus =
+      paymentStatusValue === 'paid'
+        ? 'paid'
+        : paymentStatusValue === 'failed'
+          ? 'failed'
+          : paymentStatusValue === 'cancelled'
+            ? 'cancelled'
+            : 'pending';
+
+    const statusCandidate = String(data.status || 'Processing') as DrippybanksOrderStatus;
+    const status = ORDER_STATUSES.includes(statusCandidate)
+      ? statusCandidate
+      : 'Processing';
+
+    return {
+      id: String(data.id || id),
+      date: String(data.date || data.createdAt || new Date().toISOString()),
+      status,
+      total: Number(data.total || 0),
+      subtotal: Number(data.subtotal || 0),
+      shipping: Number(data.shipping || 0),
+      tax: Number(data.tax || 0),
+      deliveryFee: Number(data.deliveryFee || 0),
+      fulfillmentMethod: data.fulfillmentMethod === 'deliver' ? 'deliver' : 'collect',
+      paymentMethod: 'payfast',
+      items,
+      customer: {
+        fullName: String(customerData.fullName || ''),
+        email: String(customerData.email || ''),
+        phone: String(customerData.phone || ''),
+        address: String(customerData.address || ''),
+        city: String(customerData.city || ''),
+        postalCode: String(customerData.postalCode || ''),
+        country: String(customerData.country || ''),
+        paymentMethod: 'payfast',
+      },
+      promoCode: data.promoCode ? String(data.promoCode) : undefined,
+      promoDiscountPercent:
+        data.promoDiscountPercent !== undefined
+          ? Number(data.promoDiscountPercent)
+          : undefined,
+      createdAt: String(data.createdAt || new Date().toISOString()),
+      updatedAt: String(data.updatedAt || data.createdAt || new Date().toISOString()),
+      createdByUid: String(data.createdByUid || ''),
+      createdByEmail: String(data.createdByEmail || '').toLowerCase(),
+      paymentStatus,
+      payfastPaymentId: data.payfastPaymentId ? String(data.payfastPaymentId) : undefined,
+      payfastRawStatus: data.payfastRawStatus ? String(data.payfastRawStatus) : undefined,
+      paidAt: data.paidAt ? String(data.paidAt) : undefined,
+    };
   }
 }

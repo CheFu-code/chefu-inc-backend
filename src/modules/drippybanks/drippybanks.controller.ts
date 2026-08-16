@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Put,
   Req,
@@ -17,7 +18,10 @@ import { AdminGuard } from '../auth/admin.guard';
 import { DrippybanksService } from './drippybanks.service';
 import {
   CreateProductInput,
+  CreateOrderInput,
+  DrippybanksOrderStatus,
   UpdateProductInput,
+  UpdateOrderStatusInput,
   UploadImageInput,
   GeneratePayFastPaymentInput,
 } from './drippybanks.types';
@@ -94,9 +98,56 @@ export class DrippybanksController {
   @Post('payfast/generate-payment')
   @UseGuards(AuthGuard)
   generatePayFastPayment(
+    @Req() request: RequestWithUser,
     @Body() body: GeneratePayFastPaymentInput,
   ) {
-    return this.drippybanksService.generatePayFastPayment(body);
+    const user = this.requireUser(request);
+    return this.drippybanksService.generatePayFastPayment(user, body);
+  }
+
+  @Post('orders')
+  @UseGuards(AuthGuard)
+  createOrder(
+    @Req() request: RequestWithUser,
+    @Body() body: CreateOrderInput,
+  ) {
+    const user = this.requireUser(request);
+    return this.drippybanksService.createOrder(user, body);
+  }
+
+  @Get('orders/me')
+  @UseGuards(AuthGuard)
+  listMyOrders(@Req() request: RequestWithUser) {
+    const user = this.requireUser(request);
+    return this.drippybanksService.listMyOrders(user);
+  }
+
+  @Get('orders')
+  @UseGuards(AuthGuard, AdminGuard)
+  listOrdersForAdmin() {
+    return this.drippybanksService.listOrdersForAdmin();
+  }
+
+  @Get('orders/:id')
+  @UseGuards(AuthGuard)
+  getOrderById(
+    @Req() request: RequestWithUser,
+    @Param('id') id: string,
+  ) {
+    const user = this.requireUser(request);
+    return this.drippybanksService.getOrderByIdForUser(user, id);
+  }
+
+  @Patch('orders/:id/status')
+  @UseGuards(AuthGuard, AdminGuard)
+  updateOrderStatus(
+    @Req() request: RequestWithUser,
+    @Param('id') id: string,
+    @Body() body: UpdateOrderStatusInput,
+  ) {
+    const user = this.requireUser(request);
+    const status = body?.status as DrippybanksOrderStatus;
+    return this.drippybanksService.updateOrderStatus(user, id, status);
   }
 
   @Post('payfast/notify')
