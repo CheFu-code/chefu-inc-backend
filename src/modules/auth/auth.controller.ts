@@ -99,9 +99,17 @@ type AcademyProfileUpdate = {
 
 type ProfileUpdateBody = {
   name?: string;
+  phone?: string;
   profilePicture?: unknown;
   photoURL?: unknown;
   avatarUrl?: unknown;
+  addressStreet?: string;
+  addressCity?: string;
+  addressPostalCode?: string;
+  countryName?: string;
+  countryCode?: string;
+  storeName?: string;
+  storeDescription?: string;
   emailPreferences?: {
     security?: boolean;
   };
@@ -222,6 +230,7 @@ export class AuthController {
     const authUpdates: {
       displayName?: string;
       photoURL?: string | null;
+      phoneNumber?: string;
     } = {};
 
     if (body.name !== undefined) {
@@ -240,9 +249,62 @@ export class AuthController {
       authUpdates.displayName = name;
     }
 
+    if (body.phone !== undefined) {
+      const phone = body.phone.trim();
+
+      if (phone && phone.length > 30) {
+        throw new BadRequestException('Phone number must be 30 characters or less.');
+      }
+
+      updates.phone = phone || null;
+      if (phone) {
+        authUpdates.phoneNumber = phone;
+      }
+    }
+
+    if (body.addressStreet !== undefined) {
+      updates.addressStreet = body.addressStreet.trim();
+    }
+
+    if (body.addressCity !== undefined) {
+      updates.addressCity = body.addressCity.trim();
+    }
+
+    if (body.addressPostalCode !== undefined) {
+      updates.addressPostalCode = body.addressPostalCode.trim();
+    }
+
+    if (body.countryCode !== undefined || body.countryName !== undefined) {
+      const code = (body.countryCode || '').trim().toUpperCase();
+      const name = (body.countryName || '').trim();
+      const country = {
+        code: code || undefined,
+        name: name || undefined,
+      };
+
+      if (country.code || country.name) {
+        updates.country = {
+          code: country.code || '',
+          name: country.name || '',
+        };
+        if (country.code) {
+          updates.countryCode = country.code;
+        }
+      }
+    }
+
+    if (body.storeName !== undefined) {
+      updates.storeName = body.storeName.trim();
+    }
+
+    if (body.storeDescription !== undefined) {
+      updates.storeDescription = body.storeDescription.trim();
+    }
+
     const profilePictureUpdate = this.normalizeProfilePictureUpdate(body);
     if (profilePictureUpdate.shouldUpdate) {
       updates.profilePicture = profilePictureUpdate.value;
+      updates.avatarUrl = profilePictureUpdate.value;
       updates.profilePictureSource = 'profile_api';
       updates.profilePictureUpdatedAt = FieldValue.serverTimestamp();
       authUpdates.photoURL = profilePictureUpdate.value || null;
@@ -824,10 +886,24 @@ export class AuthController {
     );
     return {
       name,
+      phone: this.stringValue(data.phone),
       profilePicture: this.stringValue(data.profilePicture),
+      avatarUrl: this.stringValue(data.avatarUrl) || this.stringValue(data.profilePicture),
       bio: this.stringValue(data.bio),
-      country: this.stringValue(data.country),
+      country:
+        data.country && typeof data.country === 'object' && !Array.isArray(data.country)
+          ? {
+              code: this.stringValue((data.country as Record<string, unknown>).code),
+              name: this.stringValue((data.country as Record<string, unknown>).name),
+            }
+          : { code: this.stringValue(data.countryCode), name: this.stringValue(data.countryName) },
       countryCode: this.stringValue(data.countryCode),
+      countryName: this.stringValue(data.countryName),
+      addressStreet: this.stringValue(data.addressStreet),
+      addressCity: this.stringValue(data.addressCity),
+      addressPostalCode: this.stringValue(data.addressPostalCode),
+      storeName: this.stringValue(data.storeName),
+      storeDescription: this.stringValue(data.storeDescription),
       detectedCountryCode: this.stringValue(data.detectedCountryCode),
       detectedCountrySource: this.stringValue(data.detectedCountrySource),
       detectedCountryUpdatedAt: this.timestampToIso(data.detectedCountryUpdatedAt),
