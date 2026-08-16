@@ -27,6 +27,7 @@ export interface PreferenceNotificationData {
   userName?: string;
   actionLabel?: string;
   actionUrl?: string;
+  appId?: string;
 }
 
 export interface ApiKeyCompromisedNotificationData {
@@ -45,6 +46,7 @@ export interface WelcomePromoNotificationData {
   promoCode: string;
   discountPercent: number;
   expiryDate: Date;
+  appId?: string;
 }
 
 @Injectable()
@@ -73,6 +75,12 @@ export class ResendService {
     process.env.NOTIFICATION_EMAIL_FROM ||
     process.env.SECURITY_EMAIL_FROM ||
     this.fromAddress;
+  private readonly securityFromByApp = this.parseSenderMap(
+    process.env.SECURITY_EMAIL_FROM_BY_APP,
+  );
+  private readonly notificationFromByApp = this.parseSenderMap(
+    process.env.NOTIFICATION_EMAIL_FROM_BY_APP,
+  );
 
   async sendSignInNotification(data: SignInNotificationData): Promise<void> {
     if (!this.RESEND_API_KEY) {
@@ -441,9 +449,11 @@ export class ResendService {
       }),
     );
 
+    const fromAddress = this.resolveNotificationFromAddress(data.appId);
+
     if (this.welcomePromoTemplateId) {
       return {
-        from: this.notificationFromAddress,
+        from: fromAddress,
         to: [data.email],
         subject: 'Your Drippy Banks welcome code is here',
         template: {
@@ -460,7 +470,7 @@ export class ResendService {
     }
 
     return {
-      from: this.notificationFromAddress,
+      from: fromAddress,
       to: [data.email],
       subject: 'Your Drippy Banks welcome code is here',
       text: [
@@ -847,8 +857,56 @@ export class ResendService {
   }
 
   private resolveFromAddress(appId?: string) {
+    const normalized = this.normalizeAppId(appId);
+    if (normalized) {
+      const mapped = this.securityFromByApp[normalized];
+      if (mapped) {
+        return mapped;
+      }
+    }
+
     const appLabel = this.resolveAppLabel(appId);
     return `${appLabel} <security@chefuinc.com>`;
+  }
+
+  private resolveNotificationFromAddress(appId?: string) {
+    const normalized = this.normalizeAppId(appId);
+    if (normalized) {
+      const mapped = this.notificationFromByApp[normalized];
+      if (mapped) {
+        return mapped;
+      }
+      const appLabel = this.resolveAppLabel(normalized);
+      return `${appLabel} <notifications@chefuinc.com>`;
+    }
+
+    return this.notificationFromAddress;
+  }
+
+  private parseSenderMap(raw?: string): Record<string, string> {
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      return Object.entries(parsed).reduce<Record<string, string>>((acc, [key, value]) => {
+        if (typeof value === 'string' && value.trim()) {
+          acc[key.trim().toLowerCase()] = value.trim();
+        }
+        return acc;
+      }, {});
+    } catch {
+      this.logger.warn('Invalid sender map JSON. Check SECURITY_EMAIL_FROM_BY_APP or NOTIFICATION_EMAIL_FROM_BY_APP.');
+      return {};
+    }
+  }
+
+  private normalizeAppId(appId?: string) {
+    if (!appId) {
+      return '';
+    }
+    return appId.trim().toLowerCase();
   }
 
   private getDetails(data: SignInNotificationData) {

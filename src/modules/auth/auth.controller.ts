@@ -1441,6 +1441,7 @@ export class AuthController {
         promoCode,
         discountPercent: 10,
         expiryDate,
+        appId: 'drippybanks',
       });
     } catch (error) {
       this.logger.warn(
