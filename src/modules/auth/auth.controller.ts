@@ -257,8 +257,13 @@ export class AuthController {
       }
 
       updates.phone = phone || null;
-      if (phone) {
-        authUpdates.phoneNumber = phone;
+
+      const firebasePhoneNumber = phone
+        ? this.normalizeFirebasePhoneNumber(phone)
+        : null;
+
+      if (firebasePhoneNumber) {
+        authUpdates.phoneNumber = firebasePhoneNumber;
       }
     }
 
@@ -1576,6 +1581,34 @@ export class AuthController {
       : forwardedFor?.split(',')[0];
 
     return firstForwardedIp?.trim() || request.ip || undefined;
+  }
+
+  private normalizeFirebasePhoneNumber(input: string): string | null {
+    const raw = input.trim();
+    if (!raw) {
+      return null;
+    }
+
+    const compact = raw.replace(/\s+/g, '');
+    const digitsOnly = compact.replace(/\D/g, '');
+
+    if (!digitsOnly || digitsOnly.length < 8 || digitsOnly.length > 15) {
+      return null;
+    }
+
+    if (compact.startsWith('+')) {
+      return `+${digitsOnly}`;
+    }
+
+    if (compact.startsWith('27')) {
+      return `+${digitsOnly}`;
+    }
+
+    if (compact.startsWith('0')) {
+      return `+27${digitsOnly.slice(1)}`;
+    }
+
+    return null;
   }
 
   private normalizePhone(input: string) {
