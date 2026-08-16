@@ -39,6 +39,14 @@ export interface ApiKeyCompromisedNotificationData {
   timestamp: Date;
 }
 
+export interface WelcomePromoNotificationData {
+  email: string;
+  userName?: string;
+  promoCode: string;
+  discountPercent: number;
+  expiryDate: Date;
+}
+
 @Injectable()
 export class ResendService {
   private readonly logger = new Logger(ResendService.name);
@@ -49,6 +57,8 @@ export class ResendService {
     process.env.PASSWORD_CHANGED_TEMPLATE_ID;
   private readonly notificationTemplateId =
     process.env.NOTIFICATION_EMAIL_TEMPLATE_ID;
+  private readonly welcomePromoTemplateId =
+    process.env.WELCOME_PROMO_TEMPLATE_ID;
   private readonly fromAddress =
     process.env.SIGNIN_ALERT_FROM ||
     process.env.SECURITY_EMAIL_FROM ||
@@ -180,6 +190,37 @@ export class ResendService {
         event: 'api_key_compromised_notification_sent',
         email: data.email,
         publicId: data.publicId,
+      }),
+    );
+  }
+
+  async sendWelcomePromoNotification(
+    data: WelcomePromoNotificationData,
+  ): Promise<void> {
+    if (!this.RESEND_API_KEY) {
+      this.logger.warn('RESEND_API_KEY is not configured - skipping email');
+      return;
+    }
+
+    const response = await fetch(this.RESEND_API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(this.getWelcomePromoPayload(data)),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Resend request failed: ${response.status} ${error}`);
+    }
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'drippybanks_welcome_promo_sent',
+        email: data.email,
+        promoCode: data.promoCode,
       }),
     );
   }
@@ -385,6 +426,55 @@ export class ResendService {
       ]
         .filter(Boolean)
         .join('\n'),
+    };
+  }
+
+  private getWelcomePromoPayload(data: WelcomePromoNotificationData) {
+    const userName = this.escapeHtml(
+      data.userName || data.email.split('@')[0] || 'there',
+    );
+    const expiryDate = this.escapeHtml(
+      data.expiryDate.toLocaleDateString('en-ZA', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      }),
+    );
+
+    if (this.welcomePromoTemplateId) {
+      return {
+        from: this.notificationFromAddress,
+        to: [data.email],
+        subject: 'Your Drippy Banks welcome code is here',
+        template: {
+          id: this.welcomePromoTemplateId,
+          variables: {
+            userName,
+            promoCode: data.promoCode,
+            discountPercent: String(data.discountPercent),
+            expiryDate,
+            year: new Date().getUTCFullYear().toString(),
+          },
+        },
+      };
+    }
+
+    return {
+      from: this.notificationFromAddress,
+      to: [data.email],
+      subject: 'Your Drippy Banks welcome code is here',
+      text: [
+        `Hi ${userName},`,
+        '',
+        `Thanks for joining Drippy Banks. Your welcome code gives you ${data.discountPercent}% off your first order.`,
+        '',
+        `Promo code: ${data.promoCode}`,
+        `Valid until: ${expiryDate}`,
+        '',
+        'Apply the code at checkout to redeem your discount.',
+        '',
+        'Drippy Banks',
+      ].join('\n'),
     };
   }
 

@@ -20,7 +20,7 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { FieldValue } from 'firebase-admin/firestore';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { AppsService } from '../apps/apps.service';
@@ -948,6 +948,29 @@ export class AuthController {
       roles: Array.isArray(roles) ? roles.map(String) : [],
       securityEmailsEnabled: emailPreferences.security !== false,
       apps: this.normalizeAppProfileSummary(data?.apps),
+      welcomePromo: this.normalizeWelcomePromo(data?.welcomePromo || data?.promoCodes?.welcome),
+    };
+  }
+
+  private normalizeWelcomePromo(value: unknown) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return undefined;
+    }
+
+    const promo = value as Record<string, unknown>;
+    const code = this.stringValue(promo.code);
+    if (!code) {
+      return undefined;
+    }
+
+    return {
+      code,
+      discountPercent: this.numberValue(promo.discountPercent, 10),
+      status: this.stringValue(promo.status) || 'issued',
+      issuedAt: this.timestampToIso(promo.issuedAt),
+      expiresAt: this.timestampToIso(promo.expiresAt),
+      redeemedAt: this.timestampToIso(promo.redeemedAt),
+      source: this.stringValue(promo.source) || 'new_user_welcome',
     };
   }
 
@@ -1338,6 +1361,15 @@ export class AuthController {
       { merge: true },
     );
 
+    if (appId === 'drippybanks') {
+      await this.issueWelcomePromoForDrippyBanksUser({
+        email,
+        userRef,
+        userSnapshot,
+        decodedToken,
+      });
+    }
+
     await appProfileRef.set(
       {
         ...(!appProfileSnapshot.exists ? { createdAt: now } : {}),
@@ -1348,6 +1380,78 @@ export class AuthController {
       },
       { merge: true },
     );
+  }
+
+  private async issueWelcomePromoForDrippyBanksUser({
+    email,
+    userRef,
+    userSnapshot,
+    decodedToken,
+  }: {
+    email: string;
+    userRef: FirebaseFirestore.DocumentReference;
+    userSnapshot: FirebaseFirestore.DocumentSnapshot;
+    decodedToken: FirebaseDecodedToken;
+  }) {
+    const existingUser = userSnapshot.data() || {};
+    const existingPromo =
+      existingUser?.welcomePromo || existingUser?.promoCodes?.welcome;
+
+    if (existingPromo?.code && existingPromo.discountPercent === 10) {
+      return;
+    }
+
+    const promoCode = `DRIP10-${randomBytes(3).toString('hex').toUpperCase()}`;
+    const expiryDate = new Date();
+    expiryDate.setDate(expiryDate.getDate() + 30);
+
+    const welcomePromo = {
+      code: promoCode,
+      discountPercent: 10,
+      status: 'issued',
+      issuedAt: FieldValue.serverTimestamp(),
+      expiresAt: expiryDate.toISOString(),
+      redeemedAt: null,
+      sentAt: FieldValue.serverTimestamp(),
+      source: 'new_user_welcome',
+    };
+
+    await userRef.set(
+      {
+        welcomePromo,
+        promoCodes: {
+          welcome: welcomePromo,
+        },
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    const userName =
+      typeof existingUser?.fullname === 'string'
+        ? existingUser.fullname
+        : typeof existingUser?.name === 'string'
+          ? existingUser.name
+          : decodedToken.name || email.split('@')[0] || 'there';
+
+    try {
+      await this.resendService.sendWelcomePromoNotification({
+        email,
+        userName,
+        promoCode,
+        discountPercent: 10,
+        expiryDate,
+      });
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'drippybanks_welcome_promo_send_failed',
+          emailHash: hashForAudit(email),
+          promoCode,
+          reason: error instanceof Error ? error.message : 'unknown',
+        }),
+      );
+    }
   }
 
   private async sendThrottledSignInNotification({
