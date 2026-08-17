@@ -132,7 +132,7 @@ async function bootstrap() {
   app.use(cookieParser());
   app.useGlobalFilters(new GlobalExceptionFilter());
 
-  const port = Number(process.env.PORT || 4000);
+  const port = Number(process.env.PORT || 3000);
   await app.listen(port, '0.0.0.0');
   logger.log(
     JSON.stringify({
