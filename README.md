@@ -31,7 +31,7 @@ Flow sender allowlist.
 
 ## OAuth/OIDC
 
-CheFu API also acts as the CheFu Account authorization server. It supports the
+CheFu API also acts as the CHEFU Account authorization server. It supports the
 OAuth 2.0 Authorization Code flow with PKCE and OIDC discovery:
 
 - `GET /.well-known/openid-configuration`

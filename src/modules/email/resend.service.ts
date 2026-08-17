@@ -297,7 +297,7 @@ export class ResendService {
 
   private getPasswordChangedPayload(data: PasswordChangedNotificationData) {
     const details = this.getPasswordDetails(data);
-    const appLabel = 'CheFu Account';
+    const appLabel = 'CHEFU Account';
     const basePayload = {
       from: this.fromAddress,
       to: [data.email],
@@ -625,7 +625,7 @@ export class ResendService {
     data: PasswordChangedNotificationData,
   ): string {
     const details = this.getPasswordDetails(data);
-    const appLabel = 'CheFu Account';
+    const appLabel = 'CHEFU Account';
 
     return [
       `Hi ${details.userName},`,
@@ -651,7 +651,7 @@ export class ResendService {
     data: PasswordChangedNotificationData,
   ): string {
     const details = this.getPasswordDetails(data);
-    const appLabel = 'CheFu Account';
+    const appLabel = 'CHEFU Account';
 
     return `
 <!doctype html>
@@ -840,7 +840,7 @@ export class ResendService {
   }
 
   private resolveAppLabel(appId?: string) {
-    if (!appId) return 'CheFu Account';
+    if (!appId) return 'CHEFU Account';
 
     const normalized = appId.trim().toLowerCase();
     const labels: Record<string, string> = {
@@ -853,7 +853,7 @@ export class ResendService {
       drippybanks: 'Drippy Banks',
     };
 
-    return labels[normalized] || 'CheFu Account';
+    return labels[normalized] || 'CHEFU Account';
   }
 
   private resolveFromAddress(appId?: string) {

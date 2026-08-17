@@ -27,7 +27,7 @@ export class MfaSecurityEmailService {
   private readonly fromAddress = this.normalizeFromAddress(
     process.env.SECURITY_EMAIL_FROM ||
       process.env.SIGNIN_ALERT_FROM ||
-      'CheFu Account <security@chefuinc.com>',
+      'CHEFU Account <security@chefuinc.com>',
   );
   private readonly securityUrl =
     process.env.SIGNIN_ALERT_SECURITY_URL ||
@@ -72,8 +72,8 @@ export class MfaSecurityEmailService {
       from: this.fromAddress,
       to: [data.email],
       subject: isEnabled
-        ? 'Two-factor authentication enabled on your CheFu Account'
-        : 'Two-factor authentication disabled on your CheFu Account',
+        ? 'Two-factor authentication enabled on your CHEFU Account'
+        : 'Two-factor authentication disabled on your CHEFU Account',
       template: {
         id: isEnabled ? this.enabledTemplateId : this.disabledTemplateId,
         variables: {
