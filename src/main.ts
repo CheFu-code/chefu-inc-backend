@@ -133,11 +133,12 @@ async function bootstrap() {
   app.useGlobalFilters(new GlobalExceptionFilter());
 
   const port = Number(process.env.PORT || 4000);
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
   logger.log(
     JSON.stringify({
       event: 'api_started',
       port,
+      host: '0.0.0.0',
       nodeEnv: process.env.NODE_ENV || 'development',
       allowedOrigins,
       authCookieDomain: process.env.AUTH_COOKIE_DOMAIN || null,
