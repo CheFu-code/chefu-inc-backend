@@ -405,7 +405,7 @@ export class AcademySdkCatalogService {
       ),
       description:
         this.stringValue(video.description) ||
-        'A curated YouTube lesson selected for CheFu Academy learners.',
+        'A curated YouTube lesson selected for CHEFU Academy learners.',
       videoURL: youtubeVideoId ? this.youtubeWatchUrl(youtubeVideoId) : '',
       embedURL: youtubeVideoId
         ? this.youtubeEmbedUrl(youtubeVideoId)

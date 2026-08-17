@@ -20,7 +20,7 @@ export type ChefuOauthClient = {
 export const CHEFU_APPS: ChefuApp[] = [
   {
     id: 'academy',
-    name: 'CheFu Academy',
+    name: 'CHEFU Academy',
     origins: [
       'http://localhost:3000',
       'https://chefuinc.com',
@@ -30,7 +30,7 @@ export const CHEFU_APPS: ChefuApp[] = [
   },
   {
     id: 'admin',
-    name: 'CheFu Admin',
+    name: 'CHEFU Admin',
     origins: ['http://localhost:3004', 'https://internal.chefuinc.com'],
   },
   {
@@ -72,7 +72,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
   {
     id: 'chefu-inc-web',
     appId: 'academy',
-    name: 'CheFu Inc',
+    name: 'CHEFU Inc',
     redirectUris: [
       'https://chefuinc.com/auth/callback',
       'https://myaccount.chefuinc.com/auth/callback',
@@ -83,7 +83,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
   {
     id: 'chefu-academy-web',
     appId: 'academy',
-    name: 'CheFu Academy',
+    name: 'CHEFU Academy',
     redirectUris: [
       'https://academy.chefuinc.com/auth/callback',
       'http://localhost:3000/auth/callback',
@@ -100,7 +100,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
   {
     id: 'chefu-academy-mobile',
     appId: 'academy',
-    name: 'CheFu Academy Mobile',
+    name: 'CHEFU Academy Mobile',
     redirectUris: ['chefu-academy://auth/sso'],
     scopes: [
       'openid',
@@ -114,7 +114,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
   {
     id: 'chefu-admin-web',
     appId: 'admin',
-    name: 'CheFu Admin',
+    name: 'CHEFU Admin',
     redirectUris: [
       'https://internal.chefuinc.com/auth/callback',
       'http://localhost:3004/auth/callback',

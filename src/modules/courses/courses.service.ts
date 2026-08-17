@@ -151,7 +151,7 @@ export class CoursesService {
           },
           headerTemplate: '<div></div>',
           footerTemplate:
-            '<div style="width:100%;font-size:9px;color:#64748b;padding:0 16mm;display:flex;justify-content:space-between;font-family:Inter,Arial,sans-serif;"><span>CheFu Academy</span><span class="pageNumber"></span></div>',
+            '<div style="width:100%;font-size:9px;color:#64748b;padding:0 16mm;display:flex;justify-content:space-between;font-family:Inter,Arial,sans-serif;"><span>CHEFU Academy</span><span class="pageNumber"></span></div>',
         });
 
         return {
@@ -557,14 +557,14 @@ export class CoursesService {
     <section class="cover">
       <div>
         <div class="brand-row">
-          <div class="brand">CheFu Academy</div>
+          <div class="brand">CHEFU Academy</div>
           <span class="badge">${this.escapeHtml(course.category || 'Course')}</span>
         </div>
         <div class="cover-card">
           <div class="cover-copy">
             <div class="cover-kicker">Premium learning pack</div>
             <h1>${this.escapeHtml(course.courseTitle || 'Untitled course')}</h1>
-            <p>${this.escapeHtml(course.description || 'A structured CheFu Academy learning path.')}</p>
+            <p>${this.escapeHtml(course.description || 'A structured CHEFU Academy learning path.')}</p>
           </div>
           <div class="cover-strip">
             <div><strong>Read</strong>Clear lessons organized into focused chapters.</div>

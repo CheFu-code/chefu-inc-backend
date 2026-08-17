@@ -1,6 +1,6 @@
-# CheFu Inc Backend Architecture
+# CHEFU Inc Backend Architecture
 
-This backend is the shared API platform for CheFu Inc products. Keep routes
+This backend is the shared API platform for CHEFU Inc products. Keep routes
 stable, but organize new code by ownership and product boundary.
 
 ## Module Layers
@@ -10,7 +10,7 @@ stable, but organize new code by ownership and product boundary.
 Platform modules are cross-app foundations. They should not know about a single
 product workflow.
 
-- `apps`: registered CheFu apps, origins, and app ids.
+- `apps`: registered CHEFU apps, origins, and app ids.
 - `firebase-admin`: Firebase Admin SDK access.
 - `auth`: shared session, user identity, and guards.
 - `health`: deployment and uptime probes.
@@ -31,7 +31,7 @@ app.
 Product modules own app-specific workflows and route groups.
 
 - `academy-sdk`: public SDK API, SDK auth, developer keys, course/video catalog.
-- `courses`: authenticated CheFu Academy learning and export workflows.
+- `courses`: authenticated CHEFU Academy learning and export workflows.
 - `flow`: Flow Mail config, mailbox, send, and webhook flows.
 
 Future apps should get their own product module instead of adding app-specific
@@ -85,7 +85,7 @@ matches `api_keys/{publicId}`, the backend revokes the key, marks it
 compromised, and emails the owner. Do not expose whether a reported key is valid
 in the API response.
 
-## Adding a New CheFu App
+## Adding a New CHEFU App
 
 1. Add the app id and origins in `src/modules/apps/app-registry.ts`.
 2. Create a product module under `src/modules/<app-name>`.

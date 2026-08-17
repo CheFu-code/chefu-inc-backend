@@ -129,7 +129,7 @@ export function renderFlowEmailShell({
   const safeAudience = audienceName ? escapeHtml(audienceName) : 'Flow Mail';
   const safeBrand = escapeHtml(brandName);
   const safeRecipient = recipientName ? escapeHtml(recipientName) : 'there';
-  const safeSender = senderName ? escapeHtml(senderName) : 'CheFu Inc';
+  const safeSender = senderName ? escapeHtml(senderName) : 'CHEFU Inc';
   const safeTitle = escapeHtml(title);
 
   return `<!doctype html>
@@ -161,7 +161,7 @@ export function renderFlowEmailShell({
             </tr>
             <tr>
               <td style="background:#f7fbfa;border-top:1px solid #dcefeb;padding:20px 32px;color:#55716e;font-size:12px;line-height:1.6;">
-                Sent with Flow by CheFu Inc. Reply to this email to continue the conversation.
+                Sent with Flow by CHEFU Inc. Reply to this email to continue the conversation.
               </td>
             </tr>
           </table>

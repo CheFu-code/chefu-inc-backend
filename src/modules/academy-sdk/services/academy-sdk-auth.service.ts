@@ -53,7 +53,7 @@ export class AcademySdkAuthService {
         }),
       );
       throw new HttpException(
-        'CheFu Academy SDK login is not configured.',
+        'CHEFU Academy SDK login is not configured.',
         HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
@@ -174,7 +174,7 @@ export class AcademySdkAuthService {
         }),
       );
       throw new HttpException(
-        'CheFu Academy SDK login is not configured.',
+        'CHEFU Academy SDK login is not configured.',
         HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
@@ -355,7 +355,7 @@ export class AcademySdkAuthService {
       statusCode === 403
     ) {
       throw new HttpException(
-        'CheFu Academy SDK login is not configured.',
+        'CHEFU Academy SDK login is not configured.',
         HttpStatus.SERVICE_UNAVAILABLE,
       );
     }
@@ -373,7 +373,7 @@ export class AcademySdkAuthService {
 
     if (statusCode && statusCode >= 500) {
       throw new HttpException(
-        'CheFu Academy authentication is temporarily unavailable.',
+        'CHEFU Academy authentication is temporarily unavailable.',
         HttpStatus.SERVICE_UNAVAILABLE,
       );
     }

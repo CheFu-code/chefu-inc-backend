@@ -64,7 +64,7 @@ export class ResendService {
   private readonly fromAddress =
     process.env.SIGNIN_ALERT_FROM ||
     process.env.SECURITY_EMAIL_FROM ||
-    'CheFu Academy <security@chefuinc.com>';
+    'CHEFU Academy <security@chefuinc.com>';
   private readonly supportUrl =
     process.env.SIGNIN_ALERT_SUPPORT_URL ||
     'https://academy.chefuinc.com/support';
@@ -336,7 +336,7 @@ export class ResendService {
       type: this.escapeHtml(this.formatNotificationType(data.type)),
       title: this.escapeHtml(data.title),
       message: this.escapeHtml(data.message),
-      actionLabel: this.escapeHtml(data.actionLabel || 'Open CheFu Academy'),
+      actionLabel: this.escapeHtml(data.actionLabel || 'Open CHEFU Academy'),
       actionUrl: data.actionUrl || 'https://academy.chefuinc.com/dashboard',
     };
     const basePayload = {
@@ -352,7 +352,7 @@ export class ResendService {
           id: this.notificationTemplateId,
           variables: {
             userName: details.userName,
-            APP_NAME: 'CheFu Academy',
+            APP_NAME: 'CHEFU Academy',
             type: details.type,
             title: details.title,
             message: details.message,
@@ -379,7 +379,7 @@ export class ResendService {
         `${details.actionLabel}: ${details.actionUrl}`,
         'Manage preferences: https://academy.chefuinc.com/settings/account',
         '',
-        'CheFu Academy',
+        'CHEFU Academy',
       ].join('\n'),
     };
   }
@@ -408,7 +408,7 @@ export class ResendService {
     const basePayload = {
       from: this.fromAddress,
       to: [data.email],
-      subject: 'Security alert: CheFu Academy API key revoked',
+      subject: 'Security alert: CHEFU Academy API key revoked',
     };
 
     return {
@@ -417,7 +417,7 @@ export class ResendService {
       text: [
         `Hi ${details.userName},`,
         '',
-        'A CheFu Academy API key linked to your account appears to have been exposed.',
+        'A CHEFU Academy API key linked to your account appears to have been exposed.',
         'For your protection, we revoked the key immediately.',
         '',
         `Key name: ${details.keyName}`,
@@ -426,11 +426,11 @@ export class ResendService {
         `Time: ${details.time}`,
         details.url ? `Reference: ${details.url}` : '',
         '',
-        'Create a new API key from the CheFu Academy SDK CLI or dashboard if you still need access.',
+        'Create a new API key from the CHEFU Academy SDK CLI or dashboard if you still need access.',
         `Security settings: ${this.securityUrl}`,
         `Support: ${this.supportUrl}`,
         '',
-        'CheFu Security',
+        'CHEFU Security',
       ]
         .filter(Boolean)
         .join('\n'),
@@ -502,7 +502,7 @@ export class ResendService {
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CheFu API key revoked</title>
+    <title>CHEFU API key revoked</title>
   </head>
   <body style="margin:0;padding:0;background:#f5f7fb;color:#111827;font-family:Arial,Helvetica,sans-serif;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7fb;padding:24px 12px;">
@@ -526,7 +526,7 @@ export class ResendService {
               <td style="padding:30px 28px;">
                 <p style="margin:0 0 18px;font-size:16px;line-height:1.7;">Hi ${details.userName},</p>
                 <p style="margin:0 0 22px;color:#374151;font-size:15px;line-height:1.7;">
-                  A CheFu API key linked to your account appears to have been exposed. For your protection, we revoked it immediately.
+                  A CHEFU API key linked to your account appears to have been exposed. For your protection, we revoked it immediately.
                 </p>
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#f9fafb;">
                   ${this.detailRow('Key name', details.keyName)}
@@ -552,8 +552,8 @@ export class ResendService {
             </tr>
             <tr>
               <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 28px;color:#6b7280;font-size:12px;line-height:1.6;">
-                <strong style="color:#374151;">CheFu Security</strong><br>
-                Copyright ${new Date().getUTCFullYear()} CheFu Inc. All rights reserved.
+                <strong style="color:#374151;">CHEFU Security</strong><br>
+                Copyright ${new Date().getUTCFullYear()} CHEFU Inc. All rights reserved.
               </td>
             </tr>
           </table>
@@ -603,14 +603,14 @@ export class ResendService {
                   ${details.actionLabel}
                 </a>
                 <p style="margin:24px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
-                  You can manage email preferences from your CheFu Academy account settings.
+                  You can manage email preferences from your CHEFU Academy account settings.
                 </p>
               </td>
             </tr>
             <tr>
               <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 28px;color:#6b7280;font-size:12px;line-height:1.6;">
-                <strong style="color:#374151;">CheFu Academy</strong><br>
-                Copyright ${new Date().getUTCFullYear()} CheFu Inc. All rights reserved.
+                <strong style="color:#374151;">CHEFU Academy</strong><br>
+                Copyright ${new Date().getUTCFullYear()} CHEFU Inc. All rights reserved.
               </td>
             </tr>
           </table>
@@ -732,7 +732,7 @@ export class ResendService {
             <tr>
               <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 28px;color:#6b7280;font-size:12px;line-height:1.6;">
                 <strong style="color:#374151;">${appLabel} Security</strong><br>
-                Copyright ${new Date().getUTCFullYear()} CheFu Inc. All rights reserved.
+                Copyright ${new Date().getUTCFullYear()} CHEFU Inc. All rights reserved.
               </td>
             </tr>
           </table>
@@ -828,7 +828,7 @@ export class ResendService {
             <tr>
               <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 28px;color:#6b7280;font-size:12px;line-height:1.6;">
                 <strong style="color:#374151;">${appLabel} Security</strong><br>
-                Copyright ${new Date().getUTCFullYear()} CheFu Inc. All rights reserved.
+                Copyright ${new Date().getUTCFullYear()} CHEFU Inc. All rights reserved.
               </td>
             </tr>
           </table>
@@ -844,8 +844,8 @@ export class ResendService {
 
     const normalized = appId.trim().toLowerCase();
     const labels: Record<string, string> = {
-      academy: 'CheFu Academy',
-      admin: 'CheFu Admin',
+      academy: 'CHEFU Academy',
+      admin: 'CHEFU Admin',
       flow: 'Flow Mail',
       muzalo: 'Muzalo',
       quantum: 'Quantum',

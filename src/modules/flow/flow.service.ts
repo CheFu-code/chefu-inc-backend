@@ -681,7 +681,7 @@ export class FlowService {
         email: payload.testEmail,
         firstName: 'Test',
         lastName: 'Recipient',
-        company: 'CheFu Inc',
+        company: 'CHEFU Inc',
         tags: ['test'],
       });
     }
@@ -867,7 +867,7 @@ export class FlowService {
   ) {
     return {
       audienceName: payload.audienceName,
-      company: recipient.company || 'CheFu Inc',
+      company: recipient.company || 'CHEFU Inc',
       email: recipient.email,
       firstName: recipient.firstName || recipient.email.split('@')[0],
       lastName: recipient.lastName || '',
@@ -1177,7 +1177,7 @@ export class FlowService {
     const match = sender.match(/^(.+?)\s*<(.+?)>$/);
     if (match?.[1]) return match[1].replace(/^"|"$/g, '').trim();
 
-    return this.emailAddress(sender).split('@')[0] || 'CheFu Inc';
+    return this.emailAddress(sender).split('@')[0] || 'CHEFU Inc';
   }
 
   private recipientDisplayName(recipient: FlowRecipient) {

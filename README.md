@@ -1,4 +1,4 @@
-# CheFu API
+# CHEFU API
 
 Separate NestJS backend for deployment at `https://api.chefuinc.com`.
 
@@ -31,7 +31,7 @@ Flow sender allowlist.
 
 ## OAuth/OIDC
 
-CheFu API also acts as the CHEFU Account authorization server. It supports the
+CHEFU API also acts as the CHEFU Account authorization server. It supports the
 OAuth 2.0 Authorization Code flow with PKCE and OIDC discovery:
 
 - `GET /.well-known/openid-configuration`
@@ -46,14 +46,14 @@ browser clients must use `code_challenge_method=S256`.
 
 ## Backend Structure
 
-This backend is organized as a shared CheFu platform plus product modules:
+This backend is organized as a shared CHEFU platform plus product modules:
 
 - Platform modules: app registry, Firebase Admin, auth, and health.
 - Shared service modules: admin, AI, billing, email, and notifications.
 - Product modules: Academy SDK, Academy courses, Flow, and future apps.
 
 See `docs/backend-architecture.md` for the module pattern and the checklist for
-adding a new CheFu app.
+adding a new CHEFU app.
 
 ## Production Environment
 
@@ -74,7 +74,7 @@ Set these on the backend host:
 - `WHATSAPP_SYSTEM_USER_TOKEN`
 - `RESEND_API_KEY` for security notification emails
 - `FLOW_ACCESS_SECRET=<long random secret shared with the Flow frontend>`
-- `FLOW_SENDERS="CheFu Inc <hello@chefuinc.com>;Flow Mail <mail@chefuinc.com>;Support <support@chefuinc.com>;Security <security@chefuinc.com>;Muzalo <muzalo@chefuinc.com>;CheFu Academy <academy@chefuinc.com>;CheFu Quantum <quantum@chefuinc.com>"`
+- `FLOW_SENDERS="CHEFU Inc <hello@chefuinc.com>;Flow Mail <mail@chefuinc.com>;Support <support@chefuinc.com>;Security <security@chefuinc.com>;Muzalo <muzalo@chefuinc.com>;CHEFU Academy <academy@chefuinc.com>;CHEFU Quantum <quantum@chefuinc.com>"`
 - `SIGNIN_ALERT_TEMPLATE_ID` if using a saved Resend template for sign-in alerts
 - `PASSWORD_CHANGED_TEMPLATE_ID` if using a saved Resend template for password-change alerts
 
