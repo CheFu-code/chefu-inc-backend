@@ -27,6 +27,7 @@ export class PasskeyController {
     constructor(private readonly passkey: PasskeyService) { }
 
     @Post('register/options')
+    @UseGuards(AuthGuard)
     @HttpCode(200)
     async createRegistrationOptions(
         @Req() request: Request & { user?: AuthenticatedUser },
