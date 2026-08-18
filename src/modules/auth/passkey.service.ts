@@ -4,7 +4,6 @@ import {
     Injectable,
     InternalServerErrorException,
     Logger,
-    TooManyRequestsException,
     UnauthorizedException,
 } from '@nestjs/common';
 import {
@@ -117,7 +116,7 @@ export class PasskeyService {
 
         try {
             verification = await verifyRegistrationResponse({
-                expectedChallenge: challenge,
+                expectedChallenge: challenge as string,
                 expectedOrigin: config.origins,
                 expectedRPID: config.rpID,
                 requireUserVerification: true,
@@ -210,7 +209,7 @@ export class PasskeyService {
                     publicKey: Buffer.from(storedPasskey.publicKey, 'base64url'),
                     transports: storedPasskey.transports,
                 },
-                expectedChallenge: challenge,
+                expectedChallenge: challenge as string,
                 expectedOrigin: config.origins,
                 expectedRPID: config.rpID,
                 requireUserVerification: true,
@@ -507,7 +506,7 @@ export class PasskeyService {
         });
 
         if (result.limited) {
-            throw new TooManyRequestsException('Please wait and try again.');
+            throw new BadRequestException('Please wait and try again.');
         }
     }
 
