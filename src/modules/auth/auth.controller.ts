@@ -41,6 +41,7 @@ import {
 import { MfaBackupCodeService } from './mfa-backup-code.service';
 import { SecurityEventsService } from './security-events.service';
 import { SessionSignerService } from './session-signer.service';
+import { ProfilePictureService } from './profile-picture.service';
 import { ResendService } from '../email/resend.service';
 import {
   FLOW_ACCESS_DENIED_MESSAGE,
@@ -146,6 +147,8 @@ export class AuthController {
     private readonly securityEvents: SecurityEventsService,
     @Inject(RuntimeLimitService)
     private readonly runtimeLimits: RuntimeLimitService,
+    @Inject(ProfilePictureService)
+    private readonly profilePictureService: ProfilePictureService,
   ) {}
 
   @Get('me')
@@ -1733,5 +1736,43 @@ export class AuthController {
     if (result.limited) {
       throw new BadRequestException('Too many OTP requests. Try again later.');
     }
+  }
+
+  @Post('profile-picture')
+  @UseGuards(AuthGuard)
+  async uploadProfilePicture(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Body() body: { imageBase64: string; contentType?: string },
+  ) {
+    const user = request.user;
+    if (!user) {
+      throw new UnauthorizedException('User not authenticated.');
+    }
+    return this.profilePictureService.uploadProfilePicture(user, body);
+  }
+
+  @Get('profile-picture')
+  @UseGuards(AuthGuard)
+  async getProfilePicture(
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
+    const user = request.user;
+    if (!user) {
+      throw new UnauthorizedException('User not authenticated.');
+    }
+    return this.profilePictureService.getProfilePicture(user.uid);
+  }
+
+  @Delete('profile-picture')
+  @UseGuards(AuthGuard)
+  async deleteProfilePicture(
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
+    const user = request.user;
+    if (!user) {
+      throw new UnauthorizedException('User not authenticated.');
+    }
+    await this.profilePictureService.deleteProfilePicture(user);
+    return { message: 'Profile picture deleted successfully.' };
   }
 }

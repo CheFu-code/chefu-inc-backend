@@ -72,8 +72,8 @@ export class MfaSecurityEmailService {
       from: this.fromAddress,
       to: [data.email],
       subject: isEnabled
-        ? 'Two-factor authentication enabled on your CHEFU Account'
-        : 'Two-factor authentication disabled on your CHEFU Account',
+        ? 'Two-factor authentication enabled on your account'
+        : 'Two-factor authentication disabled on your account',
       template: {
         id: isEnabled ? this.enabledTemplateId : this.disabledTemplateId,
         variables: {

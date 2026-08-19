@@ -7,6 +7,7 @@ import { AuthGuard } from './auth.guard';
 import { MfaBackupCodeService } from './mfa-backup-code.service';
 import { OAuthService } from './oauth.service';
 import { PasskeyService } from './passkey.service';
+import { ProfilePictureService } from './profile-picture.service';
 import { SessionSignerService } from './session-signer.service';
 import { HoneytokenService } from './honeytoken.service';
 import { SecurityEventsService } from './security-events.service';

@@ -117,7 +117,6 @@ export class AuthGuard implements CanActivate {
         },
       };
     } catch {
-      // Fall through to the CHEFU OAuth verifier so existing tokens keep working.
 
       const dpop = request.headers.dpop;
       const claims = await this.oauthService.verifyAccessToken(
