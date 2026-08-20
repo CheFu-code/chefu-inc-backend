@@ -1,11 +1,13 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   Logger,
 } from "@nestjs/common";
 import { UploadApiOptions, v2 as cloudinary } from "cloudinary";
 import { Readable } from "node:stream";
 import { randomUUID } from "node:crypto";
+import { FieldValue } from "firebase-admin/firestore";
 import { FirebaseAdminService } from "../firebase-admin/firebase-admin.service";
 import { AuthenticatedUser } from "./authenticated-user";
 
@@ -30,12 +32,22 @@ const ALLOWED_IMAGE_TYPES = new Set([
 
 @Injectable()
 export class ProfilePictureService {
-  private logger = new Logger(ProfilePictureService.name);
+  private readonly logger = new Logger(ProfilePictureService.name);
 
-  constructor(private firebaseAdmin: FirebaseAdminService) {}
+  constructor(
+    @Inject(FirebaseAdminService)
+    private readonly firebaseAdmin: FirebaseAdminService,
+  ) {
+    cloudinary.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET,
+      secure: true,
+    });
+  }
 
   /**
-   * Uploads a profile picture to Cloudinary and stores the URL in Firestore
+   * Uploads a profile picture to Cloudinary and stores the URL in Firestore and Firebase Auth
    */
   async uploadProfilePicture(
     user: AuthenticatedUser,
@@ -58,20 +70,26 @@ export class ProfilePictureService {
       );
     }
 
-    // Delete old profile picture if it exists
-    const userDoc = await this.firebaseAdmin.firestore
+    const userEmail = user.email?.trim().toLowerCase();
+    if (!userEmail) {
+      throw new BadRequestException("User email is required.");
+    }
+
+    // Look for existing profile picture to delete from Cloudinary
+    const existingDoc = await this.firebaseAdmin
+      .db()
       .collection("users")
-      .doc(user.uid)
+      .doc(userEmail)
       .get();
 
-    if (userDoc.exists) {
-      const userData = userDoc.data();
-      if (userData?.profilePictureUrl) {
-        await this.deleteCloudinaryImage(userData.profilePictureUrl).catch(
-          (err) => {
-            this.logger.warn(`Failed to delete old profile picture: ${err}`);
-          },
-        );
+    if (existingDoc.exists) {
+      const userData = existingDoc.data();
+      const existingUrl =
+        userData?.profilePictureUrl || userData?.profilePicture || userData?.avatarUrl;
+      if (existingUrl && typeof existingUrl === "string" && existingUrl.includes("cloudinary.com")) {
+        await this.deleteCloudinaryImage(existingUrl).catch((err) => {
+          this.logger.warn(`Failed to delete old profile picture: ${err}`);
+        });
       }
     }
 
@@ -82,24 +100,44 @@ export class ProfilePictureService {
       resource_type: "image",
       folder: undefined, // already encoded in publicId
       overwrite: false,
-      tags: ["profile-picture", user.email],
+      tags: ["profile-picture", userEmail],
     });
 
-    // Store the profile picture URL in Firestore user document
-    await this.firebaseAdmin.firestore
+    const now = FieldValue.serverTimestamp();
+
+    // Update user document in Firestore
+    await this.firebaseAdmin
+      .db()
       .collection("users")
-      .doc(user.uid)
-      .update({
-        profilePictureUrl: result.secure_url,
-        profilePictureCloudinaryPath: result.public_id,
-        profilePictureUpdatedAt: new Date(),
-      });
+      .doc(userEmail)
+      .set(
+        {
+          profilePicture: result.secure_url,
+          avatarUrl: result.secure_url,
+          profilePictureUrl: result.secure_url,
+          profilePictureCloudinaryPath: result.public_id,
+          profilePictureSource: "profile_api",
+          profilePictureUpdatedAt: now,
+          updatedAt: now,
+        },
+        { merge: true },
+      );
+
+    // Also update Firebase Auth photoURL
+    if (user.uid) {
+      await this.firebaseAdmin
+        .auth()
+        .updateUser(user.uid, { photoURL: result.secure_url })
+        .catch((err) => {
+          this.logger.warn(`Failed to update photoURL in Firebase Auth: ${err}`);
+        });
+    }
 
     this.logger.log(
       JSON.stringify({
         event: "profile_picture_uploaded",
         uid: user.uid,
-        email: user.email,
+        email: userEmail,
         publicId: result.public_id,
       }),
     );
@@ -113,57 +151,124 @@ export class ProfilePictureService {
   /**
    * Gets the user's current profile picture URL
    */
-  async getProfilePicture(uid: string): Promise<ProfilePictureResponse | null> {
-    const userDoc = await this.firebaseAdmin.firestore
-      .collection("users")
-      .doc(uid)
-      .get();
+  async getProfilePicture(
+    userOrId: AuthenticatedUser | string,
+  ): Promise<ProfilePictureResponse | null> {
+    const email =
+      typeof userOrId === "object"
+        ? userOrId.email?.trim().toLowerCase()
+        : userOrId.includes("@")
+          ? userOrId.trim().toLowerCase()
+          : null;
 
-    if (!userDoc.exists) {
-      return null;
+    const uid = typeof userOrId === "object" ? userOrId.uid : userOrId;
+
+    if (email) {
+      const userDoc = await this.firebaseAdmin
+        .db()
+        .collection("users")
+        .doc(email)
+        .get();
+
+      if (userDoc.exists) {
+        const userData = userDoc.data();
+        const url =
+          userData?.profilePicture ||
+          userData?.avatarUrl ||
+          userData?.profilePictureUrl;
+        if (url) {
+          return {
+            url,
+            path: userData?.profilePictureCloudinaryPath || "",
+          };
+        }
+      }
     }
 
-    const userData = userDoc.data();
-    if (!userData?.profilePictureUrl) {
-      return null;
+    if (uid) {
+      const snapshot = await this.firebaseAdmin
+        .db()
+        .collection("users")
+        .where("uid", "==", uid)
+        .limit(1)
+        .get();
+
+      if (!snapshot.empty) {
+        const userData = snapshot.docs[0].data();
+        const url =
+          userData?.profilePicture ||
+          userData?.avatarUrl ||
+          userData?.profilePictureUrl;
+        if (url) {
+          return {
+            url,
+            path: userData?.profilePictureCloudinaryPath || "",
+          };
+        }
+      }
     }
 
-    return {
-      url: userData.profilePictureUrl,
-      path: userData.profilePictureCloudinaryPath || "",
-    };
+    return null;
   }
 
   /**
    * Deletes the user's profile picture
    */
   async deleteProfilePicture(user: AuthenticatedUser): Promise<void> {
-    const userDoc = await this.firebaseAdmin.firestore
+    const userEmail = user.email?.trim().toLowerCase();
+    if (!userEmail) return;
+
+    const userDoc = await this.firebaseAdmin
+      .db()
       .collection("users")
-      .doc(user.uid)
+      .doc(userEmail)
       .get();
 
     if (userDoc.exists) {
       const userData = userDoc.data();
-      if (userData?.profilePictureUrl) {
-        await this.deleteCloudinaryImage(userData.profilePictureUrl);
+      const existingUrl =
+        userData?.profilePictureUrl || userData?.profilePicture || userData?.avatarUrl;
+      if (existingUrl && typeof existingUrl === "string" && existingUrl.includes("cloudinary.com")) {
+        await this.deleteCloudinaryImage(existingUrl).catch((err) => {
+          this.logger.warn(`Failed to delete Cloudinary image: ${err}`);
+        });
       }
     }
 
-    // Clear the profile picture from Firestore
-    await this.firebaseAdmin.firestore
+    const now = FieldValue.serverTimestamp();
+
+    // Clear from Firestore
+    await this.firebaseAdmin
+      .db()
       .collection("users")
-      .doc(user.uid)
-      .update({
-        profilePictureUrl: null,
-        profilePictureCloudinaryPath: null,
-      });
+      .doc(userEmail)
+      .set(
+        {
+          profilePicture: "",
+          avatarUrl: "",
+          profilePictureUrl: null,
+          profilePictureCloudinaryPath: null,
+          profilePictureUpdatedAt: now,
+          updatedAt: now,
+        },
+        { merge: true },
+      );
+
+    // Clear from Firebase Auth
+    if (user.uid) {
+      await this.firebaseAdmin
+        .auth()
+        .updateUser(user.uid, { photoURL: null })
+        .catch((err) => {
+          this.logger.warn(`Failed to clear photoURL in Firebase Auth: ${err}`);
+        });
+    }
 
     this.logger.log(
       JSON.stringify({
         event: "profile_picture_deleted",
         uid: user.uid,
-        email: user.email,
+        email: userEmail,
       }),
     );
   }
@@ -226,12 +331,7 @@ export class ProfilePictureService {
         return;
       }
 
-      await new Promise<void>((resolve, reject) => {
-        cloudinary.uploader.destroy(publicId, (error, result) => {
-          if (error) return reject(new Error(error.message));
-          resolve();
-        });
-      });
+      await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
 
       this.logger.log(
         JSON.stringify({
@@ -243,7 +343,6 @@ export class ProfilePictureService {
       this.logger.error(
         `Failed to delete Cloudinary image: ${error instanceof Error ? error.message : error}`,
       );
-      throw error;
     }
   }
 }

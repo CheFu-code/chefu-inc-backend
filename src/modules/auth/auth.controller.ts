@@ -1760,7 +1760,7 @@ export class AuthController {
     if (!user) {
       throw new UnauthorizedException('User not authenticated.');
     }
-    return this.profilePictureService.getProfilePicture(user.uid);
+    return this.profilePictureService.getProfilePicture(user);
   }
 
   @Delete('profile-picture')
