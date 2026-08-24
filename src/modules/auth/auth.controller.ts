@@ -23,6 +23,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { createHash, randomBytes } from 'node:crypto';
 import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
+import { assertWhatsAppConfigured } from '../../common/env';
 import { AppsService } from '../apps/apps.service';
 import { CHEFU_APP_HEADER, ChefuAppId } from '../apps/app-registry';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -589,12 +590,9 @@ export class AuthController {
       }),
     );
 
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-    const token = process.env.WHATSAPP_SYSTEM_USER_TOKEN;
-
-    if (!phoneNumberId || !token) {
-      throw new InternalServerErrorException('Missing WhatsApp env vars.');
-    }
+    assertWhatsAppConfigured();
+    const phoneNumberId = (process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
+    const token = (process.env.WHATSAPP_SYSTEM_USER_TOKEN || '').trim();
 
     const upstream = await fetch(
       `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`,

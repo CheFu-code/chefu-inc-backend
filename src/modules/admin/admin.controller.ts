@@ -21,6 +21,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { AdminAppsService } from './admin-apps.service';
 import { hashForAudit } from '../../common/security-audit';
+import { assertWhatsAppConfigured } from '../../common/env';
 
 type RequestWithUser = Request & {
     user?: AuthenticatedUser;
@@ -178,12 +179,9 @@ export class AdminController {
             );
         }
 
-        const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-        const token = process.env.WHATSAPP_SYSTEM_USER_TOKEN;
-
-        if (!phoneNumberId || !token) {
-            throw new InternalServerErrorException('Missing WhatsApp env vars.');
-        }
+        assertWhatsAppConfigured();
+        const phoneNumberId = (process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
+        const token = (process.env.WHATSAPP_SYSTEM_USER_TOKEN || '').trim();
 
         this.logger.log(
             JSON.stringify({

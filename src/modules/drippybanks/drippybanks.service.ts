@@ -12,6 +12,7 @@ import { Readable } from "node:stream";
 import { v2 as cloudinary, UploadApiOptions } from "cloudinary";
 import { AuthenticatedUser } from "../auth/authenticated-user";
 import { FirebaseAdminService } from "../firebase-admin/firebase-admin.service";
+import { assertCloudinaryConfigured, assertPayFastConfigured } from "../../common/env";
 import {
   CreateOrderInput,
   CreateProductInput,
@@ -230,6 +231,8 @@ export class DrippybanksService {
     user: AuthenticatedUser,
     input: UploadImageInput,
   ): Promise<{ url: string; path: string }> {
+    assertCloudinaryConfigured();
+
     if (!input || !input.imageBase64) {
       throw new BadRequestException("Image data (imageBase64) is required.");
     }
@@ -700,6 +703,8 @@ export class DrippybanksService {
     user: AuthenticatedUser,
     input: GeneratePayFastPaymentInput,
   ): Promise<PayFastPaymentData> {
+    assertPayFastConfigured();
+
     const order = await this.getOrderById(input.orderId);
     const customerEmail = user.email.trim().toLowerCase();
     const isAdmin = user.roles
@@ -794,6 +799,8 @@ export class DrippybanksService {
   async handlePayFastNotify(
     body: Record<string, unknown>,
   ): Promise<{ status: string }> {
+    assertPayFastConfigured();
+
     this.logger.log(
       JSON.stringify({
         event: "drippybanks_payfast_itn_received",

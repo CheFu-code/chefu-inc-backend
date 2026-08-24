@@ -2,6 +2,7 @@ import {
   BadGatewayException,
   BadRequestException,
   Controller,
+  HttpException,
   InternalServerErrorException,
   Logger,
   Post,
@@ -9,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard';
+import { ConfigurationError, assertGeminiConfigured } from '../../common/env';
 
 type AIContent = {
   role: string;
@@ -65,18 +67,18 @@ export class AiController {
 
       return { result };
     } catch (error) {
-      if (error instanceof BadGatewayException) throw error;
-      console.error('[AI Generate API] Failed:', error);
+      if (error instanceof HttpException) throw error;
+      if (error instanceof ConfigurationError) {
+        throw new InternalServerErrorException(error.message);
+      }
+      this.logger.error(`AI generation failed: ${error instanceof Error ? error.message : String(error)}`);
       throw new InternalServerErrorException('Failed to generate AI content.');
     }
   }
 
   private async getAIClient() {
-    const apiKey = process.env.GEMINI_API_KEY;
-
-    if (!apiKey) {
-      throw new InternalServerErrorException('GEMINI_API_KEY is not configured.');
-    }
+    assertGeminiConfigured();
+    const apiKey = (process.env.GEMINI_API_KEY || '').trim();
 
     const { GoogleGenAI } = await import('@google/genai');
     return new GoogleGenAI({ apiKey });

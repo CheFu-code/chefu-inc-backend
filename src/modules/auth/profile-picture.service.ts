@@ -11,6 +11,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { FirebaseAdminService } from "../firebase-admin/firebase-admin.service";
 import { AuthenticatedUser } from "./authenticated-user";
 import { hashForAudit } from "../../common/security-audit";
+import { assertCloudinaryConfigured } from "../../common/env";
 
 export interface UploadProfilePictureInput {
   imageBase64: string;
@@ -54,6 +55,8 @@ export class ProfilePictureService {
     user: AuthenticatedUser,
     input: UploadProfilePictureInput,
   ): Promise<ProfilePictureResponse> {
+    assertCloudinaryConfigured();
+
     if (!input || !input.imageBase64) {
       throw new BadRequestException("Image data (imageBase64) is required.");
     }

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { assertResendConfigured } from '../../common/env';
 
 export interface SignInNotificationData {
   email: string;
@@ -82,16 +83,18 @@ export class ResendService {
     process.env.NOTIFICATION_EMAIL_FROM_BY_APP,
   );
 
+  private getApiKey(): string {
+    assertResendConfigured();
+    return (process.env.RESEND_API_KEY || '').trim();
+  }
+
   async sendSignInNotification(data: SignInNotificationData): Promise<void> {
-    if (!this.RESEND_API_KEY) {
-      this.logger.warn('RESEND_API_KEY is not configured - skipping email');
-      return;
-    }
+    const apiKey = this.getApiKey();
 
     const response = await fetch(this.RESEND_API_URL, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.RESEND_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(this.getSignInPayload(data)),
@@ -113,15 +116,12 @@ export class ResendService {
   async sendPasswordChangedNotification(
     data: PasswordChangedNotificationData,
   ): Promise<void> {
-    if (!this.RESEND_API_KEY) {
-      this.logger.warn('RESEND_API_KEY is not configured - skipping email');
-      return;
-    }
+    const apiKey = this.getApiKey();
 
     const response = await fetch(this.RESEND_API_URL, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.RESEND_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(this.getPasswordChangedPayload(data)),
@@ -143,15 +143,12 @@ export class ResendService {
   async sendPreferenceNotification(
     data: PreferenceNotificationData,
   ): Promise<void> {
-    if (!this.RESEND_API_KEY) {
-      this.logger.warn('RESEND_API_KEY is not configured - skipping email');
-      return;
-    }
+    const apiKey = this.getApiKey();
 
     const response = await fetch(this.RESEND_API_URL, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.RESEND_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(this.getPreferenceNotificationPayload(data)),
@@ -174,15 +171,12 @@ export class ResendService {
   async sendApiKeyCompromisedNotification(
     data: ApiKeyCompromisedNotificationData,
   ): Promise<void> {
-    if (!this.RESEND_API_KEY) {
-      this.logger.warn('RESEND_API_KEY is not configured - skipping email');
-      return;
-    }
+    const apiKey = this.getApiKey();
 
     const response = await fetch(this.RESEND_API_URL, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.RESEND_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(this.getApiKeyCompromisedPayload(data)),
@@ -205,15 +199,12 @@ export class ResendService {
   async sendWelcomePromoNotification(
     data: WelcomePromoNotificationData,
   ): Promise<void> {
-    if (!this.RESEND_API_KEY) {
-      this.logger.warn('RESEND_API_KEY is not configured - skipping email');
-      return;
-    }
+    const apiKey = this.getApiKey();
 
     const response = await fetch(this.RESEND_API_URL, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.RESEND_API_KEY}`,
+        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(this.getWelcomePromoPayload(data)),

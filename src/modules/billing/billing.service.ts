@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import admin from 'firebase-admin';
 import { Webhook } from 'svix';
+import { assertClerkConfigured } from '../../common/env';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
   BillingHistoryItem,
@@ -89,11 +90,8 @@ export class BillingService {
   }
 
   private verifyWebhook(rawBody: Buffer | string, headers: Record<string, string>) {
-    const secret = process.env.CLERK_WEBHOOK_SECRET;
-
-    if (!secret) {
-      throw new ServiceUnavailableException('Clerk webhook secret is not configured.');
-    }
+    assertClerkConfigured();
+    const secret = (process.env.CLERK_WEBHOOK_SECRET || '').trim();
 
     const svixId = headers['svix-id'];
     const svixTimestamp = headers['svix-timestamp'];

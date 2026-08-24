@@ -3,7 +3,7 @@ import cookieParser from "cookie-parser";
 import { AppModule } from "./app.module";
 import { Logger } from "@nestjs/common";
 import { NestExpressApplication } from "@nestjs/platform-express";
-import { validateProductionEnv } from "./common/env";
+import { validateBackendEnv } from "./common/env";
 import { GlobalExceptionFilter } from "./common/global-exception.filter";
 import { NextFunction, Request, Response } from "express";
 import {
@@ -68,12 +68,11 @@ function setSecurityHeaders(response: Response) {
 
 async function bootstrap() {
     const logger = new Logger("Bootstrap");
-    const envValidation = validateProductionEnv();
+    const envValidation = validateBackendEnv();
 
-    if (envValidation.missing.length > 0) {
-        throw new Error(
-            `Missing required production environment variables: ${envValidation.missing.join(", ")}`,
-        );
+    if (!envValidation.isValid && envValidation.error) {
+        logger.error(envValidation.error.message);
+        throw envValidation.error;
     }
 
     const app = await NestFactory.create<NestExpressApplication>(AppModule, {
