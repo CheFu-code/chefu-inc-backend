@@ -23,8 +23,10 @@ import {
 } from './flow-email.types';
 import {
   flowEnvAllowedEmails,
+  formatSenderIdentity,
   isChefuEmail,
   normalizeEmailAddress,
+  parseSenderLabel,
 } from './flow-access';
 
 type ResendEmailPayload = {
@@ -46,6 +48,23 @@ type ResendAttachmentPayload = {
   contentId?: string;
   content_type?: string;
   filename: string;
+};
+
+type NormalizedFlowPayload = {
+  action: 'test' | 'campaign';
+  audienceName: string;
+  ctaLabel: string;
+  ctaUrl: string;
+  attachments: ResendAttachmentPayload[];
+  bodyFormat: 'html' | 'text';
+  from: string;
+  html: string;
+  preheader: string;
+  recipients: FlowRecipient[];
+  replyTo: string;
+  subject: string;
+  tags: string[];
+  testEmail: string;
 };
 
 type FlowFolderCounts = {
@@ -74,8 +93,8 @@ export class FlowService {
     return process.env.RESEND_API_KEY;
   }
 
-  getConfig() {
-    const senders = this.senderIdentities();
+  async getConfig() {
+    const senders = await this.senderIdentities();
     const configuredDefault =
       process.env.FLOW_DEFAULT_FROM || process.env.RESEND_FROM || '';
     const defaultFrom = this.isConfiguredSender(configuredDefault, senders)
@@ -147,7 +166,7 @@ export class FlowService {
       throw new InternalServerErrorException('RESEND_API_KEY is not configured.');
     }
 
-    const normalized = this.normalizePayload(payload);
+    const normalized = await this.normalizePayload(payload);
     const limit = this.maxRecipients();
     const recipients =
       normalized.action === 'test'
@@ -603,9 +622,11 @@ export class FlowService {
   }) {
     const body = String(payload.body || '').trim();
     const subject = String(payload.subject || '(no subject)').trim() || '(no subject)';
+    const config = await this.getConfig();
+    const resolvedFrom = await this.resolveSender(payload.from || '');
     const from =
-      this.resolveSender(payload.from || '') ||
-      this.getConfig().defaultFrom ||
+      resolvedFrom ||
+      config.defaultFrom ||
       'Flow Mail <mail@flow.chefu.co.za>';
     const to = this.normalizeAddressList(payload.to).filter(address =>
       /^\S+@\S+\.\S+$/.test(this.emailAddress(address) || address),
@@ -653,7 +674,7 @@ export class FlowService {
     };
   }
 
-  // ── Allowed email management ────────────────────────────────────────────
+  // ── Allowed email & sender management ──────────────────────────────────
 
   /**
    * Returns true when the given email is permitted to access Flow Mail.
@@ -666,39 +687,56 @@ export class FlowService {
 
     // Fast path: env senders list (synchronous)
     const envEmails = flowEnvAllowedEmails();
-    if (!envEmails.size) return true;       // open access — no restriction configured
     if (envEmails.has(normalized)) return true;
 
-    // Slow path: Firestore allowed-emails collection
+    // Check Firestore allowed-emails collection
     try {
       const doc = await this.allowedEmailsCollection().doc(this.emailDocId(normalized)).get();
-      return doc.exists && String((doc.data() || {}).status || '') === 'active';
+      if (doc.exists && String((doc.data() || {}).status || '') === 'active') {
+        return true;
+      }
     } catch {
-      return false;
+      // Ignore Firestore lookup failures and fall through to fallback
     }
+
+    if (!envEmails.size) return true; // open access fallback
+    return false;
   }
 
-  /** Returns all dynamically registered allowed emails (Firestore only). */
+  /** Returns all registered senders (env + Firestore) and allowed email records. */
   async listAllowedEmails() {
+    const senders = await this.senderIdentities();
     const snapshot = await this.allowedEmailsCollection()
       .where('status', '==', 'active')
-      .orderBy('addedAt', 'desc')
       .get();
 
+    const emails = snapshot.docs.map(doc => {
+      const data = doc.data() || {};
+      return {
+        addedAt: this.firestoreTimestampToIso(data.addedAt),
+        addedBy: typeof data.addedBy === 'string' ? data.addedBy : null,
+        email: String(data.email || doc.id),
+        formattedEmail: typeof data.formattedEmail === 'string' ? data.formattedEmail : undefined,
+        label: typeof data.label === 'string' ? data.label : undefined,
+        name: typeof data.name === 'string' ? data.name : undefined,
+      };
+    });
+
     return {
-      emails: snapshot.docs.map(doc => ({
-        addedAt: this.firestoreTimestampToIso(doc.data().addedAt),
-        addedBy: typeof doc.data().addedBy === 'string' ? doc.data().addedBy : null,
-        email: String(doc.data().email || doc.id),
-      })),
+      emails,
+      senders,
     };
   }
 
   /**
-   * Adds a new allowed email to the Firestore collection.
+   * Adds a new allowed email / sender to the Firestore collection.
    * Only `@chefu.co.za` addresses are accepted.
    */
-  async addAllowedEmail(email: string, addedBy?: string | null) {
+  async addAllowedEmail(
+    email: string,
+    name?: string | null,
+    addedBy?: string | null,
+  ) {
     const normalized = normalizeEmailAddress(email);
 
     if (!normalized) {
@@ -706,39 +744,71 @@ export class FlowService {
     }
     if (!isChefuEmail(normalized)) {
       throw new BadRequestException(
-        'Only @chefu.co.za email addresses may be added as Flow Mail users.',
+        'Only @chefu.co.za email addresses may be added as Flow Mail senders.',
       );
     }
 
+    const cleanName = (name || '').trim().replace(/[<>"\r\n]/g, '');
+    const formattedEmail = formatSenderIdentity(normalized, cleanName);
+    const label = parseSenderLabel(formattedEmail);
     const docId = this.emailDocId(normalized);
     const ref = this.allowedEmailsCollection().doc(docId);
     const existing = await ref.get();
 
     if (existing.exists && String((existing.data() || {}).status || '') === 'active') {
+      await ref.update({
+        formattedEmail,
+        label,
+        name: cleanName || null,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+
       return {
-        added: false,
+        added: true,
         email: normalized,
-        message: 'Email is already an allowed Flow Mail user.',
+        label,
+        message: 'Sender identity updated.',
+        name: cleanName || undefined,
+        sender: {
+          addedAt: this.firestoreTimestampToIso((existing.data() || {}).addedAt) || new Date().toISOString(),
+          email: formattedEmail,
+          label,
+          name: cleanName || undefined,
+          source: 'custom' as const,
+        },
       };
     }
 
+    const nowIso = new Date().toISOString();
     await ref.set({
       addedAt: FieldValue.serverTimestamp(),
       addedBy: addedBy || null,
       email: normalized,
+      formattedEmail,
+      label,
+      name: cleanName || null,
       removedAt: null,
       status: 'active',
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
     return {
       added: true,
       email: normalized,
+      label,
+      name: cleanName || undefined,
+      sender: {
+        addedAt: nowIso,
+        email: formattedEmail,
+        label,
+        name: cleanName || undefined,
+        source: 'custom' as const,
+      },
     };
   }
 
   /**
    * Soft-removes an email from the allowed-emails collection.
-   * The record is kept for audit purposes (status set to 'removed').
    */
   async removeAllowedEmail(email: string) {
     const normalized = normalizeEmailAddress(email);
@@ -751,12 +821,13 @@ export class FlowService {
     const existing = await ref.get();
 
     if (!existing.exists || String((existing.data() || {}).status || '') !== 'active') {
-      throw new BadRequestException('Email is not an active Flow Mail user.');
+      throw new BadRequestException('Email is not an active custom Flow Mail sender.');
     }
 
     await ref.update({
       removedAt: FieldValue.serverTimestamp(),
       status: 'removed',
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
     return {
@@ -767,7 +838,7 @@ export class FlowService {
 
   // ── Private helpers ──────────────────────────────────────────────────────
 
-  private normalizePayload(payload: FlowSendPayload) {
+  private async normalizePayload(payload: FlowSendPayload) {
     const action = payload.action || 'test';
     const recipients = Array.isArray(payload.recipients)
       ? payload.recipients.filter(recipient =>
@@ -781,12 +852,12 @@ export class FlowService {
     if (action !== 'test' && action !== 'campaign') {
       throw new BadRequestException('Invalid Flow send action.');
     }
-    const from = this.resolveSender(payload.from || '');
+    const from = await this.resolveSender(payload.from || '');
 
     if (!from) {
       throw new BadRequestException('A valid sender is required.');
     }
-    if (!this.isAllowedSender(from)) {
+    if (!(await this.isAllowedSender(from))) {
       throw new BadRequestException('Sender is not allowed for Flow Mail.');
     }
     if (!payload.subject || payload.subject.trim().length < 2) {
@@ -880,7 +951,7 @@ export class FlowService {
   }
 
   private createResendEmail(
-    payload: ReturnType<FlowService['normalizePayload']>,
+    payload: NormalizedFlowPayload,
     recipient: FlowRecipient,
     body: string,
     subject: string,
@@ -946,14 +1017,14 @@ export class FlowService {
   }
 
   private renderRecipientBody(
-    payload: ReturnType<FlowService['normalizePayload']>,
+    payload: NormalizedFlowPayload,
     recipient: FlowRecipient,
   ) {
     return applyVariables(payload.html, this.recipientVariables(payload, recipient));
   }
 
   private renderRecipientSubject(
-    payload: ReturnType<FlowService['normalizePayload']>,
+    payload: NormalizedFlowPayload,
     recipient: FlowRecipient,
   ) {
     return applyVariables(
@@ -963,7 +1034,7 @@ export class FlowService {
   }
 
   private renderRecipientHtml(
-    payload: ReturnType<FlowService['normalizePayload']>,
+    payload: NormalizedFlowPayload,
     recipient: FlowRecipient,
     body: string,
     subject: string,
@@ -981,7 +1052,7 @@ export class FlowService {
   }
 
   private recipientVariables(
-    payload: ReturnType<FlowService['normalizePayload']>,
+    payload: NormalizedFlowPayload,
     recipient: FlowRecipient,
   ) {
     return {
@@ -1233,7 +1304,7 @@ export class FlowService {
     return Math.max(1, Number(process.env.FLOW_MAX_RECIPIENTS || 100));
   }
 
-  private senderIdentities() {
+  private envSenderIdentities() {
     const raw =
       process.env.FLOW_SENDERS ||
       process.env.FLOW_DEFAULT_FROM ||
@@ -1244,14 +1315,80 @@ export class FlowService {
       .split(';')
       .map(value => value.trim())
       .filter(Boolean)
-      .map(value => ({
-        label: this.senderLabel(value),
-        email: value,
-      }));
+      .map(value => {
+        const name = this.senderDisplayName(value);
+        return {
+          email: value,
+          label: this.senderLabel(value),
+          name: name !== 'CHEFU Inc' ? name : undefined,
+          source: 'env' as const,
+        };
+      });
   }
 
-  private isAllowedSender(sender: string) {
-    const senders = this.senderIdentities();
+  async senderIdentities(): Promise<Array<{
+    addedAt?: string | null;
+    email: string;
+    label: string;
+    name?: string;
+    source: 'env' | 'custom';
+  }>> {
+    const envList = this.envSenderIdentities();
+    const sendersByEmail = new Map<string, {
+      addedAt?: string | null;
+      email: string;
+      label: string;
+      name?: string;
+      source: 'env' | 'custom';
+    }>();
+
+    for (const item of envList) {
+      const bare = this.emailAddress(item.email);
+      if (bare) {
+        sendersByEmail.set(bare, item);
+      }
+    }
+
+    try {
+      const snapshot = await this.allowedEmailsCollection()
+        .where('status', '==', 'active')
+        .get();
+
+      for (const doc of snapshot.docs) {
+        const data = doc.data() || {};
+        const email = normalizeEmailAddress(String(data.email || doc.id));
+        if (!email || !isChefuEmail(email)) continue;
+
+        const name = typeof data.name === 'string' ? data.name.trim() : '';
+        const formattedEmail =
+          typeof data.formattedEmail === 'string' && data.formattedEmail.trim()
+            ? data.formattedEmail.trim()
+            : formatSenderIdentity(email, name);
+        const label =
+          typeof data.label === 'string' && data.label.trim()
+            ? data.label.trim()
+            : parseSenderLabel(formattedEmail);
+        const addedAt = this.firestoreTimestampToIso(data.addedAt);
+
+        sendersByEmail.set(email, {
+          addedAt,
+          email: formattedEmail,
+          label,
+          name: name || undefined,
+          source: 'custom',
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to load custom Flow senders: ${error instanceof Error ? error.message : error}`,
+      );
+    }
+
+    return Array.from(sendersByEmail.values());
+  }
+
+  private async isAllowedSender(sender: string) {
+    const senders = await this.senderIdentities();
     if (!senders.length) return true;
 
     const senderEmail = this.emailAddress(sender);
@@ -1260,11 +1397,11 @@ export class FlowService {
     );
   }
 
-  private resolveSender(sender: string) {
+  private async resolveSender(sender: string) {
     const senderEmail = this.emailAddress(sender);
     if (!senderEmail) return '';
 
-    const senders = this.senderIdentities();
+    const senders = await this.senderIdentities();
     if (!senders.length) return sender.trim();
 
     return (
@@ -1275,7 +1412,7 @@ export class FlowService {
 
   private isConfiguredSender(
     sender: string,
-    senders = this.senderIdentities(),
+    senders: Array<{ email: string; label: string }>,
   ) {
     const senderEmail = this.emailAddress(sender);
     if (!senderEmail) return false;
@@ -1320,20 +1457,18 @@ export class FlowService {
     const senderEmail = this.emailAddress(sender);
     if (!senderEmail) return false;
 
-    if (this.internalSenderEmails().has(senderEmail)) {
+    const senderDomain = this.emailDomain(senderEmail);
+    if (senderDomain === 'chefu.co.za' || senderDomain.endsWith('.chefu.co.za')) {
       return true;
     }
 
-    const senderDomain = this.emailDomain(senderEmail);
-    return Boolean(
-      senderDomain && this.internalSenderDomains().has(senderDomain),
-    );
+    return this.internalSenderEmails().has(senderEmail);
   }
 
   private internalSenderEmails() {
     return new Set(
       [
-        ...this.senderIdentities().map(identity => identity.email),
+        ...this.envSenderIdentities().map(identity => identity.email),
         process.env.FLOW_INBOUND_ADDRESS,
         process.env.FLOW_DEFAULT_FROM,
         process.env.RESEND_FROM,

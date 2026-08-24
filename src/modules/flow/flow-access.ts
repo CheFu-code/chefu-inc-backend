@@ -50,3 +50,20 @@ export function normalizeEmailAddress(value: string) {
 
     return /^\S+@\S+\.\S+$/.test(email) ? email : '';
 }
+
+export function formatSenderIdentity(email: string, name?: string | null): string {
+    const cleanEmail = normalizeEmailAddress(email);
+    const cleanName = (name || '').trim().replace(/[<>"\r\n]/g, '');
+
+    if (!cleanEmail) return '';
+    if (!cleanName) return cleanEmail;
+
+    return `${cleanName} <${cleanEmail}>`;
+}
+
+export function parseSenderLabel(sender: string): string {
+    const match = sender.match(/^(.+?)\s*<(.+?)>$/);
+    if (!match) return sender.trim();
+
+    return `${match[1].replace(/^"|"$/g, '').trim()} (${match[2].trim()})`;
+}

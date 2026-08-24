@@ -49,6 +49,7 @@ import {
   FLOW_SESSION_HEADER,
   isFlowAllowedEmail,
   isFlowSessionRequest,
+  normalizeEmailAddress,
 } from '../flow/flow-access';
 
 function decodeJwtPayload(token: string) {
@@ -435,7 +436,7 @@ export class AuthController {
 
     if (
       sessionAppId === 'flow' &&
-      !isFlowAllowedEmail(decodedToken.email)
+      !(await this.isFlowSessionAllowed(decodedToken.email))
     ) {
       this.logger.warn(
         JSON.stringify({
@@ -1772,5 +1773,28 @@ export class AuthController {
     }
     await this.profilePictureService.deleteProfilePicture(user);
     return { message: 'Profile picture deleted successfully.' };
+  }
+
+  private async isFlowSessionAllowed(email?: string | null) {
+    const normalized = normalizeEmailAddress(email || '');
+    if (!normalized) return false;
+
+    if (isFlowAllowedEmail(normalized)) return true;
+
+    try {
+      const doc = await this.firebaseAdmin
+        .db()
+        .collection('flowAllowedEmails')
+        .doc(normalized.replace(/[.#$/\[\]]/g, '_'))
+        .get();
+
+      if (doc.exists && String((doc.data() || {}).status || '') === 'active') {
+        return true;
+      }
+    } catch {
+      // Ignore Firestore check failures
+    }
+
+    return false;
   }
 }

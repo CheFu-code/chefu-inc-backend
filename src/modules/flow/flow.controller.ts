@@ -95,7 +95,47 @@ export class FlowController {
     return this.flowAccessKeys.revokeKey(keyId, request.user);
   }
 
-  // ── Allowed emails ──────────────────────────────────────────────────────
+  // ── Allowed emails & senders ──────────────────────────────────────────
+
+  @Get('allowed-emails')
+  async getAllowedEmails(
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    return this.flowService.listAllowedEmails();
+  }
+
+  @Post('allowed-emails')
+  async createAllowedEmail(
+    @Body() body: { email?: string; name?: string },
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request & { user?: AuthenticatedUser },
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    const session = request ? await this.flowAccessKeys.sessionFromRequest(request) : null;
+    const addedBy =
+      request?.user?.email ||
+      request?.user?.uid ||
+      session?.label ||
+      'Flow Session';
+
+    return this.flowService.addAllowedEmail(
+      body.email || '',
+      body.name || null,
+      addedBy,
+    );
+  }
+
+  @Delete('allowed-emails/:email')
+  async deleteAllowedEmail(
+    @Param('email') email: string,
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request);
+    return this.flowService.removeAllowedEmail(email);
+  }
 
   @Get('admin/allowed-emails')
   @UseGuards(AuthGuard, AdminGuard)
@@ -106,11 +146,12 @@ export class FlowController {
   @Post('admin/allowed-emails')
   @UseGuards(AuthGuard, AdminGuard)
   async addAllowedEmail(
-    @Body() body: { email?: string },
+    @Body() body: { email?: string; name?: string },
     @Req() request: Request & { user?: AuthenticatedUser },
   ) {
     return this.flowService.addAllowedEmail(
       body.email || '',
+      body.name || null,
       request.user?.email || request.user?.uid || null,
     );
   }
