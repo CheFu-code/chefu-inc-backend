@@ -73,7 +73,7 @@ export class PasskeyService {
                 residentKey: 'required',
                 userVerification: 'required',
             },
-            excludeCredentials: credentials.map(credential => ({
+            excludeCredentials: credentials.map(({ credential }) => ({
                 id: credential.credentialId,
                 transports: credential.transports,
             })),
