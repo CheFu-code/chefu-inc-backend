@@ -21,7 +21,7 @@ if (!apiKey) {
 const html = await readFile(htmlPath, 'utf8');
 const template = {
   alias,
-  from: process.env.FLOW_DEFAULT_FROM || 'Flow Mail <mail@chefuinc.com>',
+  from: process.env.FLOW_DEFAULT_FROM || 'Flow Mail <mail@chefu.co.za>',
   html,
   name: 'Flow Mail Default',
   subject: '{{SUBJECT}}',

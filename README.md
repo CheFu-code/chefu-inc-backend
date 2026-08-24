@@ -1,6 +1,6 @@
 # CHEFU API
 
-Separate NestJS backend for deployment at `https://api.chefuinc.com`.
+Separate NestJS backend for deployment at `https://api.chefu.co.za`.
 
 ## Local Development
 
@@ -59,11 +59,11 @@ adding a new CHEFU app.
 
 Set these on the backend host:
 
-- `FRONTEND_ORIGIN=https://chefuinc.com`
-- `AUTH_COOKIE_DOMAIN=.chefuinc.com`
+- `FRONTEND_ORIGIN=https://chefu.co.za`
+- `AUTH_COOKIE_DOMAIN=.chefu.co.za`
 - `AUTH_SESSION_SECRET=<long random secret>`
-- `CHEFU_ACCOUNT_URL=https://chefuinc.com`
-- `OAUTH_ISSUER=https://api.chefuinc.com`
+- `CHEFU_ACCOUNT_URL=https://chefu.co.za`
+- `OAUTH_ISSUER=https://api.chefu.co.za`
 - `OAUTH_PRIVATE_KEY=<RSA private key PEM with \n escapes>`
 - `OAUTH_KEY_ID=<stable signing key id>`
 - `OAUTH_KEY_ID=<stable signing key id>`
@@ -74,13 +74,13 @@ Set these on the backend host:
 - `WHATSAPP_SYSTEM_USER_TOKEN`
 - `RESEND_API_KEY` for security notification emails
 - `FLOW_ACCESS_SECRET=<long random secret shared with the Flow frontend>`
-- `FLOW_SENDERS="CHEFU Inc <hello@chefuinc.com>;Flow Mail <mail@chefuinc.com>;Support <support@chefuinc.com>;Security <security@chefuinc.com>;Muzalo <muzalo@chefuinc.com>;CHEFU Academy <academy@chefuinc.com>;CHEFU Quantum <quantum@chefuinc.com>"`
+- `FLOW_SENDERS="CHEFU Inc <hello@chefu.co.za>;Flow Mail <mail@chefu.co.za>;Support <support@chefu.co.za>;Security <security@chefu.co.za>;Muzalo <muzalo@chefu.co.za>;CHEFU Academy <academy@chefu.co.za>;CHEFU Quantum <quantum@chefu.co.za>"`
 - `SIGNIN_ALERT_TEMPLATE_ID` if using a saved Resend template for sign-in alerts
 - `PASSWORD_CHANGED_TEMPLATE_ID` if using a saved Resend template for password-change alerts
 
 On the frontend host, set:
 
-- `NEXT_PUBLIC_API_BASE_URL=https://api.chefuinc.com`
+- `NEXT_PUBLIC_API_BASE_URL=https://api.chefu.co.za`
 
 ## Routes
 
@@ -124,4 +124,3 @@ On the frontend host, set:
 - `PUT /drippybanks/products/:id` admin only
 - `DELETE /drippybanks/products/:id` admin only
 - `POST /drippybanks/products/:id/toggle-stock` admin only
-

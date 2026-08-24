@@ -541,7 +541,7 @@ export class PasskeyService {
             process.env.PASSKEY_ORIGIN ||
             process.env.CHEFU_ACCOUNT_URL ||
             (process.env.NODE_ENV === 'production'
-                ? 'https://myaccount.chefuinc.com'
+                ? 'https://myaccount.chefu.co.za'
                 : 'http://localhost:3000');
         const origins = configuredOrigins
             .split(',')

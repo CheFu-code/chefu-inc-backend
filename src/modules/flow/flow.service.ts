@@ -63,7 +63,7 @@ export class FlowService {
   constructor(
     @Inject(FirebaseAdminService)
     private readonly firebaseAdmin: FirebaseAdminService,
-  ) {}
+  ) { }
 
   private get resendApiKey() {
     return process.env.RESEND_API_KEY;
@@ -76,8 +76,8 @@ export class FlowService {
     const defaultFrom = this.isConfiguredSender(configuredDefault, senders)
       ? configuredDefault
       : senders[0]?.email ||
-        configuredDefault ||
-        'Flow Mail <mail@flow.chefuinc.com>';
+      configuredDefault ||
+      'Flow Mail <mail@flow.chefu.co.za>';
 
     return {
       defaultFrom,
@@ -147,14 +147,14 @@ export class FlowService {
     const recipients =
       normalized.action === 'test'
         ? [
-            {
-              email: normalized.testEmail || normalized.recipients[0].email,
-              firstName: 'Test',
-              lastName: 'Recipient',
-              company: 'Flow',
-              tags: ['test'],
-            },
-          ]
+          {
+            email: normalized.testEmail || normalized.recipients[0].email,
+            firstName: 'Test',
+            lastName: 'Recipient',
+            company: 'Flow',
+            tags: ['test'],
+          },
+        ]
         : normalized.recipients.slice(0, limit);
 
     if (
@@ -193,11 +193,11 @@ export class FlowService {
         ? await this.postToResend('/emails', emails[0])
         : normalized.attachments.length
           ? await Promise.all(
-              emails.map(email => this.postToResend('/emails', email)),
-            )
+            emails.map(email => this.postToResend('/emails', email)),
+          )
           : await this.postToResend('/emails/batch', emails, {
-              'x-batch-validation': 'permissive',
-            });
+            'x-batch-validation': 'permissive',
+          });
     const sentAt = new Date().toISOString();
     const sendGroupId = randomUUID();
 
@@ -438,8 +438,8 @@ export class FlowService {
     const rawAttachments =
       data && typeof data === 'object'
         ? (data as { data?: unknown; attachments?: unknown }).data ||
-          (data as { attachments?: unknown }).attachments ||
-          data
+        (data as { attachments?: unknown }).attachments ||
+        data
         : data;
     const attachments = this.normalizeAttachments(rawAttachments);
 
@@ -601,7 +601,7 @@ export class FlowService {
     const from =
       this.resolveSender(payload.from || '') ||
       this.getConfig().defaultFrom ||
-      'Flow Mail <mail@flow.chefuinc.com>';
+      'Flow Mail <mail@flow.chefu.co.za>';
     const to = this.normalizeAddressList(payload.to).filter(address =>
       /^\S+@\S+\.\S+$/.test(this.emailAddress(address) || address),
     );
@@ -652,8 +652,8 @@ export class FlowService {
     const action = payload.action || 'test';
     const recipients = Array.isArray(payload.recipients)
       ? payload.recipients.filter(recipient =>
-          /^\S+@\S+\.\S+$/.test(String(recipient.email || '')),
-        )
+        /^\S+@\S+\.\S+$/.test(String(recipient.email || '')),
+      )
       : [];
     const attachments = this.normalizeSendAttachments(payload.attachments);
     const bodyFormat: 'html' | 'text' =
@@ -909,12 +909,12 @@ export class FlowService {
 
     return String(
       input.type ||
-        input.event ||
-        input.eventType ||
-        data.type ||
-        data.event ||
-        data.eventType ||
-        '',
+      input.event ||
+      input.eventType ||
+      data.type ||
+      data.event ||
+      data.eventType ||
+      '',
     )
       .trim()
       .toLowerCase();
@@ -1192,8 +1192,8 @@ export class FlowService {
   private flowEmailTemplateId() {
     return String(
       process.env.FLOW_EMAIL_TEMPLATE_ID ||
-        process.env.RESEND_FLOW_TEMPLATE_ID ||
-        '',
+      process.env.RESEND_FLOW_TEMPLATE_ID ||
+      '',
     ).trim();
   }
 
@@ -1233,8 +1233,8 @@ export class FlowService {
       if (!domain) return;
 
       domains.add(domain);
-      if (domain.endsWith('.chefuinc.com')) {
-        domains.add('chefuinc.com');
+      if (domain.endsWith('.chefu.co.za')) {
+        domains.add('chefu.co.za');
       }
     });
 
@@ -1433,8 +1433,8 @@ export class FlowService {
     const storedFolder = this.normalizeFolder(String(data.folder || 'inbox'));
     const folder =
       direction === 'inbound' &&
-      storedFolder === 'inbox' &&
-      this.isInternalSender(from)
+        storedFolder === 'inbox' &&
+        this.isInternalSender(from)
         ? 'archived'
         : storedFolder;
     const to = Array.isArray(data.to) ? data.to.map(String) : [];
@@ -1454,11 +1454,11 @@ export class FlowService {
         ? data.reactionEmoji
         : isReactionMessage
           ? this.gmailReactionEmoji(
-              [data.text, data.preview, data.subject, data.html]
-                .filter(value => typeof value === 'string')
-                .map(value => this.stripHtml(String(value)))
-                .join('\n'),
-            )
+            [data.text, data.preview, data.subject, data.html]
+              .filter(value => typeof value === 'string')
+              .map(value => this.stripHtml(String(value)))
+              .join('\n'),
+          )
           : undefined;
 
     return {
@@ -1570,12 +1570,12 @@ export class FlowService {
     );
     const references = this.normalizeReferenceList(
       email.references ||
-        data.references ||
-        input.references ||
-        this.headerValue(
-          [email.headers, data.headers, input.headers],
-          ['references'],
-        ),
+      data.references ||
+      input.references ||
+      this.headerValue(
+        [email.headers, data.headers, input.headers],
+        ['references'],
+      ),
     );
     const from = this.normalizeAddress(email.from || data.from || input.from);
     const to = this.normalizeAddressList(email.to || data.to || input.to);

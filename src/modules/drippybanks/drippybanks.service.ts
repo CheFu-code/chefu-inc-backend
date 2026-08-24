@@ -734,14 +734,14 @@ export class DrippybanksService {
       merchant_key: merchantKey,
       return_url:
         input.returnUrl ||
-        `${process.env.DRIPPYBANKS_APP_URL || "https://drippybanks.chefuinc.com"}/checkout?payfast_success=true&order_id=${input.orderId}`,
+        `${process.env.DRIPPYBANKS_APP_URL || "https://drippybanks.chefu.co.za"}/checkout?payfast_success=true&order_id=${input.orderId}`,
       cancel_url:
         input.cancelUrl ||
-        `${process.env.DRIPPYBANKS_APP_URL || "https://drippybanks.chefuinc.com"}/checkout?cancelled=true`,
-      notify_url: `${process.env.BACKEND_PUBLIC_URL || "https://api.chefuinc.com"}/drippybanks/payfast/notify`,
+        `${process.env.DRIPPYBANKS_APP_URL || "https://drippybanks.chefu.co.za"}/checkout?cancelled=true`,
+      notify_url: `${process.env.BACKEND_PUBLIC_URL || "https://api.chefu.co.za"}/drippybanks/payfast/notify`,
       name_first,
       name_last,
-      email_address: input.customer?.email?.trim() || "customer@chefuinc.com",
+      email_address: input.customer?.email?.trim() || "customer@chefu.co.za",
       m_payment_id: input.orderId,
       amount: amount.toFixed(2),
       item_name: (input.itemName || `DrippyBanks Order ${input.orderId}`).slice(

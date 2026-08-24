@@ -29,27 +29,31 @@ export const CHEFU_APPS: ChefuApp[] = [
     {
         id: "academy",
         name: "CHEFU Academy",
-        origins: ["https://academy.chefuinc.com"],
+        origins: [
+            "https://academy.chefu.co.za",
+            "https://myaccount.chefu.co.za",
+            "https://chefu.co.za",
+        ],
     },
     {
         id: "admin",
         name: "CHEFU Admin",
-        origins: ["https://internal.chefuinc.com"],
+        origins: ["https://internal.chefu.co.za"],
     },
     {
         id: "flow",
         name: "Flow Mail",
-        origins: ["https://flow.chefuinc.com"],
+        origins: ["https://flow.chefu.co.za"],
     },
     {
         id: "muzalo",
         name: "Muzalo",
-        origins: ["https://muzalo.chefuinc.com"],
+        origins: ["https://muzalo.chefu.co.za"],
     },
     {
         id: "quantum",
         name: "Quantum",
-        origins: ["https://quantum.chefuinc.com"],
+        origins: ["https://quantum.chefu.co.za"],
     },
     {
         id: "logix",
@@ -64,7 +68,7 @@ export const CHEFU_APPS: ChefuApp[] = [
     {
         id: "drippybanks",
         name: "Drippy Banks",
-        origins: ["https://drippybanks.chefuinc.com"],
+        origins: ["https://drippybanks.chefu.co.za"],
     },
 ];
 
@@ -79,7 +83,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         name: "CHEFU TECHNOLOGIES",
         redirectUris: [
             "https://chefu.co.za/auth/callback",
-            "https://myaccount.chefuinc.com/auth/callback",
+            "https://myaccount.chefu.co.za/auth/callback",
         ],
         scopes: ["openid", "profile", "email", "apps:read"],
     },
@@ -88,7 +92,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         appId: "academy",
         name: "CHEFU Academy",
         redirectUris: [
-            "https://academy.chefuinc.com/auth/callback",
+            "https://academy.chefu.co.za/auth/callback",
         ],
         scopes: [
             "openid",
@@ -118,7 +122,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         appId: "admin",
         name: "CHEFU Admin",
         redirectUris: [
-            "https://internal.chefuinc.com/auth/callback",
+            "https://internal.chefu.co.za/auth/callback",
         ],
         scopes: ["openid", "profile", "email", "admin:manage"],
     },
@@ -127,7 +131,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         appId: "flow",
         name: "Flow Mail",
         redirectUris: [
-            "https://flow.chefuinc.com/auth/callback",
+            "https://flow.chefu.co.za/auth/callback",
         ],
         scopes: ["openid", "profile", "email", "flow:read", "flow:send"],
     },
@@ -136,7 +140,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         appId: "muzalo",
         name: "Muzalo",
         redirectUris: [
-            "https://muzalo.chefuinc.com/auth/callback",
+            "https://muzalo.chefu.co.za/auth/callback",
         ],
         scopes: ["openid", "profile", "email", "music:read"],
     },
@@ -145,7 +149,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         appId: "quantum",
         name: "Quantum",
         redirectUris: [
-            "https://quantum.chefuinc.com/auth/callback",
+            "https://quantum.chefu.co.za/auth/callback",
         ],
         scopes: ["openid", "profile", "email", "quantum:chat", "quantum:read"],
     },
@@ -161,8 +165,8 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         appId: "drippybanks",
         name: "Drippy Banks",
         redirectUris: [
-            "https://drippybanks.chefuinc.com/auth/callback",
-            "https://myaccount.chefuinc.com/auth/callback",
+            "https://drippybanks.chefu.co.za/auth/callback",
+            "https://myaccount.chefu.co.za/auth/callback",
         ],
         scopes: ["openid", "profile", "email"],
     },

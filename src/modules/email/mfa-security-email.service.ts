@@ -26,15 +26,15 @@ export class MfaSecurityEmailService {
     '2fa-disabled';
   private readonly fromAddress = this.normalizeFromAddress(
     process.env.SECURITY_EMAIL_FROM ||
-      process.env.SIGNIN_ALERT_FROM ||
-      'CHEFU Account <security@chefuinc.com>',
+    process.env.SIGNIN_ALERT_FROM ||
+    'CHEFU Account <security@chefu.co.za>',
   );
   private readonly securityUrl =
     process.env.SIGNIN_ALERT_SECURITY_URL ||
-    'https://myaccount.chefuinc.com/account?section=security';
+    'https://myaccount.chefu.co.za/account?section=security';
   private readonly supportUrl =
     process.env.SIGNIN_ALERT_SUPPORT_URL ||
-    'https://academy.chefuinc.com/support';
+    'https://academy.chefu.co.za/support';
 
   async send(data: MfaSecurityEmailData) {
     if (!this.resendApiKey) {

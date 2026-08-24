@@ -180,12 +180,12 @@ export class OAuthService {
   private readonly logger = new Logger(OAuthService.name);
   private readonly issuer = this.cleanUrl(
     process.env.OAUTH_ISSUER ||
-      process.env.PUBLIC_API_BASE_URL ||
-      process.env.RENDER_EXTERNAL_URL ||
-      'https://api.chefuinc.com',
+    process.env.PUBLIC_API_BASE_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    'https://api.chefu.co.za',
   );
   private readonly accountUrl = this.cleanUrl(
-    process.env.CHEFU_ACCOUNT_URL || 'https://chefuinc.com',
+    process.env.CHEFU_ACCOUNT_URL || 'https://chefu.co.za',
   );
   private readonly clockSkewSeconds = this.safeNumber(
     process.env.OAUTH_CLOCK_SKEW_SECONDS,
@@ -551,15 +551,15 @@ export class OAuthService {
     });
     const refreshToken = this.issueRefreshTokens
       ? await this.issueRefreshToken({
-          appId: codeDoc.appId,
-          clientId: client.id,
-          dpopJkt: dpopProof?.jkt || null,
-          email: codeDoc.email,
-          name: codeDoc.name,
-          roles,
-          scopes: codeDoc.scopes,
-          uid: codeDoc.uid,
-        })
+        appId: codeDoc.appId,
+        clientId: client.id,
+        dpopJkt: dpopProof?.jkt || null,
+        email: codeDoc.email,
+        name: codeDoc.name,
+        roles,
+        scopes: codeDoc.scopes,
+        uid: codeDoc.uid,
+      })
       : null;
     this.logger.log(
       JSON.stringify({
@@ -588,7 +588,7 @@ export class OAuthService {
       ? authorization.slice('Bearer '.length)
       : authorization?.startsWith('DPoP ')
         ? authorization.slice('DPoP '.length)
-      : '';
+        : '';
 
     if (!token) {
       throw new UnauthorizedException('Missing access token.');
@@ -1376,7 +1376,7 @@ export class OAuthService {
   private async verifyClientAssertion(body: TokenPayload, client: M2mClient) {
     if (
       body.client_assertion_type !==
-        'urn:ietf:params:oauth:client-assertion-type:jwt-bearer' ||
+      'urn:ietf:params:oauth:client-assertion-type:jwt-bearer' ||
       !body.client_assertion
     ) {
       throw new UnauthorizedException('private_key_jwt client assertion required.');
