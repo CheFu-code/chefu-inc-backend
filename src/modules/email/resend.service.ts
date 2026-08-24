@@ -846,7 +846,6 @@ export class ResendService {
             flow: 'Flow Mail',
             muzalo: 'Muzalo',
             quantum: 'Quantum',
-            synapse: 'Synapse',
             drippybanks: 'Drippy Banks',
         };
 
