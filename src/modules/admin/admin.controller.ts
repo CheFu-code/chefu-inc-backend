@@ -14,11 +14,13 @@ import {
     UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
+import { FieldValue } from 'firebase-admin/firestore';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { AdminGuard } from '../auth/admin.guard';
 import { AuthGuard } from '../auth/auth.guard';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { AdminAppsService } from './admin-apps.service';
+import { hashForAudit } from '../../common/security-audit';
 
 type RequestWithUser = Request & {
     user?: AuthenticatedUser;
@@ -94,8 +96,8 @@ export class AdminController {
         this.logger.warn(
             JSON.stringify({
                 event: 'admin_delete_user_started',
-                uid: body.uid,
-                email: body.email,
+                uidHash: hashForAudit(body.uid),
+                emailHash: hashForAudit(body.email),
             }),
         );
 
@@ -105,8 +107,8 @@ export class AdminController {
         this.logger.warn(
             JSON.stringify({
                 event: 'admin_delete_user_succeeded',
-                uid: body.uid,
-                email: body.email,
+                uidHash: hashForAudit(body.uid),
+                emailHash: hashForAudit(body.email),
             }),
         );
 
@@ -149,7 +151,7 @@ export class AdminController {
 
         await userRef.update({
             roles,
-            updatedAt: new Date(),
+            updatedAt: FieldValue.serverTimestamp(),
         });
 
         this.logger.warn(

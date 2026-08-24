@@ -603,6 +603,7 @@ export class DrippybanksService {
       .db()
       .collection(this.ordersCollectionName)
       .where("createdByEmail", "==", customerEmail)
+      .limit(50)
       .get();
 
     const orders = snapshot.docs
@@ -620,6 +621,7 @@ export class DrippybanksService {
     const snapshot = await this.firebaseAdmin
       .db()
       .collection(this.ordersCollectionName)
+      .limit(100)
       .get();
 
     const orders = snapshot.docs
@@ -801,9 +803,28 @@ export class DrippybanksService {
       }),
     );
 
+    const passphrase = process.env.PAYFAST_PASSPHRASE || "";
+    const isSandbox = process.env.PAYFAST_SANDBOX !== "false";
+
+    // Validate signature if signature is provided or in non-sandbox environment
+    if (body.signature || (!isSandbox && passphrase)) {
+      const isValidSignature = this.verifyPayFastSignature(body, passphrase);
+      if (!isValidSignature) {
+        this.logger.warn(
+          JSON.stringify({
+            event: "drippybanks_payfast_invalid_signature",
+            paymentId: body.m_payment_id,
+            receivedSignature: body.signature,
+          }),
+        );
+        throw new BadRequestException("Invalid PayFast signature.");
+      }
+    }
+
     const paymentStatus = String(body.payment_status || "").toUpperCase();
     const orderId = String(body.m_payment_id || "");
     const payfastPaymentId = String(body.pf_payment_id || "");
+    const amountGross = Number(body.amount_gross || 0);
 
     if (orderId) {
       const orderRef = this.firebaseAdmin
@@ -813,6 +834,28 @@ export class DrippybanksService {
       const orderDoc = await orderRef.get();
 
       if (orderDoc.exists) {
+        const orderData = orderDoc.data() || {};
+        const orderTotal = Number(orderData.total || 0);
+
+        // Security check: verify paid amount matches order total
+        if (
+          paymentStatus === "COMPLETE" &&
+          amountGross > 0 &&
+          amountGross < orderTotal - 0.01
+        ) {
+          this.logger.error(
+            JSON.stringify({
+              event: "drippybanks_payfast_amount_mismatch",
+              orderId,
+              orderTotal,
+              amountGross,
+            }),
+          );
+          throw new BadRequestException(
+            "Payment amount does not match order total.",
+          );
+        }
+
         const now = new Date().toISOString();
         const updates: Partial<DrippybanksOrderDocument> = {
           updatedAt: now,
@@ -844,6 +887,39 @@ export class DrippybanksService {
     }
 
     return { status: "OK" };
+  }
+
+  private verifyPayFastSignature(
+    body: Record<string, unknown>,
+    passphrase: string,
+  ): boolean {
+    const receivedSignature = String(body.signature || "").toLowerCase();
+    if (!receivedSignature) return false;
+
+    let pfOutput = "";
+    for (const key in body) {
+      if (
+        Object.prototype.hasOwnProperty.call(body, key) &&
+        key !== "signature"
+      ) {
+        const val = body[key];
+        if (val !== undefined && val !== null && String(val) !== "") {
+          pfOutput += `${key}=${encodeURIComponent(String(val).trim()).replace(/%20/g, "+")}&`;
+        }
+      }
+    }
+
+    let getString = pfOutput.slice(0, -1);
+    if (passphrase) {
+      getString += `&passphrase=${encodeURIComponent(passphrase.trim()).replace(/%20/g, "+")}`;
+    }
+
+    const calculatedSignature = createHash("md5")
+      .update(getString)
+      .digest("hex")
+      .toLowerCase();
+
+    return calculatedSignature === receivedSignature;
   }
 
   private async getOrderById(

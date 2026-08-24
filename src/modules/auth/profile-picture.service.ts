@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { FieldValue } from "firebase-admin/firestore";
 import { FirebaseAdminService } from "../firebase-admin/firebase-admin.service";
 import { AuthenticatedUser } from "./authenticated-user";
+import { hashForAudit } from "../../common/security-audit";
 
 export interface UploadProfilePictureInput {
   imageBase64: string;
@@ -136,8 +137,8 @@ export class ProfilePictureService {
     this.logger.log(
       JSON.stringify({
         event: "profile_picture_uploaded",
-        uid: user.uid,
-        email: userEmail,
+        uidHash: hashForAudit(user.uid),
+        emailHash: hashForAudit(userEmail),
         publicId: result.public_id,
       }),
     );
@@ -267,8 +268,8 @@ export class ProfilePictureService {
     this.logger.log(
       JSON.stringify({
         event: "profile_picture_deleted",
-        uid: user.uid,
-        email: userEmail,
+        uidHash: hashForAudit(user.uid),
+        emailHash: hashForAudit(userEmail),
       }),
     );
   }

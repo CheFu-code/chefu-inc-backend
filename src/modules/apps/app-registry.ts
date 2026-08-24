@@ -1,6 +1,6 @@
 export const CHEFU_APP_HEADER = 'x-chefu-app';
 
-export type ChefuAppId = 'academy' | 'admin' | 'flow' | 'muzalo' | 'quantum' | 'synapse' | 'drippybanks';
+export type ChefuAppId = 'academy' | 'admin' | 'flow' | 'muzalo' | 'quantum' | 'drippybanks';
 type ChefuAppAlias = 'music';
 
 export type ChefuApp = {
@@ -51,11 +51,6 @@ export const CHEFU_APPS: ChefuApp[] = [
         id: 'quantum',
         name: 'Quantum',
         origins: ['http://localhost:3003', 'https://quantum.chefuinc.com'],
-    },
-    {
-        id: 'synapse',
-        name: 'Synapse',
-        origins: ['http://localhost:3005', 'https://synapse.chefuinc.com'],
     },
     {
         id: 'drippybanks',

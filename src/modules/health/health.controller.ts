@@ -1,4 +1,4 @@
-import { Controller, Get, Head } from '@nestjs/common';
+import { Controller, Get, Head } from "@nestjs/common";
 
 @Controller()
 export class HealthController {
@@ -12,7 +12,7 @@ export class HealthController {
     return;
   }
 
-  @Get('health')
+  @Get("health")
   check() {
     return this.status();
   }
@@ -20,7 +20,7 @@ export class HealthController {
   private status() {
     return {
       ok: true,
-      service: 'chefu-api',
+      service: "chefu-api",
       timestamp: new Date().toISOString(),
     };
   }

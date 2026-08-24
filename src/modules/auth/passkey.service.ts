@@ -255,11 +255,11 @@ export class PasskeyService {
 
     async listCredentials(uid: string) {
         const credentials = await this.credentialsForUser(uid);
-        return credentials.map(credential => ({
+        return credentials.map(({ credential, createdAt, lastUsedAt }) => ({
             credentialId: credential.credentialId,
             email: credential.email,
-            createdAt: undefined, // Will be populated from Firestore
-            lastUsedAt: undefined, // Will be populated from Firestore
+            createdAt: this.timestampToIso(createdAt),
+            lastUsedAt: this.timestampToIso(lastUsedAt),
         }));
     }
 
@@ -306,8 +306,17 @@ export class PasskeyService {
             .get();
 
         return snapshot.docs
-            .map(document => this.parseStoredPasskey(document.data()))
-            .filter((credential): credential is ParsedPasskey => Boolean(credential));
+            .map(document => {
+                const data = document.data();
+                const credential = this.parseStoredPasskey(data);
+                if (!credential) return null;
+                return {
+                    credential,
+                    createdAt: data.createdAt as unknown,
+                    lastUsedAt: data.lastUsedAt as unknown,
+                };
+            })
+            .filter((item): item is { credential: ParsedPasskey; createdAt: unknown; lastUsedAt: unknown } => Boolean(item));
     }
 
     private async getCredential(credentialId: string) {
@@ -490,7 +499,23 @@ export class PasskeyService {
         return this.firebaseAdmin
             .db()
             .collection('passkey_credentials')
-            .doc(createHash('sha256').update(credentialId).digest('hex'));
+            .doc(this.keyHash(credentialId));
+    }
+
+    private keyHash(value: string) {
+        return createHash('sha256').update(value).digest('hex');
+    }
+
+    private timestampToIso(value: unknown): string | null {
+        if (
+            value &&
+            typeof value === 'object' &&
+            'toDate' in value &&
+            typeof (value as { toDate?: unknown }).toDate === 'function'
+        ) {
+            return (value as { toDate: () => Date }).toDate().toISOString();
+        }
+        return null;
     }
 
     private async enforceRateLimit(
