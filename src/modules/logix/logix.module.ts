@@ -1,9 +1,13 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { FirebaseAdminModule } from '../firebase-admin/firebase-admin.module';
+import { LogixController } from './logix.controller';
+import { LogixService } from './logix.service';
 
 @Module({
-  imports: [AuthModule],
-  controllers: [],
-  providers: [],
+  imports: [AuthModule, FirebaseAdminModule],
+  controllers: [LogixController],
+  providers: [LogixService],
+  exports: [LogixService],
 })
-export class LogixModule { }
+export class LogixModule {}
