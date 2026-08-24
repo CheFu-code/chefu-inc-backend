@@ -22,10 +22,7 @@ import { AuthenticatedUser } from '../auth/authenticated-user';
 import { AuthGuard } from '../auth/auth.guard';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { SESSION_COOKIE_NAME } from '../auth/session.constants';
-import {
-  FLOW_ACCESS_DENIED_MESSAGE,
-  isFlowAllowedEmail,
-} from './flow-access';
+import { FLOW_ACCESS_DENIED_MESSAGE } from './flow-access';
 import { FlowAccessKeyService } from './flow-access-key.service';
 import { FlowSendPayload } from './flow-email.types';
 import { FlowService } from './flow.service';
@@ -96,6 +93,32 @@ export class FlowController {
     @Req() request: Request & { user?: AuthenticatedUser },
   ) {
     return this.flowAccessKeys.revokeKey(keyId, request.user);
+  }
+
+  // ── Allowed emails ──────────────────────────────────────────────────────
+
+  @Get('admin/allowed-emails')
+  @UseGuards(AuthGuard, AdminGuard)
+  async listAllowedEmails() {
+    return this.flowService.listAllowedEmails();
+  }
+
+  @Post('admin/allowed-emails')
+  @UseGuards(AuthGuard, AdminGuard)
+  async addAllowedEmail(
+    @Body() body: { email?: string },
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
+    return this.flowService.addAllowedEmail(
+      body.email || '',
+      request.user?.email || request.user?.uid || null,
+    );
+  }
+
+  @Delete('admin/allowed-emails/:email')
+  @UseGuards(AuthGuard, AdminGuard)
+  async removeAllowedEmail(@Param('email') email: string) {
+    return this.flowService.removeAllowedEmail(email);
   }
 
   @Delete('access/session')
@@ -350,7 +373,7 @@ export class FlowController {
         .auth()
         .verifySessionCookie(sessionCookie, true);
 
-      if (!isFlowAllowedEmail(decodedToken.email)) {
+      if (!(await this.flowService.isAllowedFlowUser(decodedToken.email))) {
         throw new ForbiddenException(FLOW_ACCESS_DENIED_MESSAGE);
       }
     } catch (error) {

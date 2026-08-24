@@ -21,6 +21,11 @@ import {
   FlowRecipient,
   FlowSendPayload,
 } from './flow-email.types';
+import {
+  flowEnvAllowedEmails,
+  isChefuEmail,
+  normalizeEmailAddress,
+} from './flow-access';
 
 type ResendEmailPayload = {
   attachments?: ResendAttachmentPayload[];
@@ -647,6 +652,120 @@ export class FlowService {
       saved: true,
     };
   }
+
+  // ── Allowed email management ────────────────────────────────────────────
+
+  /**
+   * Returns true when the given email is permitted to access Flow Mail.
+   * Checks both the env FLOW_SENDERS list and the Firestore allowed-emails
+   * collection. When FLOW_SENDERS is empty (open access), returns true.
+   */
+  async isAllowedFlowUser(email?: string | null) {
+    const normalized = normalizeEmailAddress(email || '');
+    if (!normalized) return false;
+
+    // Fast path: env senders list (synchronous)
+    const envEmails = flowEnvAllowedEmails();
+    if (!envEmails.size) return true;       // open access — no restriction configured
+    if (envEmails.has(normalized)) return true;
+
+    // Slow path: Firestore allowed-emails collection
+    try {
+      const doc = await this.allowedEmailsCollection().doc(this.emailDocId(normalized)).get();
+      return doc.exists && String((doc.data() || {}).status || '') === 'active';
+    } catch {
+      return false;
+    }
+  }
+
+  /** Returns all dynamically registered allowed emails (Firestore only). */
+  async listAllowedEmails() {
+    const snapshot = await this.allowedEmailsCollection()
+      .where('status', '==', 'active')
+      .orderBy('addedAt', 'desc')
+      .get();
+
+    return {
+      emails: snapshot.docs.map(doc => ({
+        addedAt: this.firestoreTimestampToIso(doc.data().addedAt),
+        addedBy: typeof doc.data().addedBy === 'string' ? doc.data().addedBy : null,
+        email: String(doc.data().email || doc.id),
+      })),
+    };
+  }
+
+  /**
+   * Adds a new allowed email to the Firestore collection.
+   * Only `@chefu.co.za` addresses are accepted.
+   */
+  async addAllowedEmail(email: string, addedBy?: string | null) {
+    const normalized = normalizeEmailAddress(email);
+
+    if (!normalized) {
+      throw new BadRequestException('A valid email address is required.');
+    }
+    if (!isChefuEmail(normalized)) {
+      throw new BadRequestException(
+        'Only @chefu.co.za email addresses may be added as Flow Mail users.',
+      );
+    }
+
+    const docId = this.emailDocId(normalized);
+    const ref = this.allowedEmailsCollection().doc(docId);
+    const existing = await ref.get();
+
+    if (existing.exists && String((existing.data() || {}).status || '') === 'active') {
+      return {
+        added: false,
+        email: normalized,
+        message: 'Email is already an allowed Flow Mail user.',
+      };
+    }
+
+    await ref.set({
+      addedAt: FieldValue.serverTimestamp(),
+      addedBy: addedBy || null,
+      email: normalized,
+      removedAt: null,
+      status: 'active',
+    });
+
+    return {
+      added: true,
+      email: normalized,
+    };
+  }
+
+  /**
+   * Soft-removes an email from the allowed-emails collection.
+   * The record is kept for audit purposes (status set to 'removed').
+   */
+  async removeAllowedEmail(email: string) {
+    const normalized = normalizeEmailAddress(email);
+
+    if (!normalized) {
+      throw new BadRequestException('A valid email address is required.');
+    }
+
+    const ref = this.allowedEmailsCollection().doc(this.emailDocId(normalized));
+    const existing = await ref.get();
+
+    if (!existing.exists || String((existing.data() || {}).status || '') !== 'active') {
+      throw new BadRequestException('Email is not an active Flow Mail user.');
+    }
+
+    await ref.update({
+      removedAt: FieldValue.serverTimestamp(),
+      status: 'removed',
+    });
+
+    return {
+      email: normalized,
+      removed: true,
+    };
+  }
+
+  // ── Private helpers ──────────────────────────────────────────────────────
 
   private normalizePayload(payload: FlowSendPayload) {
     const action = payload.action || 'test';
@@ -1285,6 +1404,31 @@ export class FlowService {
 
   private messagesCollection() {
     return this.firebaseAdmin.db().collection('flowMessages');
+  }
+
+  private allowedEmailsCollection() {
+    return this.firebaseAdmin.db().collection('flowAllowedEmails');
+  }
+
+  /** Converts an email address to a safe Firestore document ID. */
+  private emailDocId(email: string) {
+    return email.replace(/[.#$/\[\]]/g, '_');
+  }
+
+  private firestoreTimestampToIso(value: unknown): string | null {
+    if (!value) return null;
+    if (typeof value === 'string') return value;
+    if (
+      typeof value === 'object' &&
+      'toDate' in value &&
+      typeof (value as { toDate: unknown }).toDate === 'function'
+    ) {
+      const date = (value as { toDate: () => Date }).toDate();
+      return date instanceof Date && !Number.isNaN(date.getTime())
+        ? date.toISOString()
+        : null;
+    }
+    return null;
   }
 
   private async findExistingInboundMessage(message: {
