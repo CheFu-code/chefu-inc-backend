@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for chefu-technologies-api on 2026-08-17T08:45:45Z
+# fly.toml app configuration file generated for chefu-inc-backend on 2026-08-24T17:40:26Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'chefu-technologies-api'
+app = 'chefu-inc-backend'
 primary_region = 'jnb'
 
 [build]
