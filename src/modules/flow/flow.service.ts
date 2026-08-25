@@ -101,7 +101,7 @@ export class FlowService {
       ? configuredDefault
       : senders[0]?.email ||
       configuredDefault ||
-      'Flow Mail <mail@flow.chefu.co.za>';
+      'Flow Mail <mail@chefu.co.za>';
 
     return {
       defaultFrom,

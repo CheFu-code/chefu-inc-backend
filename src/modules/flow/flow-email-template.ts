@@ -161,7 +161,7 @@ export function renderFlowEmailShell({
             </tr>
             <tr>
               <td style="background:#f7fbfa;border-top:1px solid #dcefeb;padding:20px 32px;color:#55716e;font-size:12px;line-height:1.6;">
-                Sent with Flow by CHEFU Inc. Reply to this email to continue the conversation.
+                Sent with Flow by CHEFU TECHNOLOGIES. Reply to this email to continue the conversation.
               </td>
             </tr>
           </table>
