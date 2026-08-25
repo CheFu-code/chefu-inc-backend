@@ -77,6 +77,7 @@ Set these on the backend host:
 - `FLOW_SENDERS="CHEFU Inc <hello@chefu.co.za>;Flow Mail <mail@chefu.co.za>;Support <support@chefu.co.za>;Security <security@chefu.co.za>;Muzalo <muzalo@chefu.co.za>;CHEFU Academy <academy@chefu.co.za>;CHEFU Quantum <quantum@chefu.co.za>"`
 - `SIGNIN_ALERT_TEMPLATE_ID` if using a saved Resend template for sign-in alerts
 - `PASSWORD_CHANGED_TEMPLATE_ID` if using a saved Resend template for password-change alerts
+- `PASSKEY_ADDED_TEMPLATE_ID` if using a saved Resend template for passkey-added alerts (default: `new-passkey-added`)
 
 On the frontend host, set:
 

@@ -77,13 +77,22 @@ export class MfaSecurityEmailService {
       template: {
         id: isEnabled ? this.enabledTemplateId : this.disabledTemplateId,
         variables: {
+          USER_NAME: data.userName || data.email.split('@')[0] || 'there',
+          ACCOUNT_EMAIL: data.email,
+          EVENT_TIME: this.formatTime(data.eventTime),
+          IP_ADDRESS: data.ipAddress || 'Unknown IP address',
+          LOCATION: data.location || 'Unknown location',
+          SECURITY_URL: this.securityUrl,
+          SUPPORT_URL: this.supportUrl,
+          YEAR: new Date().getUTCFullYear().toString(),
+          userName: data.userName || data.email.split('@')[0] || 'there',
           accountEmail: data.email,
           eventTime: this.formatTime(data.eventTime),
           ipAddress: data.ipAddress || 'Unknown IP address',
           location: data.location || 'Unknown location',
           securityUrl: this.securityUrl,
           supportUrl: this.supportUrl,
-          userName: data.userName || data.email.split('@')[0] || 'there',
+          year: new Date().getUTCFullYear().toString(),
         },
       },
     };

@@ -1,10 +1,12 @@
 import {
     BadRequestException,
     ConflictException,
+    Inject,
     Injectable,
     InternalServerErrorException,
     Logger,
     UnauthorizedException,
+    forwardRef,
 } from '@nestjs/common';
 import {
     generateAuthenticationOptions,
@@ -20,6 +22,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { hashForAudit } from '../../common/security-audit';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
+import { ResendService } from '../email/resend.service';
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
@@ -53,6 +56,13 @@ type PasskeyConfig = {
     rpName: string;
 };
 
+export type PasskeyRegistrationMetadata = {
+    ipAddress?: string;
+    userAgent?: string;
+    origin?: string;
+    appId?: string;
+};
+
 @Injectable()
 export class PasskeyService {
     private readonly logger = new Logger(PasskeyService.name);
@@ -60,6 +70,8 @@ export class PasskeyService {
     constructor(
         private readonly firebaseAdmin: FirebaseAdminService,
         private readonly runtimeLimits: RuntimeLimitService,
+        @Inject(forwardRef(() => ResendService))
+        private readonly resendService: ResendService,
     ) { }
 
     async createRegistrationOptions(user: PasskeyUser, clientKey: string) {
@@ -98,6 +110,7 @@ export class PasskeyService {
         user: PasskeyUser,
         clientKey: string,
         input: { challengeId?: string; response?: RegistrationResponseJSON },
+        metadata?: PasskeyRegistrationMetadata,
     ) {
         await this.enforceRateLimit('registration-verify', clientKey, 12);
 
@@ -158,7 +171,66 @@ export class PasskeyService {
             }),
         );
 
+        await this.sendPasskeyAddedNotification(user, metadata);
+
         return { ok: true };
+    }
+
+    private async sendPasskeyAddedNotification(
+        user: PasskeyUser,
+        metadata?: PasskeyRegistrationMetadata,
+    ) {
+        try {
+            let userName = '';
+            try {
+                const userDoc = await this.firebaseAdmin.db().collection('users').doc(user.email).get();
+                if (userDoc.exists) {
+                    const userData = userDoc.data() || {};
+                    userName = typeof userData.name === 'string'
+                        ? userData.name
+                        : typeof userData.fullname === 'string'
+                        ? userData.fullname
+                        : typeof userData.displayName === 'string'
+                        ? userData.displayName
+                        : '';
+                }
+                if (!userName) {
+                    const authUser = await this.firebaseAdmin.auth().getUser(user.uid).catch(() => null);
+                    userName = authUser?.displayName || '';
+                }
+            } catch {
+                // Non-fatal if user details lookup fails
+            }
+
+            const origin = metadata?.origin || this.getConfig().origins[0] || 'https://myaccount.chefu.co.za';
+
+            await this.resendService.sendPasskeyAddedNotification({
+                email: user.email,
+                userName: userName || user.email.split('@')[0] || 'there',
+                device: metadata?.userAgent,
+                addedAt: new Date(),
+                origin,
+                ipAddress: metadata?.ipAddress,
+                appId: metadata?.appId,
+            });
+
+            this.logger.log(
+                JSON.stringify({
+                    event: 'passkey_added_email_sent',
+                    emailHash: hashForAudit(user.email),
+                    uidHash: hashForAudit(user.uid),
+                }),
+            );
+        } catch (error) {
+            this.logger.error(
+                JSON.stringify({
+                    event: 'passkey_added_email_failed',
+                    emailHash: hashForAudit(user.email),
+                    uidHash: hashForAudit(user.uid),
+                    reason: error instanceof Error ? error.message : 'unknown',
+                }),
+            );
+        }
     }
 
     async createAuthenticationOptions(clientKey: string) {

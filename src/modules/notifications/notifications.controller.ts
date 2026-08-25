@@ -3,7 +3,6 @@ import {
   Controller,
   Get,
   Patch,
-  Post,
   Req,
   UnauthorizedException,
   UseGuards,
@@ -33,25 +32,6 @@ export class NotificationsController {
     @Body() body: unknown,
   ) {
     return this.notificationsService.updatePreferences(
-      this.requireUser(request),
-      body,
-    );
-  }
-
-  @Post('email')
-  sendPreferenceEmail(
-    @Req() request: NotificationRequest,
-    @Body()
-    body: {
-      type?: string;
-      subject?: string;
-      title?: string;
-      message?: string;
-      actionLabel?: string;
-      actionUrl?: string;
-    },
-  ) {
-    return this.notificationsService.sendPreferenceEmail(
       this.requireUser(request),
       body,
     );

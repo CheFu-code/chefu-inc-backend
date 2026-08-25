@@ -19,18 +19,6 @@ export interface PasswordChangedNotificationData {
     timestamp: Date;
 }
 
-export interface PreferenceNotificationData {
-    email: string;
-    type: string;
-    subject: string;
-    title: string;
-    message: string;
-    userName?: string;
-    actionLabel?: string;
-    actionUrl?: string;
-    appId?: string;
-}
-
 export interface ApiKeyCompromisedNotificationData {
     email: string;
     userName?: string;
@@ -50,18 +38,42 @@ export interface WelcomePromoNotificationData {
     appId?: string;
 }
 
+export interface PasskeyAddedNotificationData {
+    email: string;
+    userName?: string;
+    device?: string;
+    addedAt?: Date;
+    origin?: string;
+    ipAddress?: string;
+    securityUrl?: string;
+    supportEmail?: string;
+    year?: string;
+    appId?: string;
+}
+
 @Injectable()
 export class ResendService {
     private readonly logger = new Logger(ResendService.name);
     private readonly RESEND_API_KEY = process.env.RESEND_API_KEY;
     private readonly RESEND_API_URL = 'https://api.resend.com/emails';
-    private readonly signInTemplateId = process.env.SIGNIN_ALERT_TEMPLATE_ID;
+
+    private readonly passkeyAddedTemplateId =
+        process.env.PASSKEY_ADDED_TEMPLATE_ID ||
+        process.env.NEW_PASSKEY_ADDED_TEMPLATE_ID ||
+        'new-passkey-added';
+    private readonly signInTemplateId =
+        process.env.SIGNIN_ALERT_TEMPLATE_ID ||
+        'signin-alert';
     private readonly passwordChangedTemplateId =
-        process.env.PASSWORD_CHANGED_TEMPLATE_ID;
-    private readonly notificationTemplateId =
-        process.env.NOTIFICATION_EMAIL_TEMPLATE_ID;
+        process.env.PASSWORD_CHANGED_TEMPLATE_ID ||
+        'password-changed';
+    private readonly apiKeyCompromisedTemplateId =
+        process.env.API_KEY_COMPROMISED_TEMPLATE_ID ||
+        'api-key-compromised';
     private readonly welcomePromoTemplateId =
-        process.env.WELCOME_PROMO_TEMPLATE_ID;
+        process.env.WELCOME_PROMO_TEMPLATE_ID ||
+        'welcome-promo';
+
     private readonly fromAddress =
         process.env.SIGNIN_ALERT_FROM ||
         process.env.SECURITY_EMAIL_FROM ||
@@ -86,6 +98,33 @@ export class ResendService {
     private getApiKey(): string {
         assertResendConfigured();
         return (process.env.RESEND_API_KEY || '').trim();
+    }
+
+    async sendPasskeyAddedNotification(
+        data: PasskeyAddedNotificationData,
+    ): Promise<void> {
+        const apiKey = this.getApiKey();
+
+        const response = await fetch(this.RESEND_API_URL, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(this.getPasskeyAddedPayload(data)),
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`Resend request failed: ${response.status} ${error}`);
+        }
+
+        this.logger.log(
+            JSON.stringify({
+                event: 'passkey_added_notification_sent',
+                email: data.email,
+            }),
+        );
     }
 
     async sendSignInNotification(data: SignInNotificationData): Promise<void> {
@@ -136,34 +175,6 @@ export class ResendService {
             JSON.stringify({
                 event: 'password_changed_notification_sent',
                 email: data.email,
-            }),
-        );
-    }
-
-    async sendPreferenceNotification(
-        data: PreferenceNotificationData,
-    ): Promise<void> {
-        const apiKey = this.getApiKey();
-
-        const response = await fetch(this.RESEND_API_URL, {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(this.getPreferenceNotificationPayload(data)),
-        });
-
-        if (!response.ok) {
-            const error = await response.text();
-            throw new Error(`Resend request failed: ${response.status} ${error}`);
-        }
-
-        this.logger.log(
-            JSON.stringify({
-                event: 'preference_notification_sent',
-                email: data.email,
-                type: data.type,
             }),
         );
     }
@@ -224,154 +235,99 @@ export class ResendService {
         );
     }
 
+    private getPasskeyAddedPayload(data: PasskeyAddedNotificationData) {
+        const details = this.getPasskeyAddedDetails(data);
+        const fromAddress = this.resolveFromAddress(data.appId);
+
+        return {
+            from: fromAddress,
+            to: [data.email],
+            subject: 'Security alert: New passkey added',
+            template: {
+                id: this.passkeyAddedTemplateId,
+                variables: {
+                    USER_NAME: details.userName,
+                    DEVICE: details.device,
+                    ADDED_AT: details.addedAt,
+                    ORIGIN: details.origin,
+                    IP_ADDRESS: details.ipAddress,
+                    SECURITY_URL: details.securityUrl,
+                    SUPPORT_EMAIL: details.supportEmail,
+                    YEAR: details.year,
+                    userName: details.userName,
+                    device: details.device,
+                    addedAt: details.addedAt,
+                    origin: details.origin,
+                    ipAddress: details.ipAddress,
+                    securityUrl: details.securityUrl,
+                    supportEmail: details.supportEmail,
+                    year: details.year,
+                },
+            },
+        };
+    }
+
     private getSignInPayload(data: SignInNotificationData) {
         const details = this.getDetails(data);
         const appLabel = this.resolveAppLabel(data.appId);
         const fromAddress = this.resolveFromAddress(data.appId);
-        const basePayload = {
+
+        return {
             from: fromAddress,
             to: [data.email],
             subject: `Security alert: new sign-in to ${appLabel}`,
-        };
-
-        if (this.signInTemplateId) {
-            return {
-                ...basePayload,
-                template: {
-                    id: this.signInTemplateId,
-                    variables: {
-                        userName: details.userName,
-                        APP_NAME: appLabel,
-                        provider: details.provider,
-                        time: details.time,
-                        device: details.device || 'Unknown device',
-                        ipAddress: details.ipAddress || 'Unknown IP address',
-                        securityUrl: this.securityUrl,
-                        supportUrl: this.supportUrl,
-                        year: new Date().getUTCFullYear().toString(),
-                    },
+            template: {
+                id: this.signInTemplateId,
+                variables: {
+                    USER_NAME: details.userName,
+                    APP_NAME: appLabel,
+                    PROVIDER: details.provider,
+                    TIME: details.time,
+                    DEVICE: details.device || 'Unknown device',
+                    IP_ADDRESS: details.ipAddress || 'Unknown IP address',
+                    SECURITY_URL: this.securityUrl,
+                    SUPPORT_URL: this.supportUrl,
+                    YEAR: new Date().getUTCFullYear().toString(),
+                    userName: details.userName,
+                    appName: appLabel,
+                    provider: details.provider,
+                    time: details.time,
+                    device: details.device || 'Unknown device',
+                    ipAddress: details.ipAddress || 'Unknown IP address',
+                    securityUrl: this.securityUrl,
+                    supportUrl: this.supportUrl,
+                    year: new Date().getUTCFullYear().toString(),
                 },
-            };
-        }
-
-        return {
-            ...basePayload,
-            html: this.getSignInEmailTemplate(data),
-            text: this.getSignInEmailText(data),
+            },
         };
-    }
-
-    private getSignInEmailText(data: SignInNotificationData): string {
-        const details = this.getDetails(data);
-        const appLabel = this.resolveAppLabel(data.appId);
-
-        return [
-            `Hi ${details.userName},`,
-            '',
-            `We noticed a new sign-in to your ${appLabel} account.`,
-            '',
-            `Method: ${details.provider}`,
-            `Time: ${details.time}`,
-            details.device ? `Device: ${details.device}` : '',
-            details.ipAddress ? `IP address: ${details.ipAddress}` : '',
-            '',
-            'If this was you, no action is needed.',
-            `If this was not you, secure your account now: ${this.securityUrl}`,
-            '',
-            `Support: ${this.supportUrl}`,
-            '',
-            `${appLabel} Security`,
-        ]
-            .filter(Boolean)
-            .join('\n');
     }
 
     private getPasswordChangedPayload(data: PasswordChangedNotificationData) {
         const details = this.getPasswordDetails(data);
-        const appLabel = 'My Account';
-        const basePayload = {
+        
+        return {
             from: this.fromAddress,
             to: [data.email],
-            subject: `Security alert: your ${appLabel} password changed`,
-        };
-
-        if (this.passwordChangedTemplateId) {
-            return {
-                ...basePayload,
-                template: {
-                    id: this.passwordChangedTemplateId,
-                    variables: {
-                        userName: details.userName,
-                        APP_NAME: appLabel,
-                        time: details.time,
-                        device: details.device || 'Unknown device',
-                        ipAddress: details.ipAddress || 'Unknown IP address',
-                        securityUrl: this.securityUrl,
-                        supportUrl: this.supportUrl,
-                        year: new Date().getUTCFullYear().toString(),
-                    },
+            subject: `Security alert: your account password changed`,
+            template: {
+                id: this.passwordChangedTemplateId,
+                variables: {
+                    USER_NAME: details.userName,
+                    TIME: details.time,
+                    DEVICE: details.device || 'Unknown device',
+                    IP_ADDRESS: details.ipAddress || 'Unknown IP address',
+                    SECURITY_URL: this.securityUrl,
+                    SUPPORT_URL: this.supportUrl,
+                    YEAR: new Date().getUTCFullYear().toString(),
+                    userName: details.userName,
+                    time: details.time,
+                    device: details.device || 'Unknown device',
+                    ipAddress: details.ipAddress || 'Unknown IP address',
+                    securityUrl: this.securityUrl,
+                    supportUrl: this.supportUrl,
+                    year: new Date().getUTCFullYear().toString(),
                 },
-            };
-        }
-
-        return {
-            ...basePayload,
-            html: this.getPasswordChangedEmailTemplate(data),
-            text: this.getPasswordChangedEmailText(data),
-        };
-    }
-
-    private getPreferenceNotificationPayload(data: PreferenceNotificationData) {
-        const details = {
-            userName: this.escapeHtml(data.userName || data.email.split('@')[0] || 'there'),
-            type: this.escapeHtml(this.formatNotificationType(data.type)),
-            title: this.escapeHtml(data.title),
-            message: this.escapeHtml(data.message),
-            actionLabel: this.escapeHtml(data.actionLabel || 'Open CHEFU Academy'),
-            actionUrl: data.actionUrl || 'https://academy.chefu.co.za/dashboard',
-        };
-        const basePayload = {
-            from: this.notificationFromAddress,
-            to: [data.email],
-            subject: data.subject,
-        };
-
-        if (this.notificationTemplateId) {
-            return {
-                ...basePayload,
-                template: {
-                    id: this.notificationTemplateId,
-                    variables: {
-                        userName: details.userName,
-                        APP_NAME: 'CHEFU Academy',
-                        type: details.type,
-                        title: details.title,
-                        message: details.message,
-                        actionLabel: details.actionLabel,
-                        actionUrl: details.actionUrl,
-                        preferencesUrl: 'https://academy.chefu.co.za/settings/account',
-                        supportUrl: this.supportUrl,
-                        year: new Date().getUTCFullYear().toString(),
-                    },
-                },
-            };
-        }
-
-        return {
-            ...basePayload,
-            html: this.getPreferenceNotificationTemplate(details),
-            text: [
-                `Hi ${details.userName},`,
-                '',
-                data.title,
-                '',
-                data.message,
-                '',
-                `${details.actionLabel}: ${details.actionUrl}`,
-                'Manage preferences: https://academy.chefu.co.za/settings/account',
-                '',
-                'CHEFU Academy',
-            ].join('\n'),
+            },
         };
     }
 
@@ -379,452 +335,81 @@ export class ResendService {
         data: ApiKeyCompromisedNotificationData,
     ) {
         const details = {
-            userName: this.escapeHtml(data.userName || data.email.split('@')[0] || 'there'),
-            keyName: this.escapeHtml(data.keyName || 'Untitled key'),
-            publicId: this.escapeHtml(data.publicId),
-            source: this.escapeHtml(data.source || 'a public location'),
+            userName: data.userName || data.email.split('@')[0] || 'there',
+            keyName: data.keyName || 'Untitled key',
+            publicId: data.publicId,
+            source: data.source || 'a public location',
             url: data.url || '',
-            time: this.escapeHtml(
-                data.timestamp.toLocaleString('en-US', {
-                    year: 'numeric',
-                    month: 'long',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    timeZoneName: 'short',
-                }),
-            ),
-        };
-        const basePayload = {
-            from: this.fromAddress,
-            to: [data.email],
-            subject: 'Security alert: CHEFU Academy API key revoked',
+            time: data.timestamp.toLocaleString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                timeZoneName: 'short',
+            }),
         };
 
         return {
-            ...basePayload,
-            html: this.getApiKeyCompromisedEmailTemplate(details),
-            text: [
-                `Hi ${details.userName},`,
-                '',
-                'A CHEFU Academy API key linked to your account appears to have been exposed.',
-                'For your protection, we revoked the key immediately.',
-                '',
-                `Key name: ${details.keyName}`,
-                `Public ID: ${details.publicId}`,
-                `Detected from: ${details.source}`,
-                `Time: ${details.time}`,
-                details.url ? `Reference: ${details.url}` : '',
-                '',
-                'Create a new API key from the CHEFU Academy SDK CLI or dashboard if you still need access.',
-                `Security settings: ${this.securityUrl}`,
-                `Support: ${this.supportUrl}`,
-                '',
-                'CHEFU Security',
-            ]
-                .filter(Boolean)
-                .join('\n'),
+            from: this.fromAddress,
+            to: [data.email],
+            subject: 'Security alert: CHEFU Academy API key revoked',
+            template: {
+                id: this.apiKeyCompromisedTemplateId,
+                variables: {
+                    USER_NAME: details.userName,
+                    KEY_NAME: details.keyName,
+                    PUBLIC_ID: details.publicId,
+                    SOURCE: details.source,
+                    URL: details.url,
+                    TIME: details.time,
+                    SECURITY_URL: this.securityUrl,
+                    SUPPORT_URL: this.supportUrl,
+                    YEAR: new Date().getUTCFullYear().toString(),
+                    userName: details.userName,
+                    keyName: details.keyName,
+                    publicId: details.publicId,
+                    source: details.source,
+                    url: details.url,
+                    time: details.time,
+                    securityUrl: this.securityUrl,
+                    supportUrl: this.supportUrl,
+                    year: new Date().getUTCFullYear().toString(),
+                },
+            },
         };
     }
 
     private getWelcomePromoPayload(data: WelcomePromoNotificationData) {
-        const userName = this.escapeHtml(
-            data.userName || data.email.split('@')[0] || 'there',
-        );
-        const expiryDate = this.escapeHtml(
-            data.expiryDate.toLocaleDateString('en-ZA', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-            }),
-        );
-
+        const userName = data.userName || data.email.split('@')[0] || 'there';
+        const expiryDate = data.expiryDate.toLocaleDateString('en-ZA', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+        });
         const fromAddress = this.resolveNotificationFromAddress(data.appId);
-
-        if (this.welcomePromoTemplateId) {
-            return {
-                from: fromAddress,
-                to: [data.email],
-                subject: 'Your Drippy Banks welcome code is here',
-                template: {
-                    id: this.welcomePromoTemplateId,
-                    variables: {
-                        userName,
-                        promoCode: data.promoCode,
-                        discountPercent: String(data.discountPercent),
-                        expiryDate,
-                        year: new Date().getUTCFullYear().toString(),
-                    },
-                },
-            };
-        }
 
         return {
             from: fromAddress,
             to: [data.email],
             subject: 'Your Drippy Banks welcome code is here',
-            text: [
-                `Hi ${userName},`,
-                '',
-                `Thanks for joining Drippy Banks. Your welcome code gives you ${data.discountPercent}% off your first order.`,
-                '',
-                `Promo code: ${data.promoCode}`,
-                `Valid until: ${expiryDate}`,
-                '',
-                'Apply the code at checkout to redeem your discount.',
-                '',
-                'Drippy Banks',
-            ].join('\n'),
+            template: {
+                id: this.welcomePromoTemplateId,
+                variables: {
+                    USER_NAME: userName,
+                    PROMO_CODE: data.promoCode,
+                    DISCOUNT_PERCENT: String(data.discountPercent),
+                    EXPIRY_DATE: expiryDate,
+                    YEAR: new Date().getUTCFullYear().toString(),
+                    userName,
+                    promoCode: data.promoCode,
+                    discountPercent: String(data.discountPercent),
+                    expiryDate,
+                    year: new Date().getUTCFullYear().toString(),
+                },
+            },
         };
-    }
-
-    private getApiKeyCompromisedEmailTemplate(details: {
-        userName: string;
-        keyName: string;
-        publicId: string;
-        source: string;
-        url: string;
-        time: string;
-    }) {
-        return `
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CHEFU API key revoked</title>
-  </head>
-  <body style="margin:0;padding:0;background:#f5f7fb;color:#111827;font-family:Arial,Helvetica,sans-serif;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7fb;padding:24px 12px;">
-      <tr>
-        <td align="center">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;">
-            <tr>
-              <td style="background:#7f1d1d;padding:30px 28px;color:#ffffff;">
-                <div style="display:inline-block;background:#fecaca;color:#7f1d1d;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;">
-                  Security alert
-                </div>
-                <h1 style="margin:18px 0 0;font-size:28px;line-height:1.2;font-weight:800;">
-                  API key revoked
-                </h1>
-                <p style="margin:10px 0 0;color:#fee2e2;font-size:15px;line-height:1.6;">
-                  We detected a possible public exposure and revoked the key to protect your account.
-                </p>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:30px 28px;">
-                <p style="margin:0 0 18px;font-size:16px;line-height:1.7;">Hi ${details.userName},</p>
-                <p style="margin:0 0 22px;color:#374151;font-size:15px;line-height:1.7;">
-                  A CHEFU API key linked to your account appears to have been exposed. For your protection, we revoked it immediately.
-                </p>
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#f9fafb;">
-                  ${this.detailRow('Key name', details.keyName)}
-                  ${this.detailRow('Public ID', details.publicId)}
-                  ${this.detailRow('Detected from', details.source)}
-                  ${this.detailRow('Time', details.time)}
-                </table>
-                ${details.url
-                ? `<p style="margin:18px 0 0;color:#374151;font-size:14px;line-height:1.6;">Reference: <a href="${this.escapeAttribute(details.url)}" style="color:#0369a1;">${this.escapeHtml(details.url)}</a></p>`
-                : ''
-            }
-                <div style="margin:24px 0;padding:18px;border-radius:12px;background:#fef2f2;border:1px solid #fecaca;">
-                  <p style="margin:0 0 8px;color:#991b1b;font-size:15px;font-weight:800;">What to do next</p>
-                  <p style="margin:0;color:#7f1d1d;font-size:14px;line-height:1.6;">
-                    Remove the exposed key from public code or logs, then create a new API key if your app still needs access.
-                  </p>
-                </div>
-                <a href="${this.escapeAttribute(this.securityUrl)}" style="display:inline-block;background:#0284c7;color:#ffffff;text-decoration:none;border-radius:8px;padding:12px 18px;font-size:14px;font-weight:700;">
-                  Review security settings
-                </a>
-              </td>
-            </tr>
-            <tr>
-              <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 28px;color:#6b7280;font-size:12px;line-height:1.6;">
-                <strong style="color:#374151;">CHEFU Security</strong><br>
-                Copyright ${new Date().getUTCFullYear()} CHEFU Inc. All rights reserved.
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>`;
-    }
-
-    private getPreferenceNotificationTemplate(details: {
-        userName: string;
-        type: string;
-        title: string;
-        message: string;
-        actionLabel: string;
-        actionUrl: string;
-    }) {
-        return `
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${details.title}</title>
-  </head>
-  <body style="margin:0;padding:0;background:#f5f7fb;color:#111827;font-family:Arial,Helvetica,sans-serif;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7fb;padding:24px 12px;">
-      <tr>
-        <td align="center">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;">
-            <tr>
-              <td style="background:#0f172a;padding:30px 28px;color:#ffffff;">
-                <div style="display:inline-block;background:#38bdf8;color:#082f49;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;">
-                  ${details.type}
-                </div>
-                <h1 style="margin:18px 0 0;font-size:28px;line-height:1.2;font-weight:800;">
-                  ${details.title}
-                </h1>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:30px 28px;">
-                <p style="margin:0 0 18px;font-size:16px;line-height:1.7;">Hi ${details.userName},</p>
-                <p style="margin:0 0 22px;color:#374151;font-size:15px;line-height:1.7;">${details.message}</p>
-                <a href="${this.escapeAttribute(details.actionUrl)}" style="display:inline-block;background:#0284c7;color:#ffffff;text-decoration:none;border-radius:8px;padding:12px 18px;font-size:14px;font-weight:700;">
-                  ${details.actionLabel}
-                </a>
-                <p style="margin:24px 0 0;color:#6b7280;font-size:13px;line-height:1.6;">
-                  You can manage email preferences from your CHEFU Academy account settings.
-                </p>
-              </td>
-            </tr>
-            <tr>
-              <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 28px;color:#6b7280;font-size:12px;line-height:1.6;">
-                <strong style="color:#374151;">CHEFU Academy</strong><br>
-                Copyright ${new Date().getUTCFullYear()} CHEFU Inc. All rights reserved.
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>`;
-    }
-
-    private getPasswordChangedEmailText(
-        data: PasswordChangedNotificationData,
-    ): string {
-        const details = this.getPasswordDetails(data);
-        const appLabel = 'CHEFU Account';
-
-        return [
-            `Hi ${details.userName},`,
-            '',
-            `Your ${appLabel} password was changed.`,
-            '',
-            `Time: ${details.time}`,
-            details.device ? `Device: ${details.device}` : '',
-            details.ipAddress ? `IP address: ${details.ipAddress}` : '',
-            '',
-            'If this was you, no action is needed.',
-            `If this was not you, secure your account now: ${this.securityUrl}`,
-            '',
-            `Support: ${this.supportUrl}`,
-            '',
-            `${appLabel} Security`,
-        ]
-            .filter(Boolean)
-            .join('\n');
-    }
-
-    private getPasswordChangedEmailTemplate(
-        data: PasswordChangedNotificationData,
-    ): string {
-        const details = this.getPasswordDetails(data);
-        const appLabel = 'CHEFU Account';
-
-        return `
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Password changed on ${appLabel}</title>
-  </head>
-  <body style="margin:0;padding:0;background:#f5f7fb;color:#111827;font-family:Arial,Helvetica,sans-serif;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7fb;padding:24px 12px;">
-      <tr>
-        <td align="center">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;">
-            <tr>
-              <td style="background:#0f172a;padding:30px 28px;color:#ffffff;">
-                <div style="display:inline-block;background:#22c55e;color:#052e16;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;">
-                  Account security
-                </div>
-                <h1 style="margin:18px 0 0;font-size:28px;line-height:1.2;font-weight:800;">
-                  Your password was changed
-                </h1>
-                <p style="margin:10px 0 0;color:#cbd5e1;font-size:15px;line-height:1.6;">
-                  We are letting you know because this protects your ${appLabel} account.
-                </p>
-              </td>
-            </tr>
-
-            <tr>
-              <td style="padding:30px 28px;">
-                <p style="margin:0 0 18px;font-size:16px;line-height:1.7;">
-                  Hi ${details.userName},
-                </p>
-                <p style="margin:0 0 22px;color:#374151;font-size:15px;line-height:1.7;">
-                  Your password was changed successfully. If you made this change, no further action is needed.
-                </p>
-
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#f9fafb;">
-                  ${this.detailRow('Time', details.time)}
-                  ${details.device ? this.detailRow('Device', details.device) : ''}
-                  ${details.ipAddress
-                ? this.detailRow('IP address', details.ipAddress)
-                : ''
-            }
-                </table>
-
-                <div style="margin:24px 0;padding:18px;border-radius:12px;background:#fef2f2;border:1px solid #fecaca;">
-                  <p style="margin:0 0 8px;color:#991b1b;font-size:15px;font-weight:800;">
-                    Did not change your password?
-                  </p>
-                  <p style="margin:0;color:#7f1d1d;font-size:14px;line-height:1.6;">
-                    Secure your account immediately and contact support so we can help protect your learning profile.
-                  </p>
-                </div>
-
-                <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 22px;">
-                  <tr>
-                    <td>
-                      <a href="${this.escapeAttribute(this.securityUrl)}" style="display:inline-block;background:#0284c7;color:#ffffff;text-decoration:none;border-radius:8px;padding:12px 18px;font-size:14px;font-weight:700;">
-                        Secure account
-                      </a>
-                    </td>
-                    <td style="padding-left:10px;">
-                      <a href="${this.escapeAttribute(this.supportUrl)}" style="display:inline-block;background:#ffffff;color:#0369a1;text-decoration:none;border:1px solid #bae6fd;border-radius:8px;padding:11px 18px;font-size:14px;font-weight:700;">
-                        Contact support
-                      </a>
-                    </td>
-                  </tr>
-                </table>
-
-                <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
-                  This message was sent automatically by ${appLabel} to help protect your account.
-                </p>
-              </td>
-            </tr>
-
-            <tr>
-              <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 28px;color:#6b7280;font-size:12px;line-height:1.6;">
-                <strong style="color:#374151;">${appLabel} Security</strong><br>
-                Copyright ${new Date().getUTCFullYear()} CHEFU Inc. All rights reserved.
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>`;
-    }
-
-    private getSignInEmailTemplate(data: SignInNotificationData): string {
-        const details = this.getDetails(data);
-
-        const appLabel = this.resolveAppLabel(data.appId);
-
-        return `
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>New sign-in to ${appLabel}</title>
-  </head>
-  <body style="margin:0;padding:0;background:#f5f7fb;color:#111827;font-family:Arial,Helvetica,sans-serif;">
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7fb;padding:24px 12px;">
-      <tr>
-        <td align="center">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;">
-            <tr>
-              <td style="background:#0f172a;padding:30px 28px;color:#ffffff;">
-                <div style="display:inline-block;background:#38bdf8;color:#082f49;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;">
-                  Security alert
-                </div>
-                <h1 style="margin:18px 0 0;font-size:28px;line-height:1.2;font-weight:800;">
-                  New sign-in detected
-                </h1>
-                <p style="margin:10px 0 0;color:#cbd5e1;font-size:15px;line-height:1.6;">
-                  We noticed access to your ${appLabel} account.
-                </p>
-              </td>
-            </tr>
-
-            <tr>
-              <td style="padding:30px 28px;">
-                <p style="margin:0 0 18px;font-size:16px;line-height:1.7;">
-                  Hi ${details.userName},
-                </p>
-                <p style="margin:0 0 22px;color:#374151;font-size:15px;line-height:1.7;">
-                  A new sign-in just happened. If this was you, you do not need to do anything.
-                </p>
-
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#f9fafb;">
-                  ${this.detailRow('Sign-in method', details.provider)}
-                  ${this.detailRow('Time', details.time)}
-                  ${details.device ? this.detailRow('Device', details.device) : ''}
-                  ${details.ipAddress
-                ? this.detailRow('IP address', details.ipAddress)
-                : ''
-            }
-                </table>
-
-                <div style="margin:24px 0;padding:18px;border-radius:12px;background:#fff7ed;border:1px solid #fed7aa;">
-                  <p style="margin:0 0 8px;color:#9a3412;font-size:15px;font-weight:800;">
-                    Do not recognize this activity?
-                  </p>
-                  <p style="margin:0;color:#7c2d12;font-size:14px;line-height:1.6;">
-                    Change your password, review your account, and enable two-factor authentication.
-                  </p>
-                </div>
-
-                <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 22px;">
-                  <tr>
-                    <td>
-                      <a href="${this.escapeAttribute(this.securityUrl)}" style="display:inline-block;background:#0284c7;color:#ffffff;text-decoration:none;border-radius:8px;padding:12px 18px;font-size:14px;font-weight:700;">
-                        Secure account
-                      </a>
-                    </td>
-                    <td style="padding-left:10px;">
-                      <a href="${this.escapeAttribute(this.supportUrl)}" style="display:inline-block;background:#ffffff;color:#0369a1;text-decoration:none;border:1px solid #bae6fd;border-radius:8px;padding:11px 18px;font-size:14px;font-weight:700;">
-                        Contact support
-                      </a>
-                    </td>
-                  </tr>
-                </table>
-
-                <p style="margin:0;color:#6b7280;font-size:13px;line-height:1.6;">
-                  This message was sent automatically by ${appLabel} to help protect your account.
-                </p>
-              </td>
-            </tr>
-
-            <tr>
-              <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:20px 28px;color:#6b7280;font-size:12px;line-height:1.6;">
-                <strong style="color:#374151;">${appLabel} Security</strong><br>
-                Copyright ${new Date().getUTCFullYear()} CHEFU Inc. All rights reserved.
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>`;
     }
 
     private resolveAppLabel(appId?: string) {
@@ -898,53 +483,96 @@ export class ResendService {
 
     private getDetails(data: SignInNotificationData) {
         return {
-            userName: this.escapeHtml(data.userName || data.email.split('@')[0] || 'there'),
-            provider: this.escapeHtml(this.formatProvider(data.provider)),
-            time: this.escapeHtml(
-                data.timestamp.toLocaleString('en-US', {
-                    year: 'numeric',
-                    month: 'long',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    timeZoneName: 'short',
-                }),
-            ),
-            device: data.deviceInfo ? this.escapeHtml(data.deviceInfo) : '',
-            ipAddress: data.ipAddress ? this.escapeHtml(data.ipAddress) : '',
+            userName: data.userName || data.email.split('@')[0] || 'there',
+            provider: this.formatProvider(data.provider),
+            time: data.timestamp.toLocaleString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                timeZoneName: 'short',
+            }),
+            device: data.deviceInfo ? this.formatDevice(data.deviceInfo) : '',
+            ipAddress: data.ipAddress || '',
         };
     }
 
     private getPasswordDetails(data: PasswordChangedNotificationData) {
         return {
-            userName: this.escapeHtml(data.userName || data.email.split('@')[0] || 'there'),
-            time: this.escapeHtml(
-                data.timestamp.toLocaleString('en-US', {
-                    year: 'numeric',
-                    month: 'long',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit',
-                    timeZoneName: 'short',
-                }),
-            ),
-            device: data.deviceInfo ? this.escapeHtml(data.deviceInfo) : '',
-            ipAddress: data.ipAddress ? this.escapeHtml(data.ipAddress) : '',
+            userName: data.userName || data.email.split('@')[0] || 'there',
+            time: data.timestamp.toLocaleString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                timeZoneName: 'short',
+            }),
+            device: data.deviceInfo ? this.formatDevice(data.deviceInfo) : '',
+            ipAddress: data.ipAddress || '',
         };
     }
 
-    private detailRow(label: string, value: string) {
-        return `
-      <tr>
-        <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;color:#6b7280;font-size:13px;font-weight:700;width:38%;">
-          ${label}
-        </td>
-        <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;color:#111827;font-size:14px;font-weight:700;word-break:break-word;">
-          ${value}
-        </td>
-      </tr>`;
+    private getPasskeyAddedDetails(data: PasskeyAddedNotificationData) {
+        return {
+            userName: data.userName || data.email.split('@')[0] || 'there',
+            device: this.formatDevice(data.device),
+            addedAt: this.formatAddedAt(data.addedAt),
+            origin: data.origin || 'https://myaccount.chefu.co.za',
+            ipAddress: data.ipAddress || 'Unknown IP address',
+            securityUrl: data.securityUrl || this.securityUrl,
+            supportEmail: data.supportEmail || process.env.SUPPORT_EMAIL || 'support@chefu.co.za',
+            year: data.year || new Date().getUTCFullYear().toString(),
+        };
+    }
+
+    private formatAddedAt(date?: Date): string {
+        const d = date || new Date();
+        return d.toLocaleString('en-US', {
+            timeZone: 'UTC',
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+        });
+    }
+
+    private formatDevice(raw?: string): string {
+        if (!raw) return 'Passkey Authenticator';
+
+        const ua = raw;
+        let os = '';
+        if (/iPhone/i.test(ua)) os = 'iPhone';
+        else if (/iPad/i.test(ua)) os = 'iPad';
+        else if (/Macintosh|Mac OS X/i.test(ua)) os = 'macOS';
+        else if (/Windows/i.test(ua)) os = 'Windows';
+        else if (/Android/i.test(ua)) os = 'Android';
+        else if (/Linux/i.test(ua)) os = 'Linux';
+        else if (/CrOS/i.test(ua)) os = 'ChromeOS';
+
+        let browser = '';
+        if (/Edg\//i.test(ua)) browser = 'Edge';
+        else if (/OPR\/|Opera/i.test(ua)) browser = 'Opera';
+        else if (/Chrome\//i.test(ua)) browser = 'Chrome';
+        else if (/Safari\//i.test(ua)) browser = 'Safari';
+        else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+
+        if (browser && os) {
+            return `${browser} on ${os}`;
+        }
+        if (os) {
+            return os;
+        }
+        if (browser) {
+            return browser;
+        }
+        return raw.length > 60 ? `${raw.slice(0, 57)}...` : raw;
     }
 
     private formatProvider(provider: string): string {
@@ -958,35 +586,5 @@ export class ResendService {
         };
 
         return providers[provider] || provider;
-    }
-
-    private formatNotificationType(type: string): string {
-        const labels: Record<string, string> = {
-            activity: 'Activity update',
-            general: 'General update',
-            marketing: 'Marketing update',
-            security: 'Security notice',
-            courseReminders: 'Course reminder',
-            aiCourseCompletion: 'AI course update',
-            weeklyProgressSummary: 'Weekly progress',
-        };
-
-        return labels[type] || type;
-    }
-
-    private escapeHtml(text: string): string {
-        const map: Record<string, string> = {
-            '&': '&amp;',
-            '<': '&lt;',
-            '>': '&gt;',
-            '"': '&quot;',
-            "'": '&#039;',
-        };
-
-        return text.replace(/[&<>"']/g, char => map[char]);
-    }
-
-    private escapeAttribute(text: string): string {
-        return this.escapeHtml(text).replace(/`/g, '&#096;');
     }
 }

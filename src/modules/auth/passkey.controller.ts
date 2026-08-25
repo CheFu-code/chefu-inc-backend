@@ -64,11 +64,32 @@ export class PasskeyController {
         }
 
         const clientKey = this.getClientIp(request) || 'unknown';
+        const userAgent = request.headers['user-agent'] as string | undefined;
+        const origin =
+            (request.headers.origin as string | undefined) ||
+            (request.headers.referer
+                ? (() => {
+                      try {
+                          return new URL(request.headers.referer as string).origin;
+                      } catch {
+                          return undefined;
+                      }
+                  })()
+                : undefined);
+        const appId =
+            (request.headers['x-app-id'] as string | undefined) ||
+            (request.query?.appId as string | undefined);
 
         return this.passkey.verifyRegistration(
             { uid: user.uid, email: user.email },
             clientKey,
             body,
+            {
+                ipAddress: clientKey !== 'unknown' ? clientKey : request.ip,
+                userAgent,
+                origin,
+                appId,
+            },
         );
     }
 

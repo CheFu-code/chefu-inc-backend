@@ -2,29 +2,17 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { FieldValue } from 'firebase-admin/firestore';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
-import { ResendService } from '../email/resend.service';
 import {
-  NotificationPreferenceKey,
   defaultNotificationPreferences,
   notificationPreferenceKeys,
   normalizeNotificationPreferences,
   sanitizePreferencePatch,
 } from './notification-preferences';
 
-type SendNotificationInput = {
-  type?: string;
-  subject?: string;
-  title?: string;
-  message?: string;
-  actionLabel?: string;
-  actionUrl?: string;
-};
-
 @Injectable()
 export class NotificationsService {
   constructor(
     private readonly firebaseAdmin: FirebaseAdminService,
-    private readonly resendService: ResendService,
   ) {}
 
   async getPreferences(user: AuthenticatedUser) {
@@ -62,53 +50,6 @@ export class NotificationsService {
       preferences,
       defaults: defaultNotificationPreferences,
       available: notificationPreferenceKeys,
-    };
-  }
-
-  async sendPreferenceEmail(
-    user: AuthenticatedUser,
-    input: SendNotificationInput,
-  ) {
-    const type = (input.type || 'general') as NotificationPreferenceKey;
-    if (!notificationPreferenceKeys.includes(type)) {
-      throw new BadRequestException('Invalid notification type.');
-    }
-
-    if (!input.subject || !input.title || !input.message) {
-      throw new BadRequestException('Subject, title, and message are required.');
-    }
-
-    const userDoc = await this.getUserDoc(user);
-    const data = userDoc.exists ? userDoc.data() : {};
-    const preferences = normalizeNotificationPreferences(data?.emailPreferences);
-
-    if (preferences[type] === false) {
-      return {
-        sent: false,
-        skipped: true,
-        reason: `User disabled ${type} emails.`,
-        preferences,
-      };
-    }
-
-    await this.resendService.sendPreferenceNotification({
-      email: user.email,
-      type,
-      subject: input.subject,
-      title: input.title,
-      message: input.message,
-      userName:
-        typeof data?.fullname === 'string'
-          ? data.fullname
-          : user.email.split('@')[0],
-      actionLabel: input.actionLabel,
-      actionUrl: input.actionUrl,
-    });
-
-    return {
-      sent: true,
-      skipped: false,
-      preferences,
     };
   }
 
