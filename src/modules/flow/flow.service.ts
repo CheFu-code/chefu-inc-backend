@@ -871,7 +871,7 @@ export class FlowService {
         email: payload.testEmail,
         firstName: 'Test',
         lastName: 'Recipient',
-        company: 'CHEFU Inc',
+        company: 'CHEFU Technologies',
         tags: ['test'],
       });
     }
@@ -1057,7 +1057,7 @@ export class FlowService {
   ) {
     return {
       audienceName: payload.audienceName,
-      company: recipient.company || 'CHEFU Inc',
+      company: recipient.company || 'CHEFU Technologies',
       email: recipient.email,
       firstName: recipient.firstName || recipient.email.split('@')[0],
       lastName: recipient.lastName || '',
@@ -1320,7 +1320,7 @@ export class FlowService {
         return {
           email: value,
           label: this.senderLabel(value),
-          name: name !== 'CHEFU Inc' ? name : undefined,
+          name: name !== 'CHEFU Technologies' ? name : undefined,
           source: 'env' as const,
         };
       });
@@ -1433,7 +1433,7 @@ export class FlowService {
     const match = sender.match(/^(.+?)\s*<(.+?)>$/);
     if (match?.[1]) return match[1].replace(/^"|"$/g, '').trim();
 
-    return this.emailAddress(sender).split('@')[0] || 'CHEFU Inc';
+    return this.emailAddress(sender).split('@')[0] || 'CHEFU Technologies';
   }
 
   private recipientDisplayName(recipient: FlowRecipient) {
