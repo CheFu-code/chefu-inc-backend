@@ -59,7 +59,7 @@ export const CHEFU_APPS: ChefuApp[] = [
     {
         id: "infinity",
         name: "Infinity",
-        origins: [],
+        origins: ["https://infinity.chefu.co.za"],
     },
     {
         id: "logix",
@@ -171,6 +171,13 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         appId: "infinity",
         name: "Infinity Mobile",
         redirectUris: ["infinity://auth"],
+        scopes: ["openid", "profile", "email"],
+    },
+    {
+        id: "infinity-web",
+        appId: "infinity",
+        name: "Infinity Web",
+        redirectUris: ["https://infinity.chefu.co.za/auth/callback"],
         scopes: ["openid", "profile", "email"],
     },
     {
