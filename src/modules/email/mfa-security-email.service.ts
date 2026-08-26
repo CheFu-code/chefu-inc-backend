@@ -27,7 +27,7 @@ export class MfaSecurityEmailService {
   private readonly fromAddress = this.normalizeFromAddress(
     process.env.SECURITY_EMAIL_FROM ||
     process.env.SIGNIN_ALERT_FROM ||
-    'CHEFU Account <security@chefu.co.za>',
+    'Security <security@chefu.co.za>',
   );
   private readonly securityUrl =
     process.env.SIGNIN_ALERT_SECURITY_URL ||

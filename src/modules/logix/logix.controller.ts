@@ -9,10 +9,11 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import {
@@ -54,6 +55,19 @@ export class LogixController {
       throw new UnauthorizedException('Authenticated user required.');
     }
     return this.logixService.queryLogs(request.user, query);
+  }
+
+  @Get('logs/stream')
+  @UseGuards(AuthGuard)
+  async streamLogs(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Query() query: QueryLogsDto,
+    @Res() response: Response,
+  ) {
+    if (!request.user) {
+      throw new UnauthorizedException('Authenticated user required.');
+    }
+    return this.logixService.streamLogs(request.user, query, request, response);
   }
 
   @Post('logs')

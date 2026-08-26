@@ -10,6 +10,7 @@ import crypto from 'node:crypto';
 import { DocumentData, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
+import { Request, Response } from 'express';
 
 export type LogLevel =
   | 'info'
@@ -278,6 +279,54 @@ export class LogixService {
       count: logs.length,
       logs,
     };
+  }
+
+  async streamLogs(
+    user: AuthenticatedUser,
+    dto: QueryLogsDto,
+    request: Request,
+    response: Response,
+  ) {
+    const safeLimit = Math.min(Math.max(Number(dto.limit || 500), 1), 5000);
+    const filterType = (dto.type || dto.level || '').trim().toLowerCase();
+    const filterEnv = (dto.env || dto.environment || '').trim().toLowerCase();
+    const filterApp = (dto.appName || dto.source || '').trim().toLowerCase();
+    const searchTerm = (dto.search || '').trim().toLowerCase();
+
+    let query = this.logsCollection(user);
+    if (filterType) query = query.where('level', '==', filterType) as typeof query;
+    if (filterEnv) query = query.where('environment', '==', filterEnv) as typeof query;
+    if (filterApp) query = query.where('appName', '==', filterApp) as typeof query;
+    query = query.orderBy('createdAt', 'desc').limit(safeLimit) as typeof query;
+
+    response.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    response.setHeader('Cache-Control', 'no-cache');
+    response.setHeader('Connection', 'keep-alive');
+    response.flushHeaders?.();
+
+    const snapshot = await query.get();
+    const initialIds = new Set(snapshot.docs.map(doc => doc.id));
+    const initialLogs = snapshot.docs
+      .map(doc => this.toLogEntry(doc.id, doc.data()))
+      .filter(log => !searchTerm || `${log.message} ${log.source} ${log.appName} ${JSON.stringify(log.payload)}`.toLowerCase().includes(searchTerm))
+      .reverse();
+    response.write(`data: ${JSON.stringify({ type: 'initial_logs', logs: initialLogs })}\n\n`);
+
+    const unsubscribe = query.onSnapshot(nextSnapshot => {
+      const logs = nextSnapshot.docChanges()
+        .filter(change => change.type === 'added' && !initialIds.has(change.doc.id))
+        .map(change => this.toLogEntry(change.doc.id, change.doc.data()))
+        .filter(log => !searchTerm || `${log.message} ${log.source} ${log.appName} ${JSON.stringify(log.payload)}`.toLowerCase().includes(searchTerm));
+      if (logs.length > 0) response.write(`data: ${JSON.stringify({ type: 'live', logs })}\n\n`);
+    }, error => {
+      response.write(`data: ${JSON.stringify({ type: 'error', message: error.message })}\n\n`);
+      response.end();
+    });
+
+    request.on('close', () => {
+      unsubscribe();
+      response.end();
+    });
   }
 
   // ---------------------------------------------------------------------------
