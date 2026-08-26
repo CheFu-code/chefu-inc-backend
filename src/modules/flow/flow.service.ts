@@ -79,6 +79,8 @@ type FlowFolderCounts = {
   trash: number;
 };
 
+const RESEND_REQUEST_TIMEOUT_MS = 15_000;
+
 @Injectable()
 export class FlowService {
   private readonly logger = new Logger(FlowService.name);
@@ -378,6 +380,7 @@ export class FlowService {
         headers: {
           Authorization: `Bearer ${this.resendApiKey}`,
         },
+        signal: AbortSignal.timeout(RESEND_REQUEST_TIMEOUT_MS),
       },
     );
     const data = await response.json().catch(async () => ({
@@ -444,6 +447,7 @@ export class FlowService {
         headers: {
           Authorization: `Bearer ${this.resendApiKey}`,
         },
+        signal: AbortSignal.timeout(RESEND_REQUEST_TIMEOUT_MS),
       },
     );
     const data = await response.json().catch(async () => ({
@@ -1273,6 +1277,7 @@ export class FlowService {
         ...extraHeaders,
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(RESEND_REQUEST_TIMEOUT_MS),
     });
     const data = await response.json().catch(async () => ({
       message: await response.text().catch(() => ''),
@@ -2171,6 +2176,7 @@ export class FlowService {
         headers: {
           Authorization: `Bearer ${this.resendApiKey}`,
         },
+        signal: AbortSignal.timeout(RESEND_REQUEST_TIMEOUT_MS),
       },
     );
     const data = await response.json().catch(async () => ({

@@ -395,7 +395,7 @@ export class FlowController {
     const requiredKey = process.env.FLOW_API_KEY;
     const isBrowserRequest = Boolean(request?.headers.origin);
 
-    if (!isBrowserRequest && (!requiredKey || flowApiKey === requiredKey)) {
+    if (!isBrowserRequest && requiredKey && flowApiKey === requiredKey) {
       return;
     }
 

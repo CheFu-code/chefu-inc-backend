@@ -79,7 +79,7 @@ export class ProfilePictureService {
       throw new BadRequestException("User email is required.");
     }
 
-    // Look for existing profile picture to delete from Cloudinary
+    let existingUrl: string | null = null;
     const existingDoc = await this.firebaseAdmin
       .db()
       .collection("users")
@@ -88,12 +88,10 @@ export class ProfilePictureService {
 
     if (existingDoc.exists) {
       const userData = existingDoc.data();
-      const existingUrl =
+      const storedUrl =
         userData?.profilePictureUrl || userData?.profilePicture || userData?.avatarUrl;
-      if (existingUrl && typeof existingUrl === "string" && existingUrl.includes("cloudinary.com")) {
-        await this.deleteCloudinaryImage(existingUrl).catch((err) => {
-          this.logger.warn(`Failed to delete old profile picture: ${err}`);
-        });
+      if (storedUrl && typeof storedUrl === "string" && storedUrl.includes("cloudinary.com")) {
+        existingUrl = storedUrl;
       }
     }
 
@@ -135,6 +133,12 @@ export class ProfilePictureService {
         .catch((err) => {
           this.logger.warn(`Failed to update photoURL in Firebase Auth: ${err}`);
         });
+    }
+
+    if (existingUrl) {
+      await this.deleteCloudinaryImage(existingUrl).catch((err) => {
+        this.logger.warn(`Failed to delete old profile picture: ${err}`);
+      });
     }
 
     this.logger.log(
