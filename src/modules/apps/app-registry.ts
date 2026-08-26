@@ -6,6 +6,7 @@ export type ChefuAppId =
     | "flow"
     | "muzalo"
     | "quantum"
+    | "infinity"
     | "drippybanks"
     | "logix"
     | "logix-dash";
@@ -54,6 +55,11 @@ export const CHEFU_APPS: ChefuApp[] = [
         id: "quantum",
         name: "Quantum",
         origins: ["https://quantum.chefu.co.za"],
+    },
+    {
+        id: "infinity",
+        name: "Infinity",
+        origins: [],
     },
     {
         id: "logix",
@@ -159,6 +165,13 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         name: "Quantum Mobile",
         redirectUris: ["quantum://auth"],
         scopes: ["openid", "profile", "email", "quantum:chat", "quantum:read"],
+    },
+    {
+        id: "infinity-mobile",
+        appId: "infinity",
+        name: "Infinity Mobile",
+        redirectUris: ["infinity://auth"],
+        scopes: ["openid", "profile", "email"],
     },
     {
         id: "drippybanks-web",

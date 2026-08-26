@@ -13,6 +13,7 @@ import { EmailModule } from './modules/email/email.module';
 import { FirebaseAdminModule } from './modules/firebase-admin/firebase-admin.module';
 import { DrippybanksModule } from './modules/drippybanks/drippybanks.module';
 import { FlowModule } from './modules/flow/flow.module';
+import { InfinityModule } from './modules/infinity/infinity.module';
 import { HealthController } from './modules/health/health.controller';
 import { LogixModule } from './modules/logix/logix.module';
 import { MuzaloModule } from './modules/muzalo/muzalo.module';
@@ -39,6 +40,7 @@ const productModules = [
   CoursesModule,
   DrippybanksModule,
   FlowModule,
+  InfinityModule,
   LogixModule,
   MuzaloModule,
   QuantumModule,
