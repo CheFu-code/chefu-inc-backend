@@ -599,10 +599,22 @@ export class OAuthService {
       throw new UnauthorizedException('Access token required.');
     }
 
+    const profileSnapshot = claims.email
+      ? await this.firebaseAdmin.db().collection('users').doc(claims.email).get()
+      : null;
+    const profile = profileSnapshot?.data() || {};
+    const photoURL =
+      typeof profile.profilePicture === 'string' && profile.profilePicture
+        ? profile.profilePicture
+        : typeof profile.avatarUrl === 'string' && profile.avatarUrl
+          ? profile.avatarUrl
+          : undefined;
+
     return {
       sub: claims.sub,
       email: claims.email,
       name: claims.name,
+      ...(photoURL ? { picture: photoURL } : {}),
       roles: claims.roles || [],
       app: claims.app,
       scope: claims.scope,
