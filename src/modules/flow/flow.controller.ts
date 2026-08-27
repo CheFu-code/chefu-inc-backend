@@ -224,6 +224,8 @@ export class FlowController {
               ? error.message
               : 'Flow message stream failed.',
         });
+          clearInterval(heartbeat);
+          if (!response.writableEnded) response.end();
       },
     );
 
