@@ -236,6 +236,16 @@ export class FlowController {
     });
   }
 
+  @Get('messages/:messageId')
+  async messageDetail(
+    @Param('messageId') messageId: string,
+    @Headers('x-flow-api-key') flowApiKey?: string,
+    @Req() request?: Request,
+  ) {
+    await this.assertFlowAccess(flowApiKey, request, 'read');
+    return this.flowService.getMessageDetail(messageId);
+  }
+
   @Get('messages/:messageId/attachments')
   async attachments(
     @Param('messageId') messageId: string,

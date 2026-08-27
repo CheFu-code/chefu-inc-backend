@@ -4,6 +4,7 @@ import {
   Injectable,
   InternalServerErrorException,
   Logger,
+  OnModuleDestroy,
 } from '@nestjs/common';
 import { FieldValue } from 'firebase-admin/firestore';
 import { createHash, randomUUID } from 'node:crypto';
@@ -82,10 +83,14 @@ type FlowFolderCounts = {
 const RESEND_REQUEST_TIMEOUT_MS = 15_000;
 
 @Injectable()
-export class FlowService {
+export class FlowService implements OnModuleDestroy {
   private readonly logger = new Logger(FlowService.name);
   private readonly resendApiUrl = 'https://api.resend.com';
   private readonly mailboxPageSize = 50;
+  private readonly sharedWatchers = new Map<string, {
+    clients: Set<(payload: { counts: FlowFolderCounts; folder: string; messages: FlowMessage[]; nextCursor: string | null; updatedAt: string }) => void>;
+    unsubscribe: () => void;
+  }>();
 
   constructor(
     @Inject(FirebaseAdminService)
@@ -126,7 +131,7 @@ export class FlowService {
       .limit(this.mailboxPageSize)
       .get();
     const allMessages = snapshot.docs.map(doc =>
-      this.toMessage(doc.id, doc.data()),
+      this.toMessage(doc.id, doc.data(), false),
     );
     const messages = requestedFolder === 'allmail'
       ? allMessages.filter(message => this.normalizeFolder(message.folder) !== 'trash')
@@ -155,15 +160,17 @@ export class FlowService {
   ) {
     const requestedFolder = String(folder || 'inbox').toLowerCase();
 
-    return this.mailboxQuery(requestedFolder)
-      .orderBy('createdAt', 'desc')
-      .limit(this.mailboxPageSize)
-      .onSnapshot(snapshot => {
+    let watcher = this.sharedWatchers.get(requestedFolder);
+    if (!watcher) {
+      const clients = new Set<typeof onMessages>();
+      const unsubscribe = this.mailboxQuery(requestedFolder)
+        .orderBy('createdAt', 'desc')
+        .limit(this.mailboxPageSize)
+        .onSnapshot(snapshot => {
         const allMessages = snapshot.docs.map(doc =>
-          this.toMessage(doc.id, doc.data()),
+          this.toMessage(doc.id, doc.data(), false),
         );
-
-        onMessages({
+        const payload = {
           counts: this.countFolders(allMessages),
           folder: requestedFolder,
           messages: requestedFolder === 'allmail'
@@ -173,8 +180,31 @@ export class FlowService {
             ? this.firestoreTimestampToIso(snapshot.docs[snapshot.docs.length - 1].get('createdAt'))
             : null,
           updatedAt: new Date().toISOString(),
-        });
+        };
+        clients.forEach(client => client(payload));
       }, onError);
+      watcher = { clients, unsubscribe };
+      this.sharedWatchers.set(requestedFolder, watcher);
+    }
+    watcher.clients.add(onMessages);
+    return () => {
+      watcher?.clients.delete(onMessages);
+      if (watcher && watcher.clients.size === 0) {
+        watcher.unsubscribe();
+        this.sharedWatchers.delete(requestedFolder);
+      }
+    };
+  }
+
+  onModuleDestroy() {
+    this.sharedWatchers.forEach(watcher => watcher.unsubscribe());
+    this.sharedWatchers.clear();
+  }
+
+  async getMessageDetail(messageId: string) {
+    const snapshot = await this.messagesCollection().doc(messageId).get();
+    if (!snapshot.exists) throw new BadRequestException('Message not found.');
+    return { message: this.toMessage(snapshot.id, snapshot.data() || {}, true) };
   }
 
   async send(payload: FlowSendPayload) {
@@ -228,20 +258,33 @@ export class FlowService {
         ),
       }));
     const emails = renderedEmails.map(item => item.email);
-    const response =
-      emails.length === 1
+    const sendGroupId = randomUUID();
+    const sendGroupRef = this.firebaseAdmin.db().collection('flowSendGroups').doc(sendGroupId);
+    await sendGroupRef.create({
+      createdAt: FieldValue.serverTimestamp(),
+      expectedCount: emails.length,
+      status: 'sending',
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    let response: unknown;
+    try {
+      response = emails.length === 1
         ? await this.postToResend('/emails', emails[0])
         : normalized.attachments.length
-          ? await Promise.all(
-            emails.map(email => this.postToResend('/emails', email)),
-          )
+          ? await this.mapWithConcurrency(emails, 4, email => this.postToResend('/emails', email))
           : await this.postToResend('/emails/batch', emails, {
             'x-batch-validation': 'permissive',
           });
+    } catch (error) {
+      await sendGroupRef.update({ status: 'failed', updatedAt: FieldValue.serverTimestamp() });
+      throw error;
+    }
+    await sendGroupRef.update({ status: 'persisting', updatedAt: FieldValue.serverTimestamp() });
     const sentAt = new Date().toISOString();
-    const sendGroupId = randomUUID();
 
-    await Promise.all(
+    try {
+      await Promise.all(
       renderedEmails.map(({ body, email, html, recipient, subject }, index) =>
         this.messagesCollection().add({
           attachments: normalized.attachments.length,
@@ -268,8 +311,13 @@ export class FlowService {
           unread: false,
           updatedAt: FieldValue.serverTimestamp(),
         }),
-      ),
-    );
+        ),
+      );
+      await sendGroupRef.update({ status: 'completed', updatedAt: FieldValue.serverTimestamp() });
+    } catch (error) {
+      await sendGroupRef.update({ status: 'reconciliation_required', updatedAt: FieldValue.serverTimestamp() });
+      throw error;
+    }
 
     return {
       action: normalized.action,
@@ -278,6 +326,19 @@ export class FlowService {
       data: response,
       sentAt,
     };
+  }
+
+  private async mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>) {
+    const results: R[] = [];
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex++;
+        results[index] = await mapper(items[index]);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+    return results;
   }
 
   async receiveInbound(payload: unknown) {
@@ -641,7 +702,6 @@ export class FlowService {
     const now = new Date().toISOString();
     const draftData = {
       attachments: 0,
-      createdAt: FieldValue.serverTimestamp(),
       direction: 'outbound',
       folder: 'drafts',
       from,
@@ -659,9 +719,9 @@ export class FlowService {
       ? this.messagesCollection().doc(payload.draftId)
       : this.messagesCollection().doc();
     if (payload.draftId) {
-      await docRef.update(draftData);
+      await docRef.update({ ...draftData, updatedAt: FieldValue.serverTimestamp() });
     } else {
-      await docRef.create(draftData);
+      await docRef.create({ ...draftData, createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
     }
 
     return {
@@ -1295,7 +1355,11 @@ export class FlowService {
     body: unknown,
     extraHeaders: Record<string, string> = {},
   ) {
-    const response = await fetch(`${this.resendApiUrl}${path}`, {
+    let response: Response | undefined;
+    let data: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        response = await fetch(`${this.resendApiUrl}${path}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${this.resendApiKey}`,
@@ -1304,24 +1368,34 @@ export class FlowService {
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(RESEND_REQUEST_TIMEOUT_MS),
-    });
-    const data = await response.json().catch(async () => ({
-      message: await response.text().catch(() => ''),
-    }));
+        });
+        const resendResponse = response;
+        data = await resendResponse.json().catch(async () => ({
+      message: await resendResponse.text().catch(() => ''),
+        }));
+      } catch (error) {
+        if (attempt === 2) throw error;
+        await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt));
+        continue;
+      }
 
-    if (!response.ok) {
+      if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)) break;
+      await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt));
+    }
+
+    if (!response?.ok) {
       const message = this.resendErrorMessage(data);
 
       this.logger.warn(
         JSON.stringify({
           event: 'flow_resend_request_failed',
           path,
-          statusCode: response.status,
+          statusCode: response?.status,
           message,
         }),
       );
 
-      if (response.status >= 400 && response.status < 500) {
+      if (response && response.status >= 400 && response.status < 500) {
         throw new BadRequestException(message);
       }
 
@@ -1739,6 +1813,7 @@ export class FlowService {
   private toMessage(
     id: string,
     data: Record<string, unknown>,
+    includeContent = true,
   ): FlowMessage {
     const attachmentItems = this.normalizeAttachments(data.attachmentItems);
     const isReactionMessage =
@@ -1800,7 +1875,7 @@ export class FlowService {
           ? data.firstOpenedAt
           : undefined,
       from,
-      html: typeof data.html === 'string' ? data.html : undefined,
+      html: includeContent && typeof data.html === 'string' ? data.html : undefined,
       inReplyTo:
         typeof data.inReplyTo === 'string'
           ? data.inReplyTo
@@ -1840,7 +1915,7 @@ export class FlowService {
           : this.timestampToIso(data.sentAt),
       starred: Boolean(data.starred),
       subject,
-      text: typeof data.text === 'string' ? data.text : undefined,
+      text: includeContent && typeof data.text === 'string' ? data.text : undefined,
       threadKey,
       to,
       unread: Boolean(data.unread),
