@@ -49,7 +49,7 @@ browser clients must use `code_challenge_method=S256`.
 This backend is organized as a shared CHEFU platform plus product modules:
 
 - Platform modules: app registry, Firebase Admin, auth, and health.
-- Shared service modules: admin, AI, billing, email, and notifications.
+- Shared service modules: AI, billing, email, and notifications.
 - Product modules: Academy SDK, Academy courses, Flow, and future apps.
 
 See `docs/backend-architecture.md` for the module pattern and the checklist for
@@ -108,8 +108,6 @@ On the frontend host, set:
 - `GET /auth/me`
 - `DELETE /auth/session`
 - `POST /ai/generate`
-- `POST /admin/delete-user`
-- `POST /admin/send-otp`
 - `POST /email/password-changed`
 - `GET /flow/access/session`
 - `POST /flow/access/login`

@@ -3,7 +3,6 @@ import { RateLimitMiddleware } from './common/rate-limit.middleware';
 import { RequestLoggerMiddleware } from './common/request-logger.middleware';
 import { AcademySdkModule } from './modules/academy-sdk/academy-sdk.module';
 import { AcademyMobileModule } from './modules/academy-mobile/academy-mobile.module';
-import { AdminModule } from './modules/admin/admin.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AppsModule } from './modules/apps/apps.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -27,7 +26,6 @@ const platformModules = [
 ];
 
 const sharedServiceModules = [
-  AdminModule,
   AiModule,
   BillingModule,
   EmailModule,
