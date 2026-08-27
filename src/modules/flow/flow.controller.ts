@@ -185,9 +185,10 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
     @Query('folder') folder?: string,
+    @Query('cursor') cursor?: string,
   ) {
     await this.assertFlowAccess(flowApiKey, request, 'read');
-    return this.flowService.getMessages(folder);
+    return this.flowService.getMessages(folder, cursor);
   }
 
   @Get('messages/stream')
@@ -343,6 +344,7 @@ export class FlowController {
     @Body()
     body: {
       body?: string;
+      draftId?: string;
       from?: string;
       subject?: string;
       to?: string | string[];

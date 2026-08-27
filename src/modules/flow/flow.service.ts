@@ -85,6 +85,7 @@ const RESEND_REQUEST_TIMEOUT_MS = 15_000;
 export class FlowService {
   private readonly logger = new Logger(FlowService.name);
   private readonly resendApiUrl = 'https://api.resend.com';
+  private readonly mailboxPageSize = 50;
 
   constructor(
     @Inject(FirebaseAdminService)
@@ -116,21 +117,28 @@ export class FlowService {
     };
   }
 
-  async getMessages(folder = 'inbox') {
+  async getMessages(folder = 'inbox', cursor?: string) {
     const requestedFolder = String(folder || 'inbox').toLowerCase();
-    const snapshot = await this.messagesCollection()
+    const query = this.mailboxQuery(requestedFolder);
+    const pagedQuery = cursor ? query.startAfter(new Date(cursor)) : query;
+    const snapshot = await pagedQuery
       .orderBy('createdAt', 'desc')
-      .limit(100)
+      .limit(this.mailboxPageSize)
       .get();
     const allMessages = snapshot.docs.map(doc =>
       this.toMessage(doc.id, doc.data()),
     );
-    const messages = this.filterMessagesByFolder(allMessages, requestedFolder);
+    const messages = requestedFolder === 'allmail'
+      ? allMessages.filter(message => this.normalizeFolder(message.folder) !== 'trash')
+      : allMessages;
 
     return {
       folder: requestedFolder,
       messages,
       counts: this.countFolders(allMessages),
+      nextCursor: snapshot.size === this.mailboxPageSize
+        ? this.firestoreTimestampToIso(snapshot.docs[snapshot.docs.length - 1].get('createdAt'))
+        : null,
     };
   }
 
@@ -140,15 +148,16 @@ export class FlowService {
       counts: FlowFolderCounts;
       folder: string;
       messages: FlowMessage[];
+      nextCursor: string | null;
       updatedAt: string;
     }) => void,
     onError: (error: Error) => void,
   ) {
     const requestedFolder = String(folder || 'inbox').toLowerCase();
 
-    return this.messagesCollection()
+    return this.mailboxQuery(requestedFolder)
       .orderBy('createdAt', 'desc')
-      .limit(100)
+      .limit(this.mailboxPageSize)
       .onSnapshot(snapshot => {
         const allMessages = snapshot.docs.map(doc =>
           this.toMessage(doc.id, doc.data()),
@@ -157,7 +166,12 @@ export class FlowService {
         onMessages({
           counts: this.countFolders(allMessages),
           folder: requestedFolder,
-          messages: this.filterMessagesByFolder(allMessages, requestedFolder),
+          messages: requestedFolder === 'allmail'
+            ? allMessages.filter(message => this.normalizeFolder(message.folder) !== 'trash')
+            : allMessages,
+          nextCursor: snapshot.size === this.mailboxPageSize
+            ? this.firestoreTimestampToIso(snapshot.docs[snapshot.docs.length - 1].get('createdAt'))
+            : null,
           updatedAt: new Date().toISOString(),
         });
       }, onError);
@@ -488,13 +502,7 @@ export class FlowService {
 
   async markRead(messageId: string) {
     const ref = this.messagesCollection().doc(messageId);
-    const snapshot = await ref.get();
-
-    if (!snapshot.exists) {
-      throw new BadRequestException('Message not found.');
-    }
-
-    await ref.update({
+    await this.updateMessage(ref, {
       unread: false,
       updatedAt: FieldValue.serverTimestamp(),
     });
@@ -507,13 +515,7 @@ export class FlowService {
 
   async markUnread(messageId: string) {
     const ref = this.messagesCollection().doc(messageId);
-    const snapshot = await ref.get();
-
-    if (!snapshot.exists) {
-      throw new BadRequestException('Message not found.');
-    }
-
-    await ref.update({
+    await this.updateMessage(ref, {
       unread: true,
       updatedAt: FieldValue.serverTimestamp(),
     });
@@ -526,13 +528,7 @@ export class FlowService {
 
   async setStarred(messageId: string, starred: boolean) {
     const ref = this.messagesCollection().doc(messageId);
-    const snapshot = await ref.get();
-
-    if (!snapshot.exists) {
-      throw new BadRequestException('Message not found.');
-    }
-
-    await ref.update({
+    await this.updateMessage(ref, {
       starred,
       updatedAt: FieldValue.serverTimestamp(),
     });
@@ -546,13 +542,7 @@ export class FlowService {
   async moveToFolder(messageId: string, folder: string) {
     const normalizedFolder = this.normalizeMutableFolder(folder);
     const ref = this.messagesCollection().doc(messageId);
-    const snapshot = await ref.get();
-
-    if (!snapshot.exists) {
-      throw new BadRequestException('Message not found.');
-    }
-
-    await ref.update({
+    await this.updateMessage(ref, {
       folder: normalizedFolder,
       unread: false,
       updatedAt: FieldValue.serverTimestamp(),
@@ -566,13 +556,7 @@ export class FlowService {
 
   async reportMessage(messageId: string) {
     const ref = this.messagesCollection().doc(messageId);
-    const snapshot = await ref.get();
-
-    if (!snapshot.exists) {
-      throw new BadRequestException('Message not found.');
-    }
-
-    await ref.update({
+    await this.updateMessage(ref, {
       folder: 'archived',
       reportedSpam: true,
       unread: false,
@@ -588,13 +572,7 @@ export class FlowService {
 
   async moveToTrash(messageId: string) {
     const ref = this.messagesCollection().doc(messageId);
-    const snapshot = await ref.get();
-
-    if (!snapshot.exists) {
-      throw new BadRequestException('Message not found.');
-    }
-
-    await ref.update({
+    await this.updateMessage(ref, {
       folder: 'trash',
       unread: false,
       updatedAt: FieldValue.serverTimestamp(),
@@ -608,13 +586,14 @@ export class FlowService {
 
   async deleteMessage(messageId: string) {
     const ref = this.messagesCollection().doc(messageId);
-    const snapshot = await ref.get();
-
-    if (!snapshot.exists) {
-      throw new BadRequestException('Message not found.');
+    try {
+      await ref.delete();
+    } catch (error) {
+      if ((error as { code?: number | string }).code === 5) {
+        throw new BadRequestException('Message not found.');
+      }
+      throw error;
     }
-
-    await ref.delete();
 
     return {
       deleted: true,
@@ -622,8 +601,23 @@ export class FlowService {
     };
   }
 
+  private async updateMessage(
+    ref: FirebaseFirestore.DocumentReference,
+    data: Record<string, unknown>,
+  ) {
+    try {
+      await ref.update(data);
+    } catch (error) {
+      if ((error as { code?: number | string }).code === 5) {
+        throw new BadRequestException('Message not found.');
+      }
+      throw error;
+    }
+  }
+
   async saveDraft(payload: {
     body?: string;
+    draftId?: string;
     from?: string;
     subject?: string;
     to?: string | string[];
@@ -645,7 +639,7 @@ export class FlowService {
     }
 
     const now = new Date().toISOString();
-    const doc = await this.messagesCollection().add({
+    const draftData = {
       attachments: 0,
       createdAt: FieldValue.serverTimestamp(),
       direction: 'outbound',
@@ -660,10 +654,18 @@ export class FlowService {
       to,
       unread: false,
       updatedAt: FieldValue.serverTimestamp(),
-    });
+    };
+    const docRef = payload.draftId
+      ? this.messagesCollection().doc(payload.draftId)
+      : this.messagesCollection().doc();
+    if (payload.draftId) {
+      await docRef.update(draftData);
+    } else {
+      await docRef.create(draftData);
+    }
 
     return {
-      draft: this.toMessage(doc.id, {
+      draft: this.toMessage(docRef.id, {
         attachments: 0,
         createdAt: new Date(),
         direction: 'outbound',
@@ -678,6 +680,7 @@ export class FlowService {
         to,
         unread: false,
       }),
+      draftId: docRef.id,
       saved: true,
     };
   }
@@ -1152,6 +1155,25 @@ export class FlowService {
       };
     }
 
+    const eventKey = `${event.emailId}:${eventType}:${event.createdAt}`;
+    const eventRef = this.firebaseAdmin
+      .db()
+      .collection('flowProcessedWebhookEvents')
+      .doc(createHash('sha256').update(eventKey).digest('hex'));
+    try {
+      await eventRef.create({
+        createdAt: FieldValue.serverTimestamp(),
+        emailId: event.emailId,
+        eventType,
+      });
+    } catch (error) {
+      const code = (error as { code?: number | string }).code;
+      if (code === 6 || code === 'already-exists') {
+        return { emailId: event.emailId, eventType, ignored: true, tracked: false };
+      }
+      throw error;
+    }
+
     const snapshot = await this.messagesCollection()
       .where('resendEmailId', '==', event.emailId)
       .limit(10)
@@ -1617,6 +1639,25 @@ export class FlowService {
     }
 
     throw new BadRequestException('Folder is not valid.');
+  }
+
+  private mailboxQuery(folder: string) {
+    const requestedFolder = String(folder || 'inbox').toLowerCase();
+    const collection = this.messagesCollection();
+
+    if (requestedFolder === 'bin' || requestedFolder === 'trash') {
+      return collection.where('folder', '==', 'trash');
+    }
+
+    if (requestedFolder === 'starred') {
+      return collection.where('starred', '==', true);
+    }
+
+    if (requestedFolder === 'allmail') {
+      return collection;
+    }
+
+    return collection.where('folder', '==', this.normalizeFolder(requestedFolder));
   }
 
   private countFolders(messages: FlowMessage[]): FlowFolderCounts {
