@@ -186,7 +186,10 @@ export class FlowAccessKeyService {
 
       if (!(await this.keyIsActive(token.keyId))) return null;
 
-      return token;
+      return {
+        ...token,
+        permission: this.parsePermission(token.permission),
+      };
     } catch {
       return null;
     }
