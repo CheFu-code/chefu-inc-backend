@@ -26,7 +26,7 @@ export class RuntimeLimitService {
   >();
   private readonly localReplayBuckets = new Map<string, number>();
   private readonly useFirestore =
-    process.env.RUNTIME_LIMIT_STORE !== 'memory' &&
+    process.env.RUNTIME_LIMIT_STORE === 'firestore' &&
     process.env.NODE_ENV !== 'test';
 
   constructor(private readonly firebaseAdmin: FirebaseAdminService) {}

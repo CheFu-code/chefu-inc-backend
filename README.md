@@ -73,6 +73,7 @@ Set these on the backend host:
 - `WHATSAPP_PHONE_NUMBER_ID`
 - `WHATSAPP_SYSTEM_USER_TOKEN`
 - `RESEND_API_KEY` for security notification emails
+- `RUNTIME_LIMIT_STORE=firestore` only when rate limits must be shared across multiple API instances; the default in-memory limiter avoids a Firestore read/write on every request
 - `FLOW_ACCESS_SECRET=<long random secret shared with the Flow frontend>`
 - `FLOW_SENDERS="CHEFU Inc <hello@chefu.co.za>;Flow Mail <mail@chefu.co.za>;Support <support@chefu.co.za>;Security <security@chefu.co.za>;Muzalo <muzalo@chefu.co.za>;CHEFU Academy <academy@chefu.co.za>;CHEFU Quantum <quantum@chefu.co.za>"`
 - `SIGNIN_ALERT_TEMPLATE_ID` if using a saved Resend template for sign-in alerts

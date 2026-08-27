@@ -6,7 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { FieldValue } from 'firebase-admin/firestore';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
   applyVariables,
@@ -298,18 +298,9 @@ export class FlowService {
       : 'inbox';
 
     try {
-      const existingId = await this.findExistingInboundMessage(message);
-      if (existingId) {
-        return {
-          id: existingId,
-          deduped: true,
-          received: true,
-          receivedAt: message.receivedAt,
-          folder,
-        };
-      }
-
-      const doc = await this.messagesCollection().add({
+      const inboundId = this.inboundDocumentId(message);
+      const docRef = this.messagesCollection().doc(inboundId);
+      const messageData = {
         ...inboundData,
         attachments: message.attachments || 0,
         createdAt: FieldValue.serverTimestamp(),
@@ -320,10 +311,23 @@ export class FlowService {
         starred: false,
         webhookEventType: eventType || 'manual',
         updatedAt: FieldValue.serverTimestamp(),
-      });
+      };
+      let deduped = false;
+
+      try {
+        await docRef.create(messageData);
+      } catch (error) {
+        const code = (error as { code?: number | string }).code;
+        if (code === 6 || code === 'already-exists') {
+          deduped = true;
+        } else {
+          throw error;
+        }
+      }
 
       return {
-        id: doc.id,
+        id: inboundId,
+        deduped,
         received: true,
         receivedAt: message.receivedAt,
         folder,
@@ -1571,29 +1575,16 @@ export class FlowService {
     return null;
   }
 
-  private async findExistingInboundMessage(message: {
+  private inboundDocumentId(message: {
     messageId?: string;
+    from: string;
     resendEmailId?: string;
+    subject: string;
   }) {
-    if (message.resendEmailId) {
-      const snapshot = await this.messagesCollection()
-        .where('resendEmailId', '==', message.resendEmailId)
-        .limit(1)
-        .get();
-
-      if (!snapshot.empty) return snapshot.docs[0].id;
-    }
-
-    if (message.messageId) {
-      const snapshot = await this.messagesCollection()
-        .where('messageId', '==', message.messageId)
-        .limit(1)
-        .get();
-
-      if (!snapshot.empty) return snapshot.docs[0].id;
-    }
-
-    return '';
+    const stableKey = message.resendEmailId || message.messageId ||
+      `${message.from}|${message.subject}`;
+    const digest = createHash('sha256').update(stableKey).digest('hex').slice(0, 40);
+    return `inbound-${digest}`;
   }
 
   private normalizeFolder(value?: string) {
