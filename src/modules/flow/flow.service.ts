@@ -126,14 +126,29 @@ export class FlowService implements OnModuleDestroy {
     const requestedFolder = String(folder || 'inbox').toLowerCase();
     const query = this.mailboxQuery(requestedFolder);
     const pagedQuery = cursor ? query.startAfter(new Date(cursor)) : query;
-    const snapshot = await pagedQuery
-      .orderBy('createdAt', 'desc')
-      .limit(this.mailboxPageSize)
-      .get();
+    let usedFallback = false;
+    let snapshot: FirebaseFirestore.QuerySnapshot;
+    try {
+      snapshot = await pagedQuery
+        .orderBy('createdAt', 'desc')
+        .limit(this.mailboxPageSize)
+        .get();
+    } catch (error) {
+      const code = (error as { code?: number | string }).code;
+      if (code !== 9 && code !== 'failed-precondition') throw error;
+      usedFallback = true;
+      const fallback = await this.messagesCollection()
+        .orderBy('createdAt', 'desc')
+        .limit(this.mailboxPageSize)
+        .get();
+      snapshot = fallback;
+    }
     const allMessages = snapshot.docs.map(doc =>
       this.toMessage(doc.id, doc.data(), false),
     );
-    const messages = requestedFolder === 'allmail'
+    const messages = usedFallback
+      ? this.filterMessagesByFolder(allMessages, requestedFolder)
+      : requestedFolder === 'allmail'
       ? allMessages.filter(message => this.normalizeFolder(message.folder) !== 'trash')
       : allMessages;
 
@@ -163,26 +178,39 @@ export class FlowService implements OnModuleDestroy {
     let watcher = this.sharedWatchers.get(requestedFolder);
     if (!watcher) {
       const clients = new Set<typeof onMessages>();
-      const unsubscribe = this.mailboxQuery(requestedFolder)
-        .orderBy('createdAt', 'desc')
-        .limit(this.mailboxPageSize)
-        .onSnapshot(snapshot => {
+      const publish = (snapshot: FirebaseFirestore.QuerySnapshot, filterFolder = false) => {
         const allMessages = snapshot.docs.map(doc =>
           this.toMessage(doc.id, doc.data(), false),
         );
-        const payload = {
+        const messages = filterFolder
+          ? this.filterMessagesByFolder(allMessages, requestedFolder)
+          : requestedFolder === 'allmail'
+            ? allMessages.filter(message => this.normalizeFolder(message.folder) !== 'trash')
+            : allMessages;
+        clients.forEach(client => client({
           counts: this.countFolders(allMessages),
           folder: requestedFolder,
-          messages: requestedFolder === 'allmail'
-            ? allMessages.filter(message => this.normalizeFolder(message.folder) !== 'trash')
-            : allMessages,
+          messages,
           nextCursor: snapshot.size === this.mailboxPageSize
             ? this.firestoreTimestampToIso(snapshot.docs[snapshot.docs.length - 1].get('createdAt'))
             : null,
           updatedAt: new Date().toISOString(),
-        };
-        clients.forEach(client => client(payload));
-      }, onError);
+        }));
+      };
+      let unsubscribe = this.mailboxQuery(requestedFolder)
+        .orderBy('createdAt', 'desc')
+        .limit(this.mailboxPageSize)
+        .onSnapshot(snapshot => publish(snapshot), error => {
+          const code = (error as { code?: number | string }).code;
+          if (code === 9 || code === 'failed-precondition') {
+            unsubscribe = this.messagesCollection()
+              .orderBy('createdAt', 'desc')
+              .limit(this.mailboxPageSize)
+              .onSnapshot(snapshot => publish(snapshot, true), onError);
+            return;
+          }
+          onError(error);
+        });
       watcher = { clients, unsubscribe };
       this.sharedWatchers.set(requestedFolder, watcher);
     }
