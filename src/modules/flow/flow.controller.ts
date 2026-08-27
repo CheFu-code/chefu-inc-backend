@@ -23,7 +23,10 @@ import { AuthGuard } from '../auth/auth.guard';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { SESSION_COOKIE_NAME } from '../auth/session.constants';
 import { FLOW_ACCESS_DENIED_MESSAGE } from './flow-access';
-import { FlowAccessKeyService } from './flow-access-key.service';
+import {
+  FlowAccessKeyService,
+  FlowAccessPermission,
+} from './flow-access-key.service';
 import { FlowSendPayload } from './flow-email.types';
 import { FlowService } from './flow.service';
 
@@ -80,7 +83,7 @@ export class FlowController {
   @Post('admin/access-keys')
   @UseGuards(AuthGuard, AdminGuard)
   async createAccessKey(
-    @Body() body: { expiresAt?: string; label?: string },
+    @Body() body: { expiresAt?: string; label?: string; permission?: string },
     @Req() request: Request & { user?: AuthenticatedUser },
   ) {
     return this.flowAccessKeys.createKey(body, request.user);
@@ -102,7 +105,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'read');
     return this.flowService.listAllowedEmails();
   }
 
@@ -112,7 +115,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request & { user?: AuthenticatedUser },
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'write');
     const session = request ? await this.flowAccessKeys.sessionFromRequest(request) : null;
     const addedBy =
       request?.user?.email ||
@@ -133,7 +136,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'write');
     return this.flowService.removeAllowedEmail(email);
   }
 
@@ -173,7 +176,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'read');
     return this.flowService.getConfig();
   }
 
@@ -183,7 +186,7 @@ export class FlowController {
     @Req() request?: Request,
     @Query('folder') folder?: string,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'read');
     return this.flowService.getMessages(folder);
   }
 
@@ -194,7 +197,7 @@ export class FlowController {
     @Res() response: Response,
     @Query('folder') folder?: string,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'read');
 
     response.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     response.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -238,7 +241,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'read');
     return this.flowService.listAttachments(messageId);
   }
 
@@ -249,7 +252,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'read');
     return this.flowService.getAttachment(messageId, attachmentId);
   }
 
@@ -259,7 +262,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'write');
     return this.flowService.markRead(messageId);
   }
 
@@ -269,7 +272,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'write');
     return this.flowService.markUnread(messageId);
   }
 
@@ -280,7 +283,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'write');
     return this.flowService.setStarred(messageId, Boolean(body.starred));
   }
 
@@ -290,7 +293,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'write');
     return this.flowService.moveToFolder(messageId, 'archived');
   }
 
@@ -300,7 +303,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'write');
     return this.flowService.reportMessage(messageId);
   }
 
@@ -311,7 +314,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'write');
     return this.flowService.moveToFolder(messageId, body.folder || 'inbox');
   }
 
@@ -321,7 +324,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'write');
     return this.flowService.moveToTrash(messageId);
   }
 
@@ -331,7 +334,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'write');
     return this.flowService.deleteMessage(messageId);
   }
 
@@ -347,7 +350,7 @@ export class FlowController {
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request,
   ) {
-    await this.assertFlowAccess(flowApiKey, request);
+    await this.assertFlowAccess(flowApiKey, request, 'write');
     return this.flowService.saveDraft(body);
   }
 
@@ -391,7 +394,11 @@ export class FlowController {
     }
   }
 
-  private async assertFlowAccess(flowApiKey?: string, request?: Request) {
+  private async assertFlowAccess(
+    flowApiKey?: string,
+    request?: Request,
+    requiredPermission: FlowAccessPermission = 'full',
+  ) {
     const requiredKey = process.env.FLOW_API_KEY;
     const isBrowserRequest = Boolean(request?.headers.origin);
 
@@ -399,8 +406,14 @@ export class FlowController {
       return;
     }
 
-    if (request && (await this.flowAccessKeys.sessionFromRequest(request))) {
-      return;
+    if (request) {
+      const session = await this.flowAccessKeys.sessionFromRequest(request);
+      if (session && this.hasPermission(session.permission, requiredPermission)) {
+        return;
+      }
+      if (session) {
+        throw new ForbiddenException('This Flow access key does not have permission for this action.');
+      }
     }
 
     const sessionCookie = request?.cookies?.[SESSION_COOKIE_NAME];
@@ -424,6 +437,16 @@ export class FlowController {
 
       throw new UnauthorizedException('Authentication required.');
     }
+  }
+
+  private hasPermission(
+    grantedPermission: FlowAccessPermission,
+    requiredPermission: FlowAccessPermission,
+  ) {
+    return (
+      grantedPermission === 'full' ||
+      grantedPermission === requiredPermission
+    );
   }
 
   private assertInboundSecret(flowApiKey?: string, webhookSecret?: string) {

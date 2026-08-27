@@ -24,12 +24,16 @@ export type FlowAccessSession = {
   iat: number;
   keyId: string;
   label: string;
+  permission: FlowAccessPermission;
 };
+
+export type FlowAccessPermission = 'read' | 'write' | 'full';
 
 type RegisteredFlowKey = {
   id: string;
   keyHash: string;
   label: string;
+  permission: FlowAccessPermission;
   source: 'env' | 'firestore';
 };
 
@@ -41,6 +45,7 @@ type FlowAccessKeySummary = {
   expiresAt: string | null;
   id: string;
   label: string;
+  permission: FlowAccessPermission;
   lastUsedAt: string | null;
   revokedAt: string | null;
   revokedBy: string | null;
@@ -77,6 +82,7 @@ export class FlowAccessKeyService {
     body: {
       expiresAt?: string;
       label?: string;
+      permission?: string;
     },
     createdBy?: AuthenticatedUser,
   ) {
@@ -87,6 +93,7 @@ export class FlowAccessKeyService {
     }
 
     const expiresAt = this.parseOptionalFutureDate(body.expiresAt);
+    const permission = this.parsePermission(body.permission);
     const generated = await this.generateUniqueKey();
 
     await this.keyCollection().doc(generated.keyId).set({
@@ -95,6 +102,7 @@ export class FlowAccessKeyService {
       expiresAt,
       keyHash: generated.keyHash,
       label,
+      permission,
       lastUsedAt: null,
       revokedAt: null,
       revokedBy: null,
@@ -107,6 +115,7 @@ export class FlowAccessKeyService {
       expiresAt: expiresAt?.toISOString() || null,
       keyId: generated.keyId,
       keyLabel: label,
+      permission,
       status: 'active',
     };
   }
@@ -190,6 +199,7 @@ export class FlowAccessKeyService {
       expiresAt: new Date(token.exp * 1000).toISOString(),
       granted: true,
       keyLabel: token.label,
+      permission: token.permission || 'full',
     };
   }
 
@@ -216,6 +226,7 @@ export class FlowAccessKeyService {
       iat: issuedAt,
       keyId: key.id,
       label: key.label,
+      permission: key.permission,
     };
   }
 
@@ -244,6 +255,7 @@ export class FlowAccessKeyService {
       id: snapshot.id,
       keyHash,
       label: String(data.label || 'Flow key'),
+      permission: this.parsePermission(data.permission),
       source: 'firestore' as const,
     };
   }
@@ -275,6 +287,7 @@ export class FlowAccessKeyService {
         id: keyHash.slice(0, 16),
         keyHash,
         label: label || `Flow key ${index + 1}`,
+        permission: 'full' as const,
         source: 'env' as const,
       };
     });
@@ -289,6 +302,7 @@ export class FlowAccessKeyService {
         id: keyHash.slice(0, 16),
         keyHash,
         label: 'Development Flow key',
+        permission: 'full',
         source: 'env',
       },
     ];
@@ -436,12 +450,21 @@ export class FlowAccessKeyService {
       expiresAt: this.toIsoString(data.expiresAt),
       id,
       label: String(data.label || 'Flow key'),
+      permission: this.parsePermission(data.permission),
       lastUsedAt: this.toIsoString(data.lastUsedAt),
       revokedAt: this.toIsoString(data.revokedAt),
       revokedBy: this.nullableString(data.revokedBy),
       status: this.keyStatus(data),
       updatedAt: this.toIsoString(data.updatedAt),
     };
+  }
+
+  private parsePermission(value: unknown): FlowAccessPermission {
+    if (value === 'read' || value === 'write' || value === 'full') {
+      return value;
+    }
+
+    return 'full';
   }
 
   private auditIdentity(user?: AuthenticatedUser) {
