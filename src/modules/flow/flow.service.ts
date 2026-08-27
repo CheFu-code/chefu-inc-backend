@@ -631,7 +631,7 @@ export class FlowService {
     const from =
       resolvedFrom ||
       config.defaultFrom ||
-      'Flow Mail <mail@flow.chefu.co.za>';
+      'Flow Mail <mail@chefu.co.za>';
     const to = this.normalizeAddressList(payload.to).filter(address =>
       /^\S+@\S+\.\S+$/.test(this.emailAddress(address) || address),
     );
