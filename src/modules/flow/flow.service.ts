@@ -146,11 +146,11 @@ export class FlowService implements OnModuleDestroy {
     const allMessages = snapshot.docs.map(doc =>
       this.toMessage(doc.id, doc.data(), false),
     );
-    const messages = usedFallback
-      ? this.filterMessagesByFolder(allMessages, requestedFolder)
-      : requestedFolder === 'allmail'
-      ? allMessages.filter(message => this.normalizeFolder(message.folder) !== 'trash')
-      : allMessages;
+    const messages = this.messagesForMailboxWindow(
+      allMessages,
+      requestedFolder,
+      usedFallback,
+    );
 
     return {
       folder: requestedFolder,
@@ -182,11 +182,11 @@ export class FlowService implements OnModuleDestroy {
         const allMessages = snapshot.docs.map(doc =>
           this.toMessage(doc.id, doc.data(), false),
         );
-        const messages = filterFolder
-          ? this.filterMessagesByFolder(allMessages, requestedFolder)
-          : requestedFolder === 'allmail'
-            ? allMessages.filter(message => this.normalizeFolder(message.folder) !== 'trash')
-            : allMessages;
+        const messages = this.messagesForMailboxWindow(
+          allMessages,
+          requestedFolder,
+          filterFolder,
+        );
         clients.forEach(client => client({
           counts: this.countFolders(allMessages),
           folder: requestedFolder,
@@ -1751,15 +1751,29 @@ export class FlowService implements OnModuleDestroy {
       return collection.where('folder', '==', 'trash');
     }
 
-    if (requestedFolder === 'starred') {
-      return collection.where('starred', '==', true);
-    }
-
     if (requestedFolder === 'allmail') {
       return collection;
     }
 
     return collection.where('folder', '==', this.normalizeFolder(requestedFolder));
+  }
+
+  private messagesForMailboxWindow(
+    messages: FlowMessage[],
+    requestedFolder: string,
+    filterFolder: boolean,
+  ) {
+    if (requestedFolder === 'starred') {
+      return messages.filter(
+        message => message.starred && this.normalizeFolder(message.folder) !== 'trash',
+      );
+    }
+
+    if (requestedFolder === 'allmail') {
+      return messages.filter(message => this.normalizeFolder(message.folder) !== 'trash');
+    }
+
+    return filterFolder ? this.filterMessagesByFolder(messages, requestedFolder) : messages;
   }
 
   private countFolders(messages: FlowMessage[]): FlowFolderCounts {
