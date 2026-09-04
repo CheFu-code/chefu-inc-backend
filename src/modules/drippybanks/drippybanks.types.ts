@@ -138,6 +138,7 @@ export interface DrippybanksOrderDocument extends CreateOrderInput {
   payfastRawStatus?: string;
   paidAt?: string;
   cancelledReason?: string;
+  inventoryDecremented?: boolean;
 }
 
 export interface PayFastItnPayload {

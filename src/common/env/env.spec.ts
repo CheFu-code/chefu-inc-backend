@@ -152,24 +152,20 @@ test('validateCloudinaryEnv and assertCloudinaryConfigured identify missing Clou
   assert.doesNotThrow(() => assertCloudinaryConfigured(validCloudinaryEnv));
 });
 
-test('validatePayFastEnv identifies missing keys in development and production', () => {
-  const devEnv: NodeJS.ProcessEnv = {
-    PAYFAST_MERCHANT_ID: '10000100',
-    PAYFAST_MERCHANT_KEY: '46f0cd694581a',
+test('validatePayFastEnv identifies missing keys including mandatory passphrase', () => {
+  const partialEnv: NodeJS.ProcessEnv = {
+    PAYFAST_MERCHANT_ID: '12345678',
+    PAYFAST_MERCHANT_KEY: 'abc123def456',
   };
-  const devGroup = validatePayFastEnv(devEnv, false);
-  assert.equal(devGroup.missing.length, 0);
+  const groupWithMissingPassphrase = validatePayFastEnv(partialEnv);
+  assert.equal(groupWithMissingPassphrase.missing.length, 1);
+  assert.equal(groupWithMissingPassphrase.missing[0].name, 'PAYFAST_PASSPHRASE');
 
-  // In production, passphrase is required
-  const prodGroup = validatePayFastEnv(devEnv, true);
-  assert.equal(prodGroup.missing.length, 1);
-  assert.equal(prodGroup.missing[0].name, 'PAYFAST_PASSPHRASE');
-
-  const fullProdEnv: NodeJS.ProcessEnv = {
-    ...devEnv,
+  const fullEnv: NodeJS.ProcessEnv = {
+    ...partialEnv,
     PAYFAST_PASSPHRASE: 'secure_salt_passphrase',
   };
-  assert.doesNotThrow(() => assertPayFastConfigured(fullProdEnv));
+  assert.doesNotThrow(() => assertPayFastConfigured(fullEnv));
 });
 
 test('validateResendEnv and assertResendConfigured identify missing RESEND_API_KEY', () => {

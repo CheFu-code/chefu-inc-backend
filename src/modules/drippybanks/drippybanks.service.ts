@@ -722,13 +722,17 @@ export class DrippybanksService {
       );
     }
 
-    const merchantId = process.env.PAYFAST_MERCHANT_ID || "10000100";
-    const merchantKey = process.env.PAYFAST_MERCHANT_KEY || "46f0cd694581a";
-    const passphrase = process.env.PAYFAST_PASSPHRASE || "";
-    const isSandbox = process.env.PAYFAST_SANDBOX !== "false";
-    const processUrl = isSandbox
-      ? "https://sandbox.payfast.co.za/eng/process"
-      : "https://www.payfast.co.za/eng/process";
+    const merchantId = (process.env.PAYFAST_MERCHANT_ID || "").trim();
+    const merchantKey = (process.env.PAYFAST_MERCHANT_KEY || "").trim();
+    const passphrase = (process.env.PAYFAST_PASSPHRASE || "").trim();
+
+    if (!merchantId || !merchantKey || !passphrase) {
+      throw new BadRequestException(
+        "Production PayFast credentials (PAYFAST_MERCHANT_ID, PAYFAST_MERCHANT_KEY, PAYFAST_PASSPHRASE) must be configured.",
+      );
+    }
+
+    const processUrl = "https://www.payfast.co.za/eng/process";
 
     const amount = Number(input.amount);
     if (isNaN(amount) || amount <= 0) {
@@ -767,7 +771,7 @@ export class DrippybanksService {
       fields.item_description = input.itemDescription.slice(0, 255);
     }
 
-    // Build PayFast parameter string for MD5 signature
+    // Build PayFast parameter string for MD5 signature (URL-encoded in key order with passphrase appended)
     let pfOutput = "";
     for (const key in fields) {
       if (
@@ -791,7 +795,6 @@ export class DrippybanksService {
         event: "drippybanks_payfast_payment_generated",
         orderId: input.orderId,
         amount: fields.amount,
-        isSandbox,
       }),
     );
 
@@ -827,8 +830,10 @@ export class DrippybanksService {
       throw new BadRequestException("Missing PayFast signature.");
     }
 
-    const passphrase = process.env.PAYFAST_PASSPHRASE || "";
-    const isSandbox = process.env.PAYFAST_SANDBOX !== "false";
+    const passphrase = (process.env.PAYFAST_PASSPHRASE || "").trim();
+    if (!passphrase) {
+      throw new BadRequestException("PayFast passphrase is not configured.");
+    }
 
     const isValidSignature = this.verifyPayFastSignature(body, passphrase);
     if (!isValidSignature) {
@@ -843,9 +848,9 @@ export class DrippybanksService {
     }
 
     // 2. Strict Merchant ID Validation
-    const expectedMerchantId = (process.env.PAYFAST_MERCHANT_ID || "10000100").trim();
+    const expectedMerchantId = (process.env.PAYFAST_MERCHANT_ID || "").trim();
     const receivedMerchantId = String(body.merchant_id || "").trim();
-    if (receivedMerchantId && receivedMerchantId !== expectedMerchantId) {
+    if (!expectedMerchantId || receivedMerchantId !== expectedMerchantId) {
       this.logger.warn(
         JSON.stringify({
           event: "drippybanks_payfast_merchant_mismatch",
@@ -856,16 +861,13 @@ export class DrippybanksService {
       throw new BadRequestException("Invalid merchant ID.");
     }
 
-    // 3. Server-to-Server Confirmation with PayFast (/eng/query/validate)
+    // 3. Server-to-Server Confirmation with PayFast Production Query Validation (/eng/query/validate)
     const isProduction = process.env.NODE_ENV === "production";
     const bypassHostValidation =
       !isProduction && process.env.PAYFAST_BYPASS_QUERY_VALIDATE === "true";
 
     if (!bypassHostValidation) {
-      const isServerValid = await this.validatePayFastItnWithHost(
-        body,
-        isSandbox,
-      );
+      const isServerValid = await this.validatePayFastItnWithHost(body);
       if (!isServerValid) {
         this.logger.warn(
           JSON.stringify({
@@ -881,9 +883,11 @@ export class DrippybanksService {
     const paymentStatus = String(body.payment_status || "").toUpperCase();
     const orderId = String(body.m_payment_id || "").trim();
     const payfastPaymentId = String(body.pf_payment_id || "").trim();
-    const amountGross = Number(body.amount_gross || 0);
-    const amountFee = body.amount_fee !== undefined ? Number(body.amount_fee) : undefined;
-    const amountNet = body.amount_net !== undefined ? Number(body.amount_net) : undefined;
+    const amountGross = Number(body.amount_gross);
+    const amountFee =
+      body.amount_fee !== undefined ? Number(body.amount_fee) : undefined;
+    const amountNet =
+      body.amount_net !== undefined ? Number(body.amount_net) : undefined;
 
     if (!orderId) {
       throw new BadRequestException("Order ID (m_payment_id) missing from ITN.");
@@ -896,10 +900,19 @@ export class DrippybanksService {
 
     // 4. Handle Successful Payment (COMPLETE) via Atomic Firestore Transaction
     if (paymentStatus === "COMPLETE") {
+      if (!payfastPaymentId) {
+        throw new BadRequestException(
+          "PayFast payment ID (pf_payment_id) missing from ITN.",
+        );
+      }
+      if (isNaN(amountGross) || amountGross <= 0) {
+        throw new BadRequestException("Invalid amount_gross in ITN.");
+      }
+
       const db = this.firebaseAdmin.db();
-      const txRef = payfastPaymentId
-        ? db.collection(this.transactionsCollectionName).doc(payfastPaymentId)
-        : null;
+      const txRef = db
+        .collection(this.transactionsCollectionName)
+        .doc(payfastPaymentId);
 
       const txResult = await db.runTransaction(async (transaction) => {
         const orderDoc = await transaction.get(orderRef);
@@ -922,18 +935,16 @@ export class DrippybanksService {
         }
 
         // Idempotency check 2: If transaction pf_payment_id was already recorded
-        if (txRef) {
-          const existingTx = await transaction.get(txRef);
-          if (existingTx.exists) {
-            this.logger.log(
-              JSON.stringify({
-                event: "drippybanks_payfast_itn_idempotent_tx_already_exists",
-                orderId,
-                pfPaymentId: payfastPaymentId,
-              }),
-            );
-            return { status: "ALREADY_PROCESSED" };
-          }
+        const existingTx = await transaction.get(txRef);
+        if (existingTx.exists) {
+          this.logger.log(
+            JSON.stringify({
+              event: "drippybanks_payfast_itn_idempotent_tx_already_exists",
+              orderId,
+              pfPaymentId: payfastPaymentId,
+            }),
+          );
+          return { status: "ALREADY_PROCESSED" };
         }
 
         // Strict Amount Matching Check: within 0.01 ZAR tolerance
@@ -952,28 +963,44 @@ export class DrippybanksService {
           );
         }
 
-        // Read all product docs in transaction to decrement stock
+        // Aggregate item quantities by product ID to prevent duplicate document read/write collisions
         const rawItems = Array.isArray(orderData.items) ? orderData.items : [];
-        const productRefs = rawItems.map((item) => ({
-          item,
-          ref: db.collection(this.collectionName).doc(item.id),
-        }));
+        const quantityByProductId = new Map<string, number>();
+        for (const item of rawItems) {
+          const id = String(item.id || "").trim();
+          if (id) {
+            const qty = Math.max(1, Number(item.quantity) || 1);
+            quantityByProductId.set(
+              id,
+              (quantityByProductId.get(id) || 0) + qty,
+            );
+          }
+        }
 
+        const distinctProductIds = Array.from(quantityByProductId.keys());
+        const productRefs = distinctProductIds.map((id) =>
+          db.collection(this.collectionName).doc(id),
+        );
+
+        // All reads must precede all writes in Firestore transactions
         const productDocs = await Promise.all(
-          productRefs.map(({ ref }) => transaction.get(ref)),
+          productRefs.map((ref) => transaction.get(ref)),
         );
 
         const now = new Date().toISOString();
 
-        // Atomic write: decrement product stock
+        // Atomic write: decrement product stocks for distinct products
         for (let i = 0; i < productRefs.length; i++) {
-          const { item, ref } = productRefs[i];
+          const ref = productRefs[i];
           const pDoc = productDocs[i];
+          const id = distinctProductIds[i];
+          const qtyToDeduct = quantityByProductId.get(id) || 1;
+
           if (pDoc.exists) {
             const pData = pDoc.data() || {};
             const currentStock =
               typeof pData.stock === "number" ? pData.stock : 50;
-            const newStock = Math.max(0, currentStock - item.quantity);
+            const newStock = Math.max(0, currentStock - qtyToDeduct);
             transaction.update(ref, {
               stock: newStock,
               inStock: newStock > 0,
@@ -988,24 +1015,23 @@ export class DrippybanksService {
           status: "Processing",
           paidAt: now,
           updatedAt: now,
-          payfastPaymentId: payfastPaymentId || undefined,
+          payfastPaymentId,
           payfastRawStatus: paymentStatus,
+          inventoryDecremented: true,
         });
 
         // Atomic write: record transaction for idempotency audit log
-        if (txRef && payfastPaymentId) {
-          const txRecord: DrippybanksPayFastTransaction = {
-            pfPaymentId: payfastPaymentId,
-            orderId,
-            paymentStatus,
-            amountGross,
-            amountFee: isNaN(Number(amountFee)) ? undefined : amountFee,
-            amountNet: isNaN(Number(amountNet)) ? undefined : amountNet,
-            merchantId: receivedMerchantId || expectedMerchantId,
-            processedAt: now,
-          };
-          transaction.set(txRef, txRecord);
-        }
+        const txRecord: DrippybanksPayFastTransaction = {
+          pfPaymentId: payfastPaymentId,
+          orderId,
+          paymentStatus,
+          amountGross,
+          amountFee: isNaN(Number(amountFee)) ? undefined : amountFee,
+          amountNet: isNaN(Number(amountNet)) ? undefined : amountNet,
+          merchantId: receivedMerchantId,
+          processedAt: now,
+        };
+        transaction.set(txRef, txRecord);
 
         return { status: "PROCESSED" };
       });
@@ -1061,11 +1087,8 @@ export class DrippybanksService {
 
   private async validatePayFastItnWithHost(
     body: Record<string, unknown>,
-    isSandbox: boolean,
   ): Promise<boolean> {
-    const validateHost = isSandbox
-      ? "https://sandbox.payfast.co.za/eng/query/validate"
-      : "https://www.payfast.co.za/eng/query/validate";
+    const validateHost = "https://www.payfast.co.za/eng/query/validate";
 
     const params = new URLSearchParams();
     for (const key of Object.keys(body)) {
@@ -1164,21 +1187,43 @@ export class DrippybanksService {
       return { cancelledCount: 0, orderIds: [] };
     }
 
-    const batch = db.batch();
     const now = new Date().toISOString();
     const cancelledOrderIds: string[] = [];
 
-    for (const doc of expiredDocs) {
-      cancelledOrderIds.push(doc.id);
-      batch.update(doc.ref, {
-        paymentStatus: "cancelled",
-        status: "Cancelled",
-        cancelledReason: `Checkout session expired (unpaid after ${cutoffMinutes}m)`,
-        updatedAt: now,
-      });
-    }
+    // Chunk Firestore batch writes into groups of 400 (under 500 operation limit)
+    const BATCH_SIZE = 400;
+    for (let i = 0; i < expiredDocs.length; i += BATCH_SIZE) {
+      const chunk = expiredDocs.slice(i, i + BATCH_SIZE);
+      const batch = db.batch();
 
-    await batch.commit();
+      for (const doc of chunk) {
+        cancelledOrderIds.push(doc.id);
+        const data = doc.data() as DrippybanksOrderDocument;
+
+        // If inventory was decremented, restore stock
+        if (data.inventoryDecremented && Array.isArray(data.items)) {
+          for (const item of data.items) {
+            if (item.id) {
+              const pRef = db.collection(this.collectionName).doc(item.id);
+              batch.update(pRef, {
+                stock: FieldValue.increment(item.quantity || 1),
+                inStock: true,
+                updatedAt: now,
+              });
+            }
+          }
+        }
+
+        batch.update(doc.ref, {
+          paymentStatus: "cancelled",
+          status: "Cancelled",
+          cancelledReason: `Checkout session expired (unpaid after ${cutoffMinutes}m)`,
+          updatedAt: now,
+        });
+      }
+
+      await batch.commit();
+    }
 
     this.logger.log(
       JSON.stringify({

@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   Patch,
   Post,
@@ -151,6 +153,7 @@ export class DrippybanksController {
   }
 
   @Post('payfast/notify')
+  @HttpCode(HttpStatus.OK)
   async payfastNotify(
     @Body() body: Record<string, unknown>,
   ) {

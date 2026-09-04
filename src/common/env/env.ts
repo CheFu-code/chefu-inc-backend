@@ -147,7 +147,6 @@ export function validateCloudinaryEnv(
 
 export function validatePayFastEnv(
   env: NodeJS.ProcessEnv = process.env,
-  isProduction = env.NODE_ENV === 'production',
 ): ServiceEnvGroup {
   const missing: MissingVariable[] = [];
 
@@ -157,8 +156,8 @@ export function validatePayFastEnv(
   if (!hasEnv('PAYFAST_MERCHANT_KEY', env)) {
     missing.push({ name: 'PAYFAST_MERCHANT_KEY', description: 'PayFast Merchant Key' });
   }
-  // In production, PayFast passphrase is required for secure signature and ITN verification
-  if (isProduction && !hasEnv('PAYFAST_PASSPHRASE', env)) {
+  // Production security: PayFast passphrase is required for secure signature and ITN verification
+  if (!hasEnv('PAYFAST_PASSPHRASE', env)) {
     missing.push({
       name: 'PAYFAST_PASSPHRASE',
       description: 'PayFast Salt Passphrase for secure payment validation',
