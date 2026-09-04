@@ -82,7 +82,7 @@ export function createFlowTemplateVariables({
     const bodyChunks = chunkTemplateValue(bodyHtml, 5);
     const ctaHtml = renderCtaHtml(ctaLabel, ctaUrl);
     const variables = {
-        AUDIENCE_NAME: audienceName || 'Manual audience',
+        AUDIENCE_NAME: audienceName || '',
         BODY_HTML_1: bodyChunks[0] || '',
         BODY_HTML_2: bodyChunks[1] || '',
         BODY_HTML_3: bodyChunks[2] || '',
@@ -126,7 +126,7 @@ export function renderFlowEmailShell({
     title: string;
 }) {
     const action = renderCtaHtml(ctaLabel, ctaUrl);
-    const safeAudience = audienceName ? escapeHtml(audienceName) : 'Flow Mail';
+    const safeAudience = audienceName ? escapeHtml(audienceName) : '';
     const safeBrand = escapeHtml(brandName);
     const safeRecipient = recipientName ? escapeHtml(recipientName) : 'there';
     const safeSender = senderName ? escapeHtml(senderName) : 'CHEFU Technologies';
@@ -154,7 +154,7 @@ export function renderFlowEmailShell({
             </tr>
             <tr>
               <td style="padding:32px;color:#263f3d;font-size:15px;line-height:1.75;">
-                <div style="margin:0 0 22px;padding:12px 14px;border-left:4px solid #14b8a6;background:#f0fdfa;border-radius:0 10px 10px 0;color:#0f766e;font-size:13px;font-weight:700;">${safeAudience}</div>
+                ${safeAudience ? `<div style="margin:0 0 22px;padding:12px 14px;border-left:4px solid #14b8a6;background:#f0fdfa;border-radius:0 10px 10px 0;color:#0f766e;font-size:13px;font-weight:700;">${safeAudience}</div>` : ''}
                 <div style="font-size:15px;line-height:1.78;color:#263f3d;">${body}</div>
                 ${action ? `<div style="margin-top:26px;">${action}</div>` : ''}
               </td>

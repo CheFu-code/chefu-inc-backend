@@ -981,7 +981,7 @@ export class FlowService implements OnModuleDestroy {
 
     return {
       action,
-      audienceName: payload.audienceName || 'Manual audience',
+      audienceName: payload.audienceName || '',
       ctaLabel: payload.ctaLabel || '',
       ctaUrl: payload.ctaUrl || '',
       attachments,
@@ -1069,7 +1069,7 @@ export class FlowService implements OnModuleDestroy {
         { name: 'app', value: 'flow' },
         {
           name: 'audience',
-          value: this.resendTagValue(payload.audienceName, 'manual_audience'),
+          value: this.resendTagValue(payload.audienceName, 'flow'),
         },
         ...payload.tags.slice(0, 3).map(tag => ({
           name: 'tag',
