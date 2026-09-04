@@ -805,26 +805,31 @@ export class DrippybanksService {
   }
 
   async handlePayFastNotify(
-    body: Record<string, unknown>,
+    body?: Record<string, unknown>,
   ): Promise<{ status: string }> {
     assertPayFastConfigured();
+
+    const payload = body && typeof body === "object" ? body : {};
+    if (Object.keys(payload).length === 0) {
+      throw new BadRequestException("Missing PayFast notification payload.");
+    }
 
     this.logger.log(
       JSON.stringify({
         event: "drippybanks_payfast_itn_received",
-        paymentId: body.m_payment_id,
-        pfPaymentId: body.pf_payment_id,
-        paymentStatus: body.payment_status,
+        paymentId: payload.m_payment_id,
+        pfPaymentId: payload.pf_payment_id,
+        paymentStatus: payload.payment_status,
       }),
     );
 
     // 1. Mandatory Signature Validation (Never skip or bypass)
-    const signature = String(body.signature || "").trim();
+    const signature = String(payload.signature || "").trim();
     if (!signature) {
       this.logger.warn(
         JSON.stringify({
           event: "drippybanks_payfast_missing_signature",
-          paymentId: body.m_payment_id,
+          paymentId: payload.m_payment_id,
         }),
       );
       throw new BadRequestException("Missing PayFast signature.");
@@ -835,13 +840,13 @@ export class DrippybanksService {
       throw new BadRequestException("PayFast passphrase is not configured.");
     }
 
-    const isValidSignature = this.verifyPayFastSignature(body, passphrase);
+    const isValidSignature = this.verifyPayFastSignature(payload, passphrase);
     if (!isValidSignature) {
       this.logger.warn(
         JSON.stringify({
           event: "drippybanks_payfast_invalid_signature",
-          paymentId: body.m_payment_id,
-          receivedSignature: body.signature,
+          paymentId: payload.m_payment_id,
+          receivedSignature: payload.signature,
         }),
       );
       throw new BadRequestException("Invalid PayFast signature.");
@@ -849,7 +854,7 @@ export class DrippybanksService {
 
     // 2. Strict Merchant ID Validation
     const expectedMerchantId = (process.env.PAYFAST_MERCHANT_ID || "").trim();
-    const receivedMerchantId = String(body.merchant_id || "").trim();
+    const receivedMerchantId = String(payload.merchant_id || "").trim();
     if (!expectedMerchantId || receivedMerchantId !== expectedMerchantId) {
       this.logger.warn(
         JSON.stringify({
@@ -867,27 +872,27 @@ export class DrippybanksService {
       !isProduction && process.env.PAYFAST_BYPASS_QUERY_VALIDATE === "true";
 
     if (!bypassHostValidation) {
-      const isServerValid = await this.validatePayFastItnWithHost(body);
+      const isServerValid = await this.validatePayFastItnWithHost(payload);
       if (!isServerValid) {
         this.logger.warn(
           JSON.stringify({
             event: "drippybanks_payfast_host_validation_failed",
-            paymentId: body.m_payment_id,
-            pfPaymentId: body.pf_payment_id,
+            paymentId: payload.m_payment_id,
+            pfPaymentId: payload.pf_payment_id,
           }),
         );
         throw new BadRequestException("PayFast server confirmation failed.");
       }
     }
 
-    const paymentStatus = String(body.payment_status || "").toUpperCase();
-    const orderId = String(body.m_payment_id || "").trim();
-    const payfastPaymentId = String(body.pf_payment_id || "").trim();
-    const amountGross = Number(body.amount_gross);
+    const paymentStatus = String(payload.payment_status || "").toUpperCase();
+    const orderId = String(payload.m_payment_id || "").trim();
+    const payfastPaymentId = String(payload.pf_payment_id || "").trim();
+    const amountGross = Number(payload.amount_gross);
     const amountFee =
-      body.amount_fee !== undefined ? Number(body.amount_fee) : undefined;
+      payload.amount_fee !== undefined ? Number(payload.amount_fee) : undefined;
     const amountNet =
-      body.amount_net !== undefined ? Number(body.amount_net) : undefined;
+      payload.amount_net !== undefined ? Number(payload.amount_net) : undefined;
 
     if (!orderId) {
       throw new BadRequestException("Order ID (m_payment_id) missing from ITN.");
