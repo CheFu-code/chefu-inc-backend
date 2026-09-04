@@ -24,6 +24,8 @@ import {
   UploadImageInput,
   GeneratePayFastPaymentInput,
   PayFastPaymentData,
+  PayFastItnPayload,
+  DrippybanksPayFastTransaction,
 } from "./drippybanks.types";
 
 const ALLOWED_IMAGE_TYPES = new Set([
@@ -35,6 +37,7 @@ const ALLOWED_IMAGE_TYPES = new Set([
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
 const ORDER_STATUSES: DrippybanksOrderStatus[] = [
+  "Pending",
   "Processing",
   "Packed",
   "Shipped",
@@ -47,6 +50,7 @@ export class DrippybanksService {
   private readonly logger = new Logger(DrippybanksService.name);
   private readonly collectionName = "drippybanksProducts";
   private readonly ordersCollectionName = "drippybanksOrders";
+  private readonly transactionsCollectionName = "drippybanksPayfastTransactions";
 
   constructor(
     @Inject(FirebaseAdminService)
@@ -577,6 +581,7 @@ export class DrippybanksService {
 
     const orderDoc: DrippybanksOrderDocument = {
       ...validated,
+      status: "Pending",
       paymentStatus: "pending",
       createdAt: now,
       updatedAt: now,
@@ -810,46 +815,130 @@ export class DrippybanksService {
       }),
     );
 
+    // 1. Mandatory Signature Validation (Never skip or bypass)
+    const signature = String(body.signature || "").trim();
+    if (!signature) {
+      this.logger.warn(
+        JSON.stringify({
+          event: "drippybanks_payfast_missing_signature",
+          paymentId: body.m_payment_id,
+        }),
+      );
+      throw new BadRequestException("Missing PayFast signature.");
+    }
+
     const passphrase = process.env.PAYFAST_PASSPHRASE || "";
     const isSandbox = process.env.PAYFAST_SANDBOX !== "false";
 
-    // Validate signature if signature is provided or in non-sandbox environment
-    if (body.signature || (!isSandbox && passphrase)) {
-      const isValidSignature = this.verifyPayFastSignature(body, passphrase);
-      if (!isValidSignature) {
+    const isValidSignature = this.verifyPayFastSignature(body, passphrase);
+    if (!isValidSignature) {
+      this.logger.warn(
+        JSON.stringify({
+          event: "drippybanks_payfast_invalid_signature",
+          paymentId: body.m_payment_id,
+          receivedSignature: body.signature,
+        }),
+      );
+      throw new BadRequestException("Invalid PayFast signature.");
+    }
+
+    // 2. Strict Merchant ID Validation
+    const expectedMerchantId = (process.env.PAYFAST_MERCHANT_ID || "10000100").trim();
+    const receivedMerchantId = String(body.merchant_id || "").trim();
+    if (receivedMerchantId && receivedMerchantId !== expectedMerchantId) {
+      this.logger.warn(
+        JSON.stringify({
+          event: "drippybanks_payfast_merchant_mismatch",
+          expected: expectedMerchantId,
+          received: receivedMerchantId,
+        }),
+      );
+      throw new BadRequestException("Invalid merchant ID.");
+    }
+
+    // 3. Server-to-Server Confirmation with PayFast (/eng/query/validate)
+    const isProduction = process.env.NODE_ENV === "production";
+    const bypassHostValidation =
+      !isProduction && process.env.PAYFAST_BYPASS_QUERY_VALIDATE === "true";
+
+    if (!bypassHostValidation) {
+      const isServerValid = await this.validatePayFastItnWithHost(
+        body,
+        isSandbox,
+      );
+      if (!isServerValid) {
         this.logger.warn(
           JSON.stringify({
-            event: "drippybanks_payfast_invalid_signature",
+            event: "drippybanks_payfast_host_validation_failed",
             paymentId: body.m_payment_id,
-            receivedSignature: body.signature,
+            pfPaymentId: body.pf_payment_id,
           }),
         );
-        throw new BadRequestException("Invalid PayFast signature.");
+        throw new BadRequestException("PayFast server confirmation failed.");
       }
     }
 
     const paymentStatus = String(body.payment_status || "").toUpperCase();
-    const orderId = String(body.m_payment_id || "");
-    const payfastPaymentId = String(body.pf_payment_id || "");
+    const orderId = String(body.m_payment_id || "").trim();
+    const payfastPaymentId = String(body.pf_payment_id || "").trim();
     const amountGross = Number(body.amount_gross || 0);
+    const amountFee = body.amount_fee !== undefined ? Number(body.amount_fee) : undefined;
+    const amountNet = body.amount_net !== undefined ? Number(body.amount_net) : undefined;
 
-    if (orderId) {
-      const orderRef = this.firebaseAdmin
-        .db()
-        .collection(this.ordersCollectionName)
-        .doc(orderId);
-      const orderDoc = await orderRef.get();
+    if (!orderId) {
+      throw new BadRequestException("Order ID (m_payment_id) missing from ITN.");
+    }
 
-      if (orderDoc.exists) {
-        const orderData = orderDoc.data() || {};
+    const orderRef = this.firebaseAdmin
+      .db()
+      .collection(this.ordersCollectionName)
+      .doc(orderId);
+
+    // 4. Handle Successful Payment (COMPLETE) via Atomic Firestore Transaction
+    if (paymentStatus === "COMPLETE") {
+      const db = this.firebaseAdmin.db();
+      const txRef = payfastPaymentId
+        ? db.collection(this.transactionsCollectionName).doc(payfastPaymentId)
+        : null;
+
+      const txResult = await db.runTransaction(async (transaction) => {
+        const orderDoc = await transaction.get(orderRef);
+        if (!orderDoc.exists) {
+          throw new NotFoundException(`Order ${orderId} was not found.`);
+        }
+
+        const orderData = orderDoc.data() as DrippybanksOrderDocument;
+
+        // Idempotency check 1: If order is already marked paid
+        if (orderData.paymentStatus === "paid") {
+          this.logger.log(
+            JSON.stringify({
+              event: "drippybanks_payfast_itn_idempotent_order_already_paid",
+              orderId,
+              pfPaymentId: payfastPaymentId,
+            }),
+          );
+          return { status: "ALREADY_PROCESSED" };
+        }
+
+        // Idempotency check 2: If transaction pf_payment_id was already recorded
+        if (txRef) {
+          const existingTx = await transaction.get(txRef);
+          if (existingTx.exists) {
+            this.logger.log(
+              JSON.stringify({
+                event: "drippybanks_payfast_itn_idempotent_tx_already_exists",
+                orderId,
+                pfPaymentId: payfastPaymentId,
+              }),
+            );
+            return { status: "ALREADY_PROCESSED" };
+          }
+        }
+
+        // Strict Amount Matching Check: within 0.01 ZAR tolerance
         const orderTotal = Number(orderData.total || 0);
-
-        // Security check: verify paid amount matches order total
-        if (
-          paymentStatus === "COMPLETE" &&
-          amountGross > 0 &&
-          amountGross < orderTotal - 0.01
-        ) {
+        if (Math.abs(amountGross - orderTotal) > 0.01) {
           this.logger.error(
             JSON.stringify({
               event: "drippybanks_payfast_amount_mismatch",
@@ -863,44 +952,164 @@ export class DrippybanksService {
           );
         }
 
-        const now = new Date().toISOString();
-        const updates: Partial<DrippybanksOrderDocument> = {
-          updatedAt: now,
-          payfastRawStatus: paymentStatus || "UNKNOWN",
-          payfastPaymentId: payfastPaymentId || undefined,
-        };
+        // Read all product docs in transaction to decrement stock
+        const rawItems = Array.isArray(orderData.items) ? orderData.items : [];
+        const productRefs = rawItems.map((item) => ({
+          item,
+          ref: db.collection(this.collectionName).doc(item.id),
+        }));
 
-        if (paymentStatus === "COMPLETE") {
-          updates.paymentStatus = "paid";
-          updates.paidAt = now;
-          updates.status = "Processing";
-        } else if (paymentStatus === "CANCELLED") {
-          updates.paymentStatus = "cancelled";
-          updates.status = "Cancelled";
-        } else if (paymentStatus === "FAILED") {
-          updates.paymentStatus = "failed";
+        const productDocs = await Promise.all(
+          productRefs.map(({ ref }) => transaction.get(ref)),
+        );
+
+        const now = new Date().toISOString();
+
+        // Atomic write: decrement product stock
+        for (let i = 0; i < productRefs.length; i++) {
+          const { item, ref } = productRefs[i];
+          const pDoc = productDocs[i];
+          if (pDoc.exists) {
+            const pData = pDoc.data() || {};
+            const currentStock =
+              typeof pData.stock === "number" ? pData.stock : 50;
+            const newStock = Math.max(0, currentStock - item.quantity);
+            transaction.update(ref, {
+              stock: newStock,
+              inStock: newStock > 0,
+              updatedAt: now,
+            });
+          }
         }
 
-        await orderRef.set(updates, { merge: true });
-      } else {
-        this.logger.warn(
-          `PayFast notification received for unknown order ${orderId}`,
-        );
+        // Atomic write: update order status to Paid and Processing
+        transaction.update(orderRef, {
+          paymentStatus: "paid",
+          status: "Processing",
+          paidAt: now,
+          updatedAt: now,
+          payfastPaymentId: payfastPaymentId || undefined,
+          payfastRawStatus: paymentStatus,
+        });
+
+        // Atomic write: record transaction for idempotency audit log
+        if (txRef && payfastPaymentId) {
+          const txRecord: DrippybanksPayFastTransaction = {
+            pfPaymentId: payfastPaymentId,
+            orderId,
+            paymentStatus,
+            amountGross,
+            amountFee: isNaN(Number(amountFee)) ? undefined : amountFee,
+            amountNet: isNaN(Number(amountNet)) ? undefined : amountNet,
+            merchantId: receivedMerchantId || expectedMerchantId,
+            processedAt: now,
+          };
+          transaction.set(txRef, txRecord);
+        }
+
+        return { status: "PROCESSED" };
+      });
+
+      this.logger.log(
+        JSON.stringify({
+          event: "drippybanks_payfast_payment_confirmed",
+          orderId,
+          pfPaymentId: payfastPaymentId,
+          result: txResult.status,
+        }),
+      );
+
+      return { status: "OK" };
+    }
+
+    // 5. Handle Cancelled or Failed Payments Safely
+    const now = new Date().toISOString();
+    const orderDoc = await orderRef.get();
+    if (orderDoc.exists) {
+      const orderData = orderDoc.data() || {};
+      // Never downgrade an already paid order
+      if (orderData.paymentStatus !== "paid") {
+        if (paymentStatus === "CANCELLED") {
+          await orderRef.set(
+            {
+              paymentStatus: "cancelled",
+              status: "Cancelled",
+              cancelledReason: "PayFast payment was cancelled",
+              payfastRawStatus: paymentStatus,
+              payfastPaymentId: payfastPaymentId || undefined,
+              updatedAt: now,
+            },
+            { merge: true },
+          );
+        } else if (paymentStatus === "FAILED") {
+          await orderRef.set(
+            {
+              paymentStatus: "failed",
+              cancelledReason: "PayFast payment failed",
+              payfastRawStatus: paymentStatus,
+              payfastPaymentId: payfastPaymentId || undefined,
+              updatedAt: now,
+            },
+            { merge: true },
+          );
+        }
       }
     }
 
-    if (paymentStatus === "COMPLETE" && orderId) {
-      this.logger.log(`PayFast payment confirmed for order ${orderId}`);
+    return { status: "OK" };
+  }
+
+  private async validatePayFastItnWithHost(
+    body: Record<string, unknown>,
+    isSandbox: boolean,
+  ): Promise<boolean> {
+    const validateHost = isSandbox
+      ? "https://sandbox.payfast.co.za/eng/query/validate"
+      : "https://www.payfast.co.za/eng/query/validate";
+
+    const params = new URLSearchParams();
+    for (const key of Object.keys(body)) {
+      const val = body[key];
+      if (val !== undefined && val !== null) {
+        params.append(key, String(val).trim());
+      }
     }
 
-    return { status: "OK" };
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      const response = await fetch(validateHost, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: params.toString(),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        this.logger.warn(
+          `PayFast query validate returned HTTP ${response.status}`,
+        );
+        return false;
+      }
+
+      const text = (await response.text()).trim();
+      return text === "VALID";
+    } catch (err) {
+      this.logger.error("Failed to query validate with PayFast host", err);
+      return false;
+    }
   }
 
   private verifyPayFastSignature(
     body: Record<string, unknown>,
     passphrase: string,
   ): boolean {
-    const receivedSignature = String(body.signature || "").toLowerCase();
+    const receivedSignature = String(body.signature || "").trim().toLowerCase();
     if (!receivedSignature) return false;
 
     let pfOutput = "";
@@ -927,6 +1136,63 @@ export class DrippybanksService {
       .toLowerCase();
 
     return calculatedSignature === receivedSignature;
+  }
+
+  async cleanupExpiredPendingOrders(
+    cutoffMinutes = 60,
+  ): Promise<{ cancelledCount: number; orderIds: string[] }> {
+    const db = this.firebaseAdmin.db();
+    const cutoffDate = new Date(Date.now() - cutoffMinutes * 60 * 1000);
+    const cutoffIso = cutoffDate.toISOString();
+
+    const snapshot = await db
+      .collection(this.ordersCollectionName)
+      .where("paymentStatus", "==", "pending")
+      .get();
+
+    if (snapshot.empty) {
+      return { cancelledCount: 0, orderIds: [] };
+    }
+
+    const expiredDocs = snapshot.docs.filter((doc) => {
+      const data = doc.data();
+      const createdAt = String(data.createdAt || data.date || "");
+      return createdAt && createdAt < cutoffIso;
+    });
+
+    if (expiredDocs.length === 0) {
+      return { cancelledCount: 0, orderIds: [] };
+    }
+
+    const batch = db.batch();
+    const now = new Date().toISOString();
+    const cancelledOrderIds: string[] = [];
+
+    for (const doc of expiredDocs) {
+      cancelledOrderIds.push(doc.id);
+      batch.update(doc.ref, {
+        paymentStatus: "cancelled",
+        status: "Cancelled",
+        cancelledReason: `Checkout session expired (unpaid after ${cutoffMinutes}m)`,
+        updatedAt: now,
+      });
+    }
+
+    await batch.commit();
+
+    this.logger.log(
+      JSON.stringify({
+        event: "drippybanks_expired_pending_orders_cleaned",
+        cancelledCount: cancelledOrderIds.length,
+        orderIds: cancelledOrderIds,
+        cutoffMinutes,
+      }),
+    );
+
+    return {
+      cancelledCount: cancelledOrderIds.length,
+      orderIds: cancelledOrderIds,
+    };
   }
 
   private async getOrderById(
@@ -1149,11 +1415,11 @@ export class DrippybanksService {
             : "pending";
 
     const statusCandidate = String(
-      data.status || "Processing",
+      data.status || "Pending",
     ) as DrippybanksOrderStatus;
     const status = ORDER_STATUSES.includes(statusCandidate)
       ? statusCandidate
-      : "Processing";
+      : "Pending";
 
     return {
       id: String(data.id || id),

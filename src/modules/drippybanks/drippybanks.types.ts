@@ -75,6 +75,7 @@ export interface PayFastPaymentData {
 }
 
 export type DrippybanksOrderStatus =
+  | 'Pending'
   | 'Processing'
   | 'Packed'
   | 'Shipped'
@@ -136,5 +137,37 @@ export interface DrippybanksOrderDocument extends CreateOrderInput {
   payfastPaymentId?: string;
   payfastRawStatus?: string;
   paidAt?: string;
+  cancelledReason?: string;
+}
+
+export interface PayFastItnPayload {
+  m_payment_id?: string;
+  pf_payment_id?: string;
+  payment_status?: string;
+  item_name?: string;
+  item_description?: string;
+  amount_gross?: string | number;
+  amount_fee?: string | number;
+  amount_net?: string | number;
+  merchant_id?: string | number;
+  signature?: string;
+  name_first?: string;
+  name_last?: string;
+  email_address?: string;
+  cell_number?: string;
+  [key: string]: unknown;
+}
+
+export interface DrippybanksPayFastTransaction {
+  pfPaymentId: string;
+  orderId: string;
+  paymentStatus: string;
+  amountGross: number;
+  amountFee?: number;
+  amountNet?: number;
+  merchantId: string;
+  processedAt: string;
+  idempotentHits?: number;
+  rawPayload?: Record<string, unknown>;
 }
 
