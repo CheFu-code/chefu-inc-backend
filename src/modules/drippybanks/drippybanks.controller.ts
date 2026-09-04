@@ -155,9 +155,9 @@ export class DrippybanksController {
   @Post('payfast/notify')
   @HttpCode(HttpStatus.OK)
   async payfastNotify(
-    @Body() body: Record<string, unknown>,
+    @Body() body?: Record<string, unknown>,
   ) {
-    return this.drippybanksService.handlePayFastNotify(body);
+    return this.drippybanksService.handlePayFastNotify(body || {});
   }
 
   private requireUser(request: RequestWithUser): AuthenticatedUser {
