@@ -45,6 +45,12 @@ const ORDER_STATUSES: DrippybanksOrderStatus[] = [
   "Cancelled",
 ];
 
+function phpUrlEncode(str: string): string {
+  return encodeURIComponent(str.trim())
+    .replace(/%20/g, "+")
+    .replace(/[!'()*~]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
 @Injectable()
 export class DrippybanksService {
   private readonly logger = new Logger(DrippybanksService.name);
@@ -722,9 +728,15 @@ export class DrippybanksService {
       );
     }
 
-    const merchantId = (process.env.PAYFAST_MERCHANT_ID || "").trim();
-    const merchantKey = (process.env.PAYFAST_MERCHANT_KEY || "").trim();
-    const passphrase = (process.env.PAYFAST_PASSPHRASE || "").trim();
+    const merchantId = (process.env.PAYFAST_MERCHANT_ID || "")
+      .trim()
+      .replace(/^["']|["']$/g, "");
+    const merchantKey = (process.env.PAYFAST_MERCHANT_KEY || "")
+      .trim()
+      .replace(/^["']|["']$/g, "");
+    const passphrase = (process.env.PAYFAST_PASSPHRASE || "")
+      .trim()
+      .replace(/^["']|["']$/g, "");
 
     if (!merchantId || !merchantKey || !passphrase) {
       throw new BadRequestException(
@@ -743,48 +755,72 @@ export class DrippybanksService {
     const name_first = names[0] || "Valued";
     const name_last = names.slice(1).join(" ") || "Customer";
 
-    const fields: Record<string, string> = {
+    const defaultReturnUrl = `${process.env.DRIPPYBANKS_APP_URL || "https://drippybanks.chefu.co.za"}/checkout?payfast_success=true&order_id=${input.orderId}`;
+    const defaultCancelUrl = `${process.env.DRIPPYBANKS_APP_URL || "https://drippybanks.chefu.co.za"}/checkout?cancelled=true`;
+    const defaultNotifyUrl = `${process.env.BACKEND_PUBLIC_URL || "https://api.chefu.co.za"}/drippybanks/payfast/notify`;
+
+    const sanitizeUrl = (url?: string, fallback = ""): string => {
+      if (!url) return fallback;
+      if (url.includes("localhost") || url.includes("127.0.0.1")) {
+        return fallback;
+      }
+      return url;
+    };
+
+    const rawFields: Record<string, string | undefined> = {
       merchant_id: merchantId,
       merchant_key: merchantKey,
-      return_url:
-        input.returnUrl ||
-        `${process.env.DRIPPYBANKS_APP_URL || "https://drippybanks.chefu.co.za"}/checkout?payfast_success=true&order_id=${input.orderId}`,
-      cancel_url:
-        input.cancelUrl ||
-        `${process.env.DRIPPYBANKS_APP_URL || "https://drippybanks.chefu.co.za"}/checkout?cancelled=true`,
-      notify_url: `${process.env.BACKEND_PUBLIC_URL || "https://api.chefu.co.za"}/drippybanks/payfast/notify`,
+      return_url: sanitizeUrl(input.returnUrl, defaultReturnUrl),
+      cancel_url: sanitizeUrl(input.cancelUrl, defaultCancelUrl),
+      notify_url: defaultNotifyUrl,
       name_first,
       name_last,
       email_address: input.customer?.email?.trim() || "customer@chefu.co.za",
+      cell_number: input.customer?.phone?.trim() || undefined,
       m_payment_id: input.orderId,
       amount: amount.toFixed(2),
-      item_name: (input.itemName || `DrippyBanks Order ${input.orderId}`).slice(
-        0,
-        100,
-      ),
+      item_name: (input.itemName || `DrippyBanks Order ${input.orderId}`)
+        .replace(/#/g, "")
+        .trim()
+        .slice(0, 100),
+      item_description: input.itemDescription
+        ? input.itemDescription.trim().slice(0, 255)
+        : undefined,
     };
 
-    if (input.customer?.phone) {
-      fields.cell_number = input.customer.phone.trim();
-    }
-    if (input.itemDescription) {
-      fields.item_description = input.itemDescription.slice(0, 255);
-    }
+    // PayFast Custom Integration strict canonical field ordering
+    // (Merchant Details -> Customer Details -> Transaction Details)
+    const canonicalOrder = [
+      "merchant_id",
+      "merchant_key",
+      "return_url",
+      "cancel_url",
+      "notify_url",
+      "name_first",
+      "name_last",
+      "email_address",
+      "cell_number",
+      "m_payment_id",
+      "amount",
+      "item_name",
+      "item_description",
+    ];
 
-    // Build PayFast parameter string for MD5 signature (URL-encoded in key order with passphrase appended)
+    const fields: Record<string, string> = {};
     let pfOutput = "";
-    for (const key in fields) {
-      if (
-        Object.prototype.hasOwnProperty.call(fields, key) &&
-        fields[key] !== ""
-      ) {
-        pfOutput += `${key}=${encodeURIComponent(fields[key].trim()).replace(/%20/g, "+")}&`;
+
+    for (const key of canonicalOrder) {
+      const val = rawFields[key];
+      if (val !== undefined && val !== null && val.trim() !== "") {
+        const trimmedVal = val.trim();
+        fields[key] = trimmedVal;
+        pfOutput += `${key}=${phpUrlEncode(trimmedVal)}&`;
       }
     }
 
     let getString = pfOutput.slice(0, -1);
     if (passphrase) {
-      getString += `&passphrase=${encodeURIComponent(passphrase.trim()).replace(/%20/g, "+")}`;
+      getString += `&passphrase=${phpUrlEncode(passphrase)}`;
     }
 
     const signature = createHash("md5").update(getString).digest("hex");
@@ -795,6 +831,10 @@ export class DrippybanksService {
         event: "drippybanks_payfast_payment_generated",
         orderId: input.orderId,
         amount: fields.amount,
+        signaturePrefix: signature.slice(0, 8),
+        passphraseLength: passphrase.length,
+        passphraseSuffix: passphrase.slice(-4),
+        fieldKeys: Object.keys(fields),
       }),
     );
 
@@ -1140,6 +1180,8 @@ export class DrippybanksService {
     const receivedSignature = String(body.signature || "").trim().toLowerCase();
     if (!receivedSignature) return false;
 
+    const sanitizedPassphrase = passphrase.trim().replace(/^["']|["']$/g, "");
+
     let pfOutput = "";
     for (const key in body) {
       if (
@@ -1148,14 +1190,14 @@ export class DrippybanksService {
       ) {
         const val = body[key];
         if (val !== undefined && val !== null && String(val) !== "") {
-          pfOutput += `${key}=${encodeURIComponent(String(val).trim()).replace(/%20/g, "+")}&`;
+          pfOutput += `${key}=${phpUrlEncode(String(val).trim())}&`;
         }
       }
     }
 
     let getString = pfOutput.slice(0, -1);
-    if (passphrase) {
-      getString += `&passphrase=${encodeURIComponent(passphrase.trim()).replace(/%20/g, "+")}`;
+    if (sanitizedPassphrase) {
+      getString += `&passphrase=${phpUrlEncode(sanitizedPassphrase)}`;
     }
 
     const calculatedSignature = createHash("md5")
