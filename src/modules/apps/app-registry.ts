@@ -35,6 +35,7 @@ export const CHEFU_APPS: ChefuApp[] = [
             "https://academy.chefu.co.za",
             "https://myaccount.chefu.co.za",
             "https://chefu.co.za",
+            "https://www.chefu.co.za",
         ],
     },
     {
