@@ -10,7 +10,8 @@
     "lint": "eslint \"src/**/*.ts\"",
     "smoke": "node scripts/smoke-routes.mjs",
     "sync:flow-template": "node scripts/sync-flow-resend-template.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "seed:products": "tsx --env-file=.env scripts/seed-products.ts"
   },
   "dependencies": {
     "@google/genai": "^1.38.0",

@@ -18,6 +18,7 @@ import { LogixModule } from './modules/logix/logix.module';
 import { MuzaloModule } from './modules/muzalo/muzalo.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { QuantumModule } from './modules/quantum/quantum.module';
+import { ProductsModule } from './modules/products/products.module';
 import { SentryModule } from '@sentry/nestjs/setup';
 
 const platformModules = [
@@ -43,6 +44,7 @@ const productModules = [
   LogixModule,
   MuzaloModule,
   QuantumModule,
+  ProductsModule,
 ];
 
 @Module({
