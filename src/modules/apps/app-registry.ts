@@ -37,7 +37,11 @@ export const CHEFU_APPS: ChefuApp[] = [
     {
         id: "root",
         name: "CHEFU Technologies",
-        origins: ["https://chefu.co.za", "https://www.chefu.co.za"],
+        origins: [
+            "https://chefu.co.za",
+            "https://www.chefu.co.za",
+            "https://myaccount.chefu.co.za",
+        ],
     },
     {
         id: "admin",
