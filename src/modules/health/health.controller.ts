@@ -17,6 +17,11 @@ export class HealthController {
     return this.status();
   }
 
+  @Get("debug-sentry")
+  getError() {
+    throw new Error("My first Sentry error!");
+  }
+
   private status() {
     return {
       ok: true,

@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Response } from 'express';
+import { SentryExceptionCaptured } from '@sentry/nestjs';
 import { getRequestId, RequestWithId } from './request-context';
 import { auditRequestContext } from './security-audit';
 
@@ -14,6 +15,7 @@ import { auditRequestContext } from './security-audit';
 export class GlobalExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(GlobalExceptionFilter.name);
 
+  @SentryExceptionCaptured()
   catch(exception: unknown, host: ArgumentsHost) {
     const context = host.switchToHttp();
     const request = context.getRequest<RequestWithId>();
