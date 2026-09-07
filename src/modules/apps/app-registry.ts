@@ -9,7 +9,8 @@ export type ChefuAppId =
     | "infinity"
     | "drippybanks"
     | "logix"
-    | "logix-dash";
+    | "logix-dash"
+    | "merchant";
 type ChefuAppAlias = "music";
 
 export type ChefuApp = {
@@ -76,6 +77,11 @@ export const CHEFU_APPS: ChefuApp[] = [
         name: "Drippy Banks",
         origins: ["https://drippybanks.chefu.co.za"],
     },
+    {
+        id: "merchant",
+        name: "Merchant",
+        origins: ["https://merchant.chefu.co.za"],
+    }
 ];
 
 const CHEFU_APP_ALIASES: Record<ChefuAppAlias, ChefuAppId> = {
@@ -129,6 +135,15 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         name: "CHEFU Admin",
         redirectUris: [
             "https://internal.chefu.co.za/auth/callback",
+        ],
+        scopes: ["openid", "profile", "email", "admin:manage"],
+    },
+    {
+        id: "chefu-merchant-web",
+        appId: "merchant",
+        name: "CHEFU Merchant",
+        redirectUris: [
+            "https://merchant.chefu.co.za/auth/callback",
         ],
         scopes: ["openid", "profile", "email", "admin:manage"],
     },
