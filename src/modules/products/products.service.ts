@@ -136,11 +136,16 @@ export class ProductsService {
     const slug = String(input.slug || this.slugify(name)).trim();
     const sku = String(input.sku || '').trim().toUpperCase();
     const priceMinor = Number(input.priceMinor);
+    const compareAtPriceMinor = input.compareAtPriceMinor === undefined
+      ? undefined
+      : Number(input.compareAtPriceMinor);
     const inventoryQuantity = Number(input.inventoryQuantity ?? 0);
     const lowStockThreshold = Number(input.lowStockThreshold ?? 5);
     if (!name || !slug || !sku) throw new BadRequestException('Name, slug, and SKU are required.');
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) throw new BadRequestException('Slug must contain lowercase letters, numbers, and hyphens only.');
     if (!Number.isInteger(priceMinor) || priceMinor < 0) throw new BadRequestException('Price must be a non-negative integer in minor units.');
+    if (compareAtPriceMinor !== undefined && (!Number.isInteger(compareAtPriceMinor) || compareAtPriceMinor < 0)) throw new BadRequestException('Compare-at price must be a non-negative integer in minor units.');
+    if (compareAtPriceMinor !== undefined && compareAtPriceMinor < priceMinor) throw new BadRequestException('Compare-at price must be higher than the selling price.');
     if (!Number.isInteger(inventoryQuantity) || inventoryQuantity < 0 || !Number.isInteger(lowStockThreshold) || lowStockThreshold < 0) throw new BadRequestException('Inventory values must be non-negative integers.');
     const status = String(input.status || (inventoryQuantity === 0 ? 'OUT_OF_STOCK' : 'DRAFT')) as ProductStatus;
     if (!PRODUCT_STATUSES.includes(status)) throw new BadRequestException('Invalid product status.');
@@ -148,7 +153,7 @@ export class ProductsService {
     return {
       name, slug, sku, priceMinor, currency: 'ZAR' as const,
       shortDescription: String(input.shortDescription || '').trim(), description: String(input.description || '').trim(),
-      compareAtPriceMinor: input.compareAtPriceMinor === undefined ? undefined : Number(input.compareAtPriceMinor),
+      compareAtPriceMinor,
       category: String(input.category || '').trim(), images: Array.isArray(input.images) ? input.images : [], thumbnail: input.thumbnail ? String(input.thumbnail) : undefined,
       inventoryQuantity, lowStockThreshold, status, featured: Boolean(input.featured), variants: Array.isArray(input.variants) ? input.variants : [], tags: Array.isArray(input.tags) ? input.tags.map(String).filter(Boolean) : [], metadata: input.metadata && typeof input.metadata === 'object' ? input.metadata as Record<string, string> : {},
       weightGrams: input.weightGrams === undefined ? undefined : Number(input.weightGrams), dimensions: input.dimensions, shippingInformation: input.shippingInformation ? String(input.shippingInformation) : undefined,
