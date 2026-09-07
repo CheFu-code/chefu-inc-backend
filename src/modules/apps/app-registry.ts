@@ -10,7 +10,8 @@ export type ChefuAppId =
     | "drippybanks"
     | "logix"
     | "logix-dash"
-    | "merchant";
+    | "merchant"
+    | "root";
 type ChefuAppAlias = "music";
 
 export type ChefuApp = {
@@ -31,12 +32,12 @@ export const CHEFU_APPS: ChefuApp[] = [
     {
         id: "academy",
         name: "CHEFU Academy",
-        origins: [
-            "https://academy.chefu.co.za",
-            "https://myaccount.chefu.co.za",
-            "https://chefu.co.za",
-            "https://www.chefu.co.za",
-        ],
+        origins: ["https://academy.chefu.co.za"],
+    },
+    {
+        id: "root",
+        name: "CHEFU Technologies",
+        origins: ["https://chefu.co.za", "https://www.chefu.co.za"],
     },
     {
         id: "admin",
@@ -82,7 +83,7 @@ export const CHEFU_APPS: ChefuApp[] = [
         id: "merchant",
         name: "Merchant",
         origins: ["https://merchant.chefu.co.za"],
-    }
+    },
 ];
 
 const CHEFU_APP_ALIASES: Record<ChefuAppAlias, ChefuAppId> = {
@@ -91,9 +92,9 @@ const CHEFU_APP_ALIASES: Record<ChefuAppAlias, ChefuAppId> = {
 
 export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
     {
-        id: "chefu-inc-web",
-        appId: "academy",
-        name: "CHEFU TECHNOLOGIES",
+        id: "chefu-technologies",
+        appId: "root",
+        name: "CHEFU Technologies",
         redirectUris: [
             "https://chefu.co.za/auth/callback",
             "https://myaccount.chefu.co.za/auth/callback",
@@ -104,9 +105,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         id: "chefu-academy-web",
         appId: "academy",
         name: "CHEFU Academy",
-        redirectUris: [
-            "https://academy.chefu.co.za/auth/callback",
-        ],
+        redirectUris: ["https://academy.chefu.co.za/auth/callback"],
         scopes: [
             "openid",
             "profile",
@@ -134,45 +133,35 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         id: "chefu-admin-web",
         appId: "admin",
         name: "CHEFU Admin",
-        redirectUris: [
-            "https://internal.chefu.co.za/auth/callback",
-        ],
+        redirectUris: ["https://internal.chefu.co.za/auth/callback"],
         scopes: ["openid", "profile", "email", "admin:manage"],
     },
     {
         id: "chefu-merchant-web",
         appId: "merchant",
         name: "CHEFU Merchant",
-        redirectUris: [
-            "https://merchant.chefu.co.za/auth/callback",
-        ],
+        redirectUris: ["https://merchant.chefu.co.za/auth/callback"],
         scopes: ["openid", "profile", "email", "admin:manage"],
     },
     {
         id: "flow-web",
         appId: "flow",
         name: "Flow Mail",
-        redirectUris: [
-            "https://flow.chefu.co.za/auth/callback",
-        ],
+        redirectUris: ["https://flow.chefu.co.za/auth/callback"],
         scopes: ["openid", "profile", "email", "flow:read", "flow:send"],
     },
     {
         id: "muzalo-web",
         appId: "muzalo",
         name: "Muzalo",
-        redirectUris: [
-            "https://muzalo.chefu.co.za/auth/callback",
-        ],
+        redirectUris: ["https://muzalo.chefu.co.za/auth/callback"],
         scopes: ["openid", "profile", "email", "music:read"],
     },
     {
         id: "quantum-web",
         appId: "quantum",
         name: "Quantum",
-        redirectUris: [
-            "https://quantum.chefu.co.za/auth/callback",
-        ],
+        redirectUris: ["https://quantum.chefu.co.za/auth/callback"],
         scopes: ["openid", "profile", "email", "quantum:chat", "quantum:read"],
     },
     {
