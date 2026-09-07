@@ -1045,7 +1045,11 @@ export class OAuthService {
           }),
         );
 
-        // Fall back to a generated ephemeral key instead of crashing the process.
+        if (process.env.NODE_ENV === 'production') {
+          throw new Error('OAUTH_PRIVATE_KEY is invalid in production.');
+        }
+
+        // Development-only fallback keeps local setup convenient without weakening production.
         const generatedFallback = generateKeyPairSync('rsa', { modulusLength: 2048 });
         this.logger.warn(
           JSON.stringify({
@@ -1072,6 +1076,10 @@ export class OAuthService {
           status: 'active',
         },
       ];
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('OAUTH_PRIVATE_KEY is required in production.');
     }
 
     const generated = generateKeyPairSync('rsa', { modulusLength: 2048 });

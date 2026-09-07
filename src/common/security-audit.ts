@@ -81,10 +81,6 @@ export function sanitizeOriginForAudit(value?: string) {
 }
 
 export function getClientIp(request: Request) {
-  const forwardedFor = request.headers['x-forwarded-for'];
-  const firstForwardedIp = Array.isArray(forwardedFor)
-    ? forwardedFor[0]
-    : forwardedFor?.split(',')[0];
-
-  return firstForwardedIp?.trim() || request.ip || undefined;
+  // Do not trust client-controlled forwarding headers for abuse controls.
+  return request.ip || request.socket.remoteAddress || undefined;
 }

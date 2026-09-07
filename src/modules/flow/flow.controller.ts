@@ -472,6 +472,10 @@ export class FlowController {
       return;
     }
 
+    if (!process.env.FLOW_API_KEY) {
+      throw new ForbiddenException('Flow inbound authentication is not configured.');
+    }
+
     this.assertFlowApiKey(flowApiKey);
   }
 

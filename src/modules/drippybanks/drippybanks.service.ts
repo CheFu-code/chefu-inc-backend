@@ -775,7 +775,7 @@ export class DrippybanksService {
       notify_url: defaultNotifyUrl,
       name_first,
       name_last,
-      email_address: input.customer?.email?.trim() || "customer@chefu.co.za",
+      email_address: input.customer?.email?.trim() || "drippybanks@chefu.co.za",
       cell_number: input.customer?.phone?.trim() || undefined,
       m_payment_id: input.orderId,
       amount: amount.toFixed(2),
