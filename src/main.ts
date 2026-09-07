@@ -81,8 +81,8 @@ async function bootstrap() {
     });
     const allowedOrigins = getAllowedOrigins();
 
-    app.useBodyParser("json", { limit: "8mb" });
-    app.useBodyParser("urlencoded", { extended: true, limit: "8mb" });
+    app.useBodyParser("json", { limit: "12mb" });
+    app.useBodyParser("urlencoded", { extended: true, limit: "12mb" });
 
     app.enableCors({
         origin(
