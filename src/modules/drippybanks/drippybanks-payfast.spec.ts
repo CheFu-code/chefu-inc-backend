@@ -45,7 +45,7 @@ function generatePayFastSignature(
   return { signature, parameterString: getString };
 }
 
-test('generatePayFastSignature orders parameters in canonical PayFast documentation order', () => {
+void test('generatePayFastSignature orders parameters in canonical PayFast documentation order', () => {
   const fields = {
     merchant_id: '10000100',
     merchant_key: '46f0cd694581a',
@@ -78,7 +78,7 @@ test('generatePayFastSignature orders parameters in canonical PayFast documentat
   assert.equal(result.signature.length, 32);
 });
 
-test('generatePayFastSignature skips optional fields when absent without corrupting order', () => {
+void test('generatePayFastSignature skips optional fields when absent without corrupting order', () => {
   const fields = {
     merchant_id: '10000100',
     merchant_key: '46f0cd694581a',

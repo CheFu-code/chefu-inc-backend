@@ -39,21 +39,21 @@ const VALID_PROD_ENV: NodeJS.ProcessEnv = {
   FLOW_ACCESS_SECRET: 'flow_access_secret_production_key_1234567890',
 };
 
-test('validateBackendEnv passes when all required development variables are provided', () => {
+void test('validateBackendEnv passes when all required development variables are provided', () => {
   const result = validateBackendEnv(VALID_DEV_ENV);
   assert.equal(result.isValid, true);
   assert.equal(result.allMissing.length, 0);
   assert.equal(result.error, undefined);
 });
 
-test('validateBackendEnv passes when all required production variables are provided', () => {
+void test('validateBackendEnv passes when all required production variables are provided', () => {
   const result = validateBackendEnv(VALID_PROD_ENV);
   assert.equal(result.isValid, true);
   assert.equal(result.allMissing.length, 0);
   assert.equal(result.error, undefined);
 });
 
-test('validateBackendEnv supports FIREBASE_SERVICE_ACCOUNT alternative in production', () => {
+void test('validateBackendEnv supports FIREBASE_SERVICE_ACCOUNT alternative in production', () => {
   const customEnv: NodeJS.ProcessEnv = {
     ...VALID_PROD_ENV,
     FIREBASE_PROJECT_ID: '',
@@ -70,7 +70,7 @@ test('validateBackendEnv supports FIREBASE_SERVICE_ACCOUNT alternative in produc
   assert.equal(result.allMissing.length, 0);
 });
 
-test('validateBackendEnv fails clearly when a single variable is missing', () => {
+void test('validateBackendEnv fails clearly when a single variable is missing', () => {
   const invalidEnv: NodeJS.ProcessEnv = {
     ...VALID_PROD_ENV,
     CHEFU_ACCOUNT_URL: '',
@@ -89,7 +89,7 @@ test('validateBackendEnv fails clearly when a single variable is missing', () =>
   );
 });
 
-test('validateBackendEnv fails and groups all missing variables when multiple are missing', () => {
+void test('validateBackendEnv fails and groups all missing variables when multiple are missing', () => {
   const invalidEnv: NodeJS.ProcessEnv = {
     NODE_ENV: 'production',
     // Missing all required production vars
@@ -113,7 +113,7 @@ test('validateBackendEnv fails and groups all missing variables when multiple ar
   assert.match(msg, /FLOW_ACCESS_SECRET/);
 });
 
-test('validateBackendEnv rejects short AUTH_SESSION_SECRET in production', () => {
+void test('validateBackendEnv rejects short AUTH_SESSION_SECRET in production', () => {
   const invalidEnv: NodeJS.ProcessEnv = {
     ...VALID_PROD_ENV,
     AUTH_SESSION_SECRET: 'short_secret',
@@ -124,7 +124,7 @@ test('validateBackendEnv rejects short AUTH_SESSION_SECRET in production', () =>
   assert.match(result.error!.message, /at least 32 characters/);
 });
 
-test('validateCloudinaryEnv and assertCloudinaryConfigured identify missing Cloudinary keys', () => {
+void test('validateCloudinaryEnv and assertCloudinaryConfigured identify missing Cloudinary keys', () => {
   const emptyEnv: NodeJS.ProcessEnv = {};
   const group = validateCloudinaryEnv(emptyEnv);
   assert.equal(group.missing.length, 3);
@@ -152,7 +152,7 @@ test('validateCloudinaryEnv and assertCloudinaryConfigured identify missing Clou
   assert.doesNotThrow(() => assertCloudinaryConfigured(validCloudinaryEnv));
 });
 
-test('validatePayFastEnv identifies missing keys including mandatory passphrase', () => {
+void test('validatePayFastEnv identifies missing keys including mandatory passphrase', () => {
   const partialEnv: NodeJS.ProcessEnv = {
     PAYFAST_MERCHANT_ID: '12345678',
     PAYFAST_MERCHANT_KEY: 'abc123def456',
@@ -168,7 +168,7 @@ test('validatePayFastEnv identifies missing keys including mandatory passphrase'
   assert.doesNotThrow(() => assertPayFastConfigured(fullEnv));
 });
 
-test('validateResendEnv and assertResendConfigured identify missing RESEND_API_KEY', () => {
+void test('validateResendEnv and assertResendConfigured identify missing RESEND_API_KEY', () => {
   assert.throws(
     () => assertResendConfigured({}),
     (err: unknown) => {
@@ -183,7 +183,7 @@ test('validateResendEnv and assertResendConfigured identify missing RESEND_API_K
   );
 });
 
-test('validateGeminiEnv and assertGeminiConfigured identify missing GEMINI_API_KEY', () => {
+void test('validateGeminiEnv and assertGeminiConfigured identify missing GEMINI_API_KEY', () => {
   assert.throws(
     () => assertGeminiConfigured({}),
     (err: unknown) => {
@@ -198,13 +198,14 @@ test('validateGeminiEnv and assertGeminiConfigured identify missing GEMINI_API_K
   );
 });
 
-test('validateWhatsAppEnv and assertWhatsAppConfigured identify missing WhatsApp variables', () => {
+void test('validateWhatsAppEnv and assertWhatsAppConfigured identify missing WhatsApp variables', () => {
   assert.throws(
     () => assertWhatsAppConfigured({}),
     (err: unknown) => {
       assert.ok(err instanceof ConfigurationError);
       assert.match((err as Error).message, /WHATSAPP_PHONE_NUMBER_ID/);
       assert.match((err as Error).message, /WHATSAPP_SYSTEM_USER_TOKEN/);
+      assert.match((err as Error).message, /WHATSAPP_APP_SECRET/);
       return true;
     },
   );
@@ -213,11 +214,12 @@ test('validateWhatsAppEnv and assertWhatsAppConfigured identify missing WhatsApp
     assertWhatsAppConfigured({
       WHATSAPP_PHONE_NUMBER_ID: '123456789',
       WHATSAPP_SYSTEM_USER_TOKEN: 'EAAB_token_123',
+      WHATSAPP_APP_SECRET: 'app_secret_123',
     }),
   );
 });
 
-test('validateClerkEnv and assertClerkConfigured identify missing Clerk webhook secret', () => {
+void test('validateClerkEnv and assertClerkConfigured identify missing Clerk webhook secret', () => {
   assert.throws(
     () => assertClerkConfigured({}),
     (err: unknown) => {
@@ -232,7 +234,7 @@ test('validateClerkEnv and assertClerkConfigured identify missing Clerk webhook 
   );
 });
 
-test('Error messages never leak secret token contents', () => {
+void test('Error messages never leak secret token contents', () => {
   const secretValue = 'super_secret_raw_token_xyz_never_leak';
   const customEnv: NodeJS.ProcessEnv = {
     NODE_ENV: 'production',

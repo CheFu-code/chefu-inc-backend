@@ -2,12 +2,11 @@ import {
     BadRequestException,
     Injectable,
     Logger,
-    TooManyRequestsException,
 } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
-import { ConfigService } from '@nestjs/config';
-import { firstValueFrom } from 'rxjs';
-import { randomUUID } from 'crypto';
+import { Request } from 'express';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import type { DocumentData } from 'firebase-admin/firestore';
+import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 
 import { generateOtp, hashOtp, verifyOtpHash } from './utils/otp.util';
 import {
@@ -20,18 +19,8 @@ import {
 export class WhatsappService {
     private readonly logger = new Logger(WhatsappService.name);
 
-    /**
-     * Temporary in-memory storage.
-     *
-     * IMPORTANT:
-     * Replace this with Firestore/Redis/PostgreSQL/etc.
-     * before production.
-     */
-    private readonly otpStore = new Map<string, WhatsappOtpRecord>();
-
     constructor(
-        private readonly httpService: HttpService,
-        private readonly configService: ConfigService,
+        private readonly firebaseAdmin: FirebaseAdminService,
     ) { }
 
     /**
@@ -44,7 +33,11 @@ export class WhatsappService {
     }> {
         const normalizedPhone = this.normalizePhone(phone);
 
-        const existing = this.otpStore.get(normalizedPhone);
+        const otpRef = this.getOtpReference(normalizedPhone);
+        const existingSnapshot = await otpRef.get();
+        const existing = existingSnapshot.exists
+            ? this.readOtpRecord(existingSnapshot.data())
+            : null;
 
         if (existing && !existing.used) {
             const cooldown =
@@ -61,7 +54,7 @@ export class WhatsappService {
                     (cooldown - elapsed) / 1000,
                 );
 
-                throw new TooManyRequestsException(
+                throw new BadRequestException(
                     `Please wait ${remaining} seconds before requesting another code.`,
                 );
             }
@@ -80,7 +73,7 @@ export class WhatsappService {
         );
 
         const record: WhatsappOtpRecord = {
-            id: randomUUID(),
+            id: otpRef.id,
             phone: normalizedPhone,
             codeHash: hashOtp(otp),
             expiresAt: new Date(
@@ -114,7 +107,7 @@ export class WhatsappService {
 
         record.whatsappMessageId = result.messageId;
 
-        this.otpStore.set(normalizedPhone, record);
+        await otpRef.set(record);
 
         this.logger.log(
             `WhatsApp OTP sent to ${this.maskPhone(normalizedPhone)}`,
@@ -134,6 +127,7 @@ export class WhatsappService {
     async verifyOtp(
         phone: string,
         code: string,
+        userId: string,
     ): Promise<{
         success: boolean;
         verified: boolean;
@@ -141,69 +135,66 @@ export class WhatsappService {
     }> {
         const normalizedPhone = this.normalizePhone(phone);
 
-        const record = this.otpStore.get(normalizedPhone);
+        const otpRef = this.getOtpReference(normalizedPhone);
+        let result: 'missing' | 'expired' | 'attempts' | 'invalid' | 'verified' = 'missing';
+        let remainingAttempts = 0;
 
-        if (!record) {
+        await this.firebaseAdmin.db().runTransaction(async transaction => {
+            const snapshot = await transaction.get(otpRef);
+            if (!snapshot.exists) return;
+
+            const record = this.readOtpRecord(snapshot.data());
+            if (record.expiresAt.getTime() < Date.now()) {
+                result = 'expired';
+                transaction.delete(otpRef);
+                return;
+            }
+
+            if (record.attempts >= record.maxAttempts) {
+                result = 'attempts';
+                transaction.delete(otpRef);
+                return;
+            }
+
+            const valid = verifyOtpHash(code, record.codeHash);
+            if (!valid) {
+                const attempts = record.attempts + 1;
+                remainingAttempts = Math.max(record.maxAttempts - attempts, 0);
+                result = 'invalid';
+                if (attempts >= record.maxAttempts) {
+                    transaction.delete(otpRef);
+                } else {
+                    transaction.update(otpRef, { attempts });
+                }
+                return;
+            }
+
+            result = 'verified';
+            transaction.delete(otpRef);
+        });
+
+        if (result === 'missing') {
+            throw new BadRequestException('No active verification code found.');
+        }
+        if (result === 'expired') {
+            throw new BadRequestException('Verification code has expired.');
+        }
+        if (result === 'attempts') {
+            throw new BadRequestException('Too many incorrect attempts. Please request a new code.');
+        }
+        if (result === 'invalid') {
             throw new BadRequestException(
-                'No active verification code found.',
+                `Invalid verification code. ${remainingAttempts} attempt${remainingAttempts === 1 ? '' : 's'} remaining.`,
             );
         }
-
-        if (record.used) {
-            throw new BadRequestException(
-                'This verification code has already been used.',
-            );
-        }
-
-        if (record.expiresAt.getTime() < Date.now()) {
-            this.otpStore.delete(normalizedPhone);
-
-            throw new BadRequestException(
-                'Verification code has expired.',
-            );
-        }
-
-        if (record.attempts >= record.maxAttempts) {
-            this.otpStore.delete(normalizedPhone);
-
-            throw new TooManyRequestsException(
-                'Too many incorrect attempts. Please request a new code.',
-            );
-        }
-
-        record.attempts++;
-
-        const valid = verifyOtpHash(
-            code,
-            record.codeHash,
-        );
-
-        if (!valid) {
-            this.otpStore.set(normalizedPhone, record);
-
-            const remaining =
-                record.maxAttempts - record.attempts;
-
-            throw new BadRequestException(
-                `Invalid verification code. ${remaining} attempt${remaining === 1 ? '' : 's'
-                } remaining.`,
-            );
-        }
-
-        record.used = true;
-
-        this.otpStore.set(normalizedPhone, record);
 
         /*
-         * IMPORTANT:
-         *
-         * This is where you should update your actual
-         * CHEFU/Firebase user:
-         *
-         * phoneVerified = true
-         *
-         * and/or link the verified phone credential.
+         * The route is authenticated, so this links the verified number to
+         * the Firebase account that initiated the challenge.
          */
+        await this.firebaseAdmin.auth().updateUser(userId, {
+            phoneNumber: normalizedPhone,
+        });
 
         this.logger.log(
             `WhatsApp phone verified: ${this.maskPhone(normalizedPhone)}`,
@@ -223,30 +214,15 @@ export class WhatsappService {
         phone: string,
         otp: string,
     ): Promise<WhatsappSendResult> {
-        const accessToken =
-            this.configService.get<string>(
-                'WHATSAPP_ACCESS_TOKEN',
-            );
+        const accessToken = process.env.WHATSAPP_SYSTEM_USER_TOKEN?.trim();
 
-        const phoneNumberId =
-            this.configService.get<string>(
-                'WHATSAPP_PHONE_NUMBER_ID',
-            );
+        const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim();
 
-        const apiVersion =
-            this.configService.get<string>(
-                'WHATSAPP_API_VERSION',
-            ) ?? 'v23.0';
+        const apiVersion = process.env.WHATSAPP_API_VERSION?.trim() ?? 'v23.0';
 
-        const templateName =
-            this.configService.get<string>(
-                'WHATSAPP_OTP_TEMPLATE_NAME',
-            ) ?? 'chefu_login_code';
+        const templateName = process.env.WHATSAPP_OTP_TEMPLATE_NAME?.trim() ?? 'chefu_login_code';
 
-        const language =
-            this.configService.get<string>(
-                'WHATSAPP_OTP_LANGUAGE',
-            ) ?? 'en_US';
+        const language = process.env.WHATSAPP_OTP_LANGUAGE?.trim() ?? 'en_US';
 
         if (!accessToken || !phoneNumberId) {
             this.logger.error(
@@ -296,41 +272,40 @@ export class WhatsappService {
         };
 
         try {
-            const response = await firstValueFrom(
-                this.httpService.post(
-                    url,
-                    payload,
-                    {
-                        headers: {
-                            Authorization: `Bearer ${accessToken}`,
-                            'Content-Type': 'application/json',
-                        },
-                        timeout: 10000,
-                    },
-                ),
-            );
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload),
+                signal: AbortSignal.timeout(10000),
+            });
+            const responseData = await response.json().catch(() => ({})) as {
+                messages?: { id?: string }[];
+                error?: { message?: string };
+            };
 
-            const messageId =
-                response.data?.messages?.[0]?.id;
+            if (!response.ok) {
+                throw new Error(responseData.error?.message ?? `Meta API returned ${response.status}`);
+            }
+
+            const messageId = responseData.messages?.[0]?.id;
 
             return {
                 success: true,
                 messageId,
             };
         } catch (error: any) {
-            const responseData =
-                error?.response?.data;
-
             this.logger.error(
                 'Meta WhatsApp API error',
-                JSON.stringify(responseData),
+                error instanceof Error ? error.message : 'Unknown error',
             );
 
             return {
                 success: false,
                 error:
-                    responseData?.error?.message ??
-                    error?.message ??
+                    error instanceof Error ? error.message :
                     'Unknown WhatsApp API error',
             };
         }
@@ -358,6 +333,25 @@ export class WhatsappService {
          *   errors
          * }
          */
+    }
+
+    isValidWebhookSignature(request: Request & { rawBody?: Buffer }): boolean {
+        const appSecret = process.env.WHATSAPP_APP_SECRET?.trim();
+        const signature = request.header('x-hub-signature-256') || '';
+        const rawBody = request.rawBody;
+
+        if (!appSecret || !rawBody || !signature.startsWith('sha256=')) {
+            return false;
+        }
+
+        const expected = createHmac('sha256', appSecret)
+            .update(rawBody)
+            .digest('hex');
+        const provided = Buffer.from(signature.slice('sha256='.length), 'hex');
+        const expectedBuffer = Buffer.from(expected, 'hex');
+
+        return provided.length === expectedBuffer.length &&
+            timingSafeEqual(provided, expectedBuffer);
     }
 
     /**
@@ -433,6 +427,32 @@ export class WhatsappService {
         return phone.trim().replace(/\s+/g, '');
     }
 
+    private getOtpReference(phone: string) {
+        const key = createHash('sha256').update(phone).digest('hex');
+        return this.firebaseAdmin.db().collection('whatsapp_otp_challenges').doc(key);
+    }
+
+    private readOtpRecord(data: DocumentData | undefined): WhatsappOtpRecord {
+        if (!data) {
+            throw new BadRequestException('No active verification code found.');
+        }
+
+        return {
+            id: String(data.id),
+            phone: String(data.phone),
+            codeHash: String(data.codeHash),
+            expiresAt: data.expiresAt.toDate(),
+            attempts: Number(data.attempts),
+            maxAttempts: Number(data.maxAttempts),
+            used: Boolean(data.used),
+            createdAt: data.createdAt.toDate(),
+            lastSentAt: data.lastSentAt.toDate(),
+            whatsappMessageId: data.whatsappMessageId
+                ? String(data.whatsappMessageId)
+                : undefined,
+        };
+    }
+
     /**
      * Mask phone number in logs.
      */
@@ -452,8 +472,7 @@ export class WhatsappService {
         key: string,
         fallback: number,
     ): number {
-        const value =
-            this.configService.get<string>(key);
+        const value = process.env[key];
 
         if (!value) {
             return fallback;

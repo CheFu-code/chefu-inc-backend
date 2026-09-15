@@ -27,7 +27,6 @@ const platformModules = [
   AppsModule,
   FirebaseAdminModule,
   AuthModule,
-  WhatsappModule,
 ];
 
 const sharedServiceModules = [

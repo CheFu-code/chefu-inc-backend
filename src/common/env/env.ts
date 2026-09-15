@@ -207,6 +207,9 @@ export function validateWhatsAppEnv(
   if (!hasEnv('WHATSAPP_SYSTEM_USER_TOKEN', env)) {
     missing.push({ name: 'WHATSAPP_SYSTEM_USER_TOKEN', description: 'WhatsApp Meta Graph System Token' });
   }
+  if (!hasEnv('WHATSAPP_APP_SECRET', env)) {
+    missing.push({ name: 'WHATSAPP_APP_SECRET', description: 'Meta App Secret for webhook signature validation' });
+  }
   return { service: 'WhatsApp Cloud API', missing };
 }
 

@@ -7,6 +7,7 @@ import { NestExpressApplication } from "@nestjs/platform-express";
 import { validateBackendEnv } from "./common/env";
 import { GlobalExceptionFilter } from "./common/global-exception.filter";
 import { NextFunction, Request, Response } from "express";
+import { ValidationPipe } from "@nestjs/common";
 import {
     CHEFU_APP_HEADER,
     registeredAppOrigins,
@@ -83,6 +84,13 @@ async function bootstrap() {
 
     app.useBodyParser("json", { limit: "12mb" });
     app.useBodyParser("urlencoded", { extended: true, limit: "12mb" });
+    app.useGlobalPipes(
+        new ValidationPipe({
+            whitelist: true,
+            forbidNonWhitelisted: true,
+            transform: true,
+        }),
+    );
 
     app.enableCors({
         origin(

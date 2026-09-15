@@ -168,7 +168,7 @@ type M2mClient = {
   rateLimitPerMinute: number;
 };
 
-type NodeJsonWebKey = import('node:crypto').JsonWebKey & {
+type NodeJsonWebKey = JsonWebKey & {
   alg?: string;
   kid?: string;
   key_ops?: string[];

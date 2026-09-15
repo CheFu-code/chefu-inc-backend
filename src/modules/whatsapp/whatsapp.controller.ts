@@ -5,20 +5,23 @@ import {
     HttpCode,
     Post,
     Query,
+    Req,
     Res,
+    UnauthorizedException,
+    UseGuards,
 } from '@nestjs/common';
-import { Response } from 'express';
-import { ConfigService } from '@nestjs/config';
+import { Request, Response } from 'express';
 
 import { WhatsappService } from './whatsapp.service';
 import { SendWhatsappOtpDto } from './dto/send-whatsapp-otp.dto';
 import { VerifyWhatsappOtpDto } from './dto/verify-whatsapp-otp.dto';
+import { AuthGuard } from '../auth/auth.guard';
+import { AuthenticatedUser } from '../auth/authenticated-user';
 
 @Controller()
 export class WhatsappController {
     constructor(
         private readonly whatsappService: WhatsappService,
-        private readonly configService: ConfigService,
     ) { }
 
     /**
@@ -43,12 +46,19 @@ export class WhatsappController {
      */
     @Post('auth/whatsapp/verify-code')
     @HttpCode(200)
+    @UseGuards(AuthGuard)
     async verifyCode(
         @Body() dto: VerifyWhatsappOtpDto,
+        @Req() request: Request & { user?: AuthenticatedUser },
     ) {
+        if (!request.user) {
+            throw new UnauthorizedException('Authentication required.');
+        }
+
         return this.whatsappService.verifyOtp(
             dto.phone,
             dto.code,
+            request.user.uid,
         );
     }
 
@@ -64,10 +74,7 @@ export class WhatsappController {
         @Query('hub.challenge') challenge: string,
         @Res() response: Response,
     ) {
-        const expectedToken =
-            this.configService.get<string>(
-                'WHATSAPP_VERIFY_TOKEN',
-            );
+        const expectedToken = process.env.WHATSAPP_VERIFY_TOKEN?.trim();
 
         if (
             mode === 'subscribe' &&
@@ -94,18 +101,20 @@ export class WhatsappController {
     @HttpCode(200)
     async webhook(
         @Body() payload: any,
+        @Req() request: Request & { rawBody?: Buffer },
+        @Res() response: Response,
     ) {
-        this.whatsappService.processWebhook(
-            payload,
-        );
+        if (!this.whatsappService.isValidWebhookSignature(request)) {
+            return response.status(403).send('Forbidden');
+        }
+
+        this.whatsappService.processWebhook(payload);
 
         /*
          * Always acknowledge the webhook quickly.
          *
          * Do heavy processing asynchronously if needed.
          */
-        return {
-            received: true,
-        };
+        return response.status(200).json({ received: true });
     }
 }
