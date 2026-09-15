@@ -21,11 +21,13 @@ import { QuantumModule } from './modules/quantum/quantum.module';
 import { ProductsModule } from './modules/products/products.module';
 import { SubmissionsModule } from './modules/submissions/submissions.module';
 import { SentryModule } from '@sentry/nestjs/setup';
+import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
 
 const platformModules = [
   AppsModule,
   FirebaseAdminModule,
   AuthModule,
+  WhatsappModule,
 ];
 
 const sharedServiceModules = [
@@ -33,6 +35,7 @@ const sharedServiceModules = [
   BillingModule,
   EmailModule,
   NotificationsModule,
+  WhatsappModule,
 ];
 
 const productModules = [
