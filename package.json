@@ -2,11 +2,17 @@
   "name": "chefu-api",
   "version": "0.1.0",
   "private": true,
+  "overrides": {
+    "multer": "^2.4.0"
+  },
   "scripts": {
     "dev": "tsx watch --env-file=.env src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
     "start:prod": "node dist/main.js",
+    "migrate:flow-html": "tsx --env-file=.env scripts/migrate-flow-html.ts",
+    "test:flow": "node --import tsx --test src/modules/flow/flow-email-template.test.ts",
+    "verify:flow-security": "node scripts/verify-flow-security.mjs",
     "lint": "eslint \"src/**/*.ts\"",
     "smoke": "node scripts/smoke-routes.mjs",
     "sync:flow-template": "node scripts/sync-flow-resend-template.mjs",
@@ -30,6 +36,7 @@
     "firebase-admin": "^13.6.0",
     "ioredis": "^6.0.0",
     "lru-cache": "^11.5.2",
+    "multer": "^2.4.0",
     "node-cron": "^4.2.1",
     "puppeteer": "^25.0.4",
     "reflect-metadata": "^0.2.2",
