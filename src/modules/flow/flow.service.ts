@@ -81,6 +81,7 @@ type FlowFolderCounts = {
 };
 
 const RESEND_REQUEST_TIMEOUT_MS = 15_000;
+const MAX_INBOUND_HTML_BYTES = 1_024 * 1_024;
 
 @Injectable()
 export class FlowService implements OnModuleDestroy {
@@ -1917,7 +1918,10 @@ export class FlowService implements OnModuleDestroy {
           ? data.firstOpenedAt
           : undefined,
       from,
-      html: includeContent && typeof data.html === 'string' ? data.html : undefined,
+      html:
+        includeContent && typeof data.html === 'string'
+          ? sanitizeFlowHtml(data.html)
+          : undefined,
       inReplyTo:
         typeof data.inReplyTo === 'string'
           ? data.inReplyTo
@@ -2018,7 +2022,7 @@ export class FlowService implements OnModuleDestroy {
     const text = String(
       email.text || email.text_body || data.text || input.text || '',
     );
-    const html =
+    const rawHtml =
       typeof email.html === 'string'
         ? email.html
         : typeof email.html_body === 'string'
@@ -2026,6 +2030,10 @@ export class FlowService implements OnModuleDestroy {
           : typeof data.html === 'string'
             ? data.html
             : undefined;
+    if (rawHtml && Buffer.byteLength(rawHtml, 'utf8') > MAX_INBOUND_HTML_BYTES) {
+      throw new BadRequestException('Inbound HTML content is too large.');
+    }
+    const html = rawHtml ? sanitizeFlowHtml(rawHtml) : undefined;
     const preview = this.previewFromText(
       text || this.stripHtml(html || '') || subject,
     );

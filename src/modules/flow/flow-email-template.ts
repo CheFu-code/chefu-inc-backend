@@ -1,3 +1,5 @@
+import sanitizeHtml from 'sanitize-html';
+
 export function applyVariables(
     value: string,
     variables: Record<string, string>,
@@ -30,32 +32,50 @@ export function textToHtml(value: string) {
 }
 
 export function sanitizeFlowHtml(value: string) {
-    return value
-        .replace(/<!--[\s\S]*?-->/g, '')
-        .replace(
-            /<\s*(script|style|iframe|object|embed|link|meta)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi,
-            '',
-        )
-        .replace(/<\s*(script|style|iframe|object|embed|link|meta)[^>]*\/?>/gi, '')
-        .replace(/\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-        .replace(/\s+srcdoc\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-        .replace(
-            /\s+(href|src)\s*=\s*(['"]?)\s*javascript:[^'"\s>]*/gi,
-            ' $1="#"',
-        )
-        .replace(
-            /\s+style\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi,
-            (_match, _full, doubleValue, singleValue, bareValue) => {
-                const style = String(doubleValue || singleValue || bareValue || '');
-                const cleanStyle = style
-                    .split(';')
-                    .map(rule => rule.trim())
-                    .filter(rule => rule && !/url\s*\(|expression\s*\(/i.test(rule))
-                    .join('; ');
-
-                return cleanStyle ? ` style="${escapeAttribute(cleanStyle)}"` : '';
-            },
-        );
+    return sanitizeHtml(value, {
+        allowedTags: [
+            'a',
+            'b',
+            'blockquote',
+            'br',
+            'code',
+            'em',
+            'h1',
+            'h2',
+            'h3',
+            'h4',
+            'hr',
+            'i',
+            'img',
+            'li',
+            'ol',
+            'p',
+            'pre',
+            'strong',
+            'table',
+            'tbody',
+            'td',
+            'tfoot',
+            'th',
+            'thead',
+            'tr',
+            'u',
+            'ul',
+        ],
+        allowedAttributes: {
+            a: ['href', 'title', 'target', 'rel'],
+            img: ['alt', 'height', 'src', 'title', 'width'],
+            '*': ['class', 'height', 'role', 'width'],
+        },
+        allowedSchemes: ['http', 'https', 'mailto', 'tel'],
+        allowedSchemesByTag: {
+            a: ['http', 'https', 'mailto', 'tel'],
+            img: ['http', 'https'],
+        },
+        allowProtocolRelative: false,
+        disallowedTagsMode: 'discard',
+        enforceHtmlBoundary: true,
+    });
 }
 
 export function createFlowTemplateVariables({
@@ -173,9 +193,21 @@ export function renderFlowEmailShell({
 }
 
 function renderCtaHtml(ctaLabel?: string, ctaUrl?: string) {
-    if (!ctaLabel || !ctaUrl) return '';
+    const safeUrl = sanitizeCtaUrl(ctaUrl);
+    if (!ctaLabel || !safeUrl) return '';
 
-    return `<a href="${escapeAttribute(ctaUrl)}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;border-radius:999px;padding:13px 19px;font-size:14px;font-weight:800;box-shadow:0 10px 20px rgba(15,118,110,0.18);">${escapeHtml(ctaLabel)}</a>`;
+    return `<a href="${escapeAttribute(safeUrl)}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;border-radius:999px;padding:13px 19px;font-size:14px;font-weight:800;box-shadow:0 10px 20px rgba(15,118,110,0.18);">${escapeHtml(ctaLabel)}</a>`;
+}
+
+function sanitizeCtaUrl(value?: string) {
+    if (!value) return '';
+
+    try {
+        const url = new URL(value);
+        return ['http:', 'https:'].includes(url.protocol) ? url.toString() : '';
+    } catch {
+        return '';
+    }
 }
 
 function chunkTemplateValue(value: string, chunkCount: number) {
