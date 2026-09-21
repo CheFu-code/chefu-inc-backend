@@ -23,7 +23,7 @@
     "seed:products": "tsx --env-file=.env scripts/seed-products.ts"
   },
   "dependencies": {
-    "@chefu-code/sdk": "^0.1.1",
+    "@chefu-code/sdk": "^0.1.2",
     "@google/genai": "^1.38.0",
     "@nestjs/common": "^11.1.9",
     "@nestjs/config": "^4.0.4",
