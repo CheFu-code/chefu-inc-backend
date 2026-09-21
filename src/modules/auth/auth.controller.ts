@@ -173,6 +173,87 @@ export class AuthController {
     };
   }
 
+  @Post('login')
+  @HttpCode(200)
+  async login(@Body() body: { email?: string; password?: string }) {
+    const email = String(body.email || '').trim().toLowerCase();
+    const password = String(body.password || '').trim();
+
+    if (!email || !password) {
+      throw new BadRequestException('Email and password are required.');
+    }
+
+    const apiKey = process.env.FIREBASE_WEB_API_KEY || process.env.FIREBASE_API_KEY;
+    if (!apiKey) {
+      throw new InternalServerErrorException(
+        'Firebase web API key is not configured.',
+      );
+    }
+
+    const response = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password,
+          returnSecureToken: true,
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const errorBody = (await response.json().catch(() => ({}))) as {
+        error?: { message?: string };
+      };
+      throw new UnauthorizedException(
+        errorBody.error?.message || 'Invalid email or password.',
+      );
+    }
+
+    const payload = (await response.json()) as {
+      idToken?: string;
+      refreshToken?: string;
+      expiresIn?: string;
+      localId?: string;
+      email?: string;
+    };
+
+    if (!payload.idToken) {
+      throw new InternalServerErrorException('Login failed. Please try again.');
+    }
+
+    return {
+      token: payload.idToken,
+      idToken: payload.idToken,
+      refreshToken: payload.refreshToken || '',
+      expiresIn: payload.expiresIn || '',
+      user: {
+        uid: payload.localId || '',
+        email: payload.email || email,
+      },
+    };
+  }
+
+  @Post('logout')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async logout(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    this.clearSessionCookies(response);
+    this.logger.log(
+      JSON.stringify({
+        event: 'auth_logout_called',
+        ...auditRequestContext(request),
+      }),
+    );
+
+    return { ok: true };
+  }
+
   @Get('security')
   @UseGuards(AuthGuard)
   async getSecuritySummary(

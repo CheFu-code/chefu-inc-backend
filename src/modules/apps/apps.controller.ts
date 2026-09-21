@@ -52,6 +52,14 @@ export class AppsController {
     return this.appsService.approveOauthClient(clientId, body.approvedBy);
   }
 
+  @Post(':clientId/rotate-secret')
+  async rotateSecret(
+    @Param('clientId') clientId: string,
+    @Body() body: { secret?: string },
+  ) {
+    return this.appsService.rotateClientSecret(clientId, body.secret);
+  }
+
   @Post(':clientId/revoke')
   async revokeApp(
     @Param('clientId') clientId: string,

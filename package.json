@@ -2,6 +2,9 @@
   "name": "chefu-api",
   "version": "0.1.0",
   "private": true,
+  "bin": {
+    "chefu": "./scripts/chefu-cli.mjs"
+  },
   "overrides": {
     "multer": "^2.4.0"
   },
@@ -20,6 +23,7 @@
     "seed:products": "tsx --env-file=.env scripts/seed-products.ts"
   },
   "dependencies": {
+    "@chefu-code/sdk": "^0.1.1",
     "@google/genai": "^1.38.0",
     "@nestjs/common": "^11.1.9",
     "@nestjs/config": "^4.0.4",
