@@ -1599,7 +1599,7 @@ export class OAuthService {
     signingInput: string,
     signature: Buffer,
   ) {
-    const publicKey = createPublicKey({ key: jwk, format: 'jwk' });
+    const publicKey = createPublicKey(jwk as never);
     const verifier = createVerify(alg === 'RS256' ? 'RSA-SHA256' : 'SHA256');
     verifier.update(signingInput);
     verifier.end();

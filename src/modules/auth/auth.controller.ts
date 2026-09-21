@@ -51,6 +51,11 @@ import {
   isFlowSessionRequest,
   normalizeEmailAddress,
 } from '../flow/flow-access';
+import {
+  buildDeviceAuthChallenge,
+  isDeviceAuthExpired,
+  normalizeDeviceCode,
+} from './device-auth';
 
 function decodeJwtPayload(token: string) {
   const [, payload] = token.split('.');
@@ -457,6 +462,165 @@ export class AuthController {
         photoURL: profile.profilePicture || null,
       },
       profile,
+    };
+  }
+
+  @Post('device/start')
+  async startDeviceAuth(@Req() request: Request) {
+    const challenge = buildDeviceAuthChallenge();
+
+    const deviceKey = `device_auth:${normalizeDeviceCode(challenge.deviceCode)}`;
+    const sessionPayload = {
+      deviceCode: challenge.deviceCode,
+      userCode: challenge.userCode,
+      status: 'pending',
+      createdAt: challenge.createdAt,
+      expiresAt: challenge.expiresAt,
+      verificationUri: challenge.verificationUri,
+      intervalSeconds: challenge.intervalSeconds,
+    };
+
+    await this.firebaseAdmin.db().collection('device_auth_sessions').doc(deviceKey).set(sessionPayload);
+
+    this.logger.log(
+      JSON.stringify({
+        event: 'device_auth_started',
+        deviceCodeHash: createHash('sha256').update(challenge.deviceCode).digest('hex').slice(0, 16),
+        userCode: challenge.userCode,
+        ...auditRequestContext(request),
+      }),
+    );
+
+    return {
+      ok: true,
+      deviceCode: challenge.deviceCode,
+      userCode: challenge.userCode,
+      verificationUri: challenge.verificationUri,
+      expiresAt: challenge.expiresAt,
+      intervalSeconds: challenge.intervalSeconds,
+    };
+  }
+
+  @Post('device/complete')
+  async completeDeviceAuth(
+    @Body() body: { deviceCode?: string; userCode?: string; email?: string; password?: string },
+    @Req() request: Request,
+  ) {
+    const deviceCode = normalizeDeviceCode(body.deviceCode);
+    const userCode = normalizeDeviceCode(body.userCode);
+
+    if (!deviceCode || !userCode) {
+      throw new BadRequestException('deviceCode and userCode are required.');
+    }
+
+    const ref = this.firebaseAdmin.db().collection('device_auth_sessions').doc(`device_auth:${deviceCode}`);
+    const snapshot = await ref.get();
+    if (!snapshot.exists) {
+      throw new BadRequestException('Unknown or expired device code.');
+    }
+
+    const record = snapshot.data() as {
+      userCode?: string;
+      status?: string;
+      createdAt?: number;
+      expiresAt?: number;
+      uid?: string;
+      email?: string;
+      idToken?: string;
+    };
+
+    if (record.status !== 'pending') {
+      throw new BadRequestException(`This device code is already ${record.status}.`);
+    }
+
+    if (isDeviceAuthExpired({ createdAt: Number(record.createdAt || Date.now()), expiresAt: Number(record.expiresAt || Date.now()) })) {
+      await ref.set({ status: 'expired' }, { merge: true });
+      throw new BadRequestException('This device code has expired. Please try again.');
+    }
+
+    if (record.userCode && normalizeDeviceCode(record.userCode) !== userCode) {
+      throw new BadRequestException('User code does not match this device code.');
+    }
+
+    const email = String(body.email || '').trim().toLowerCase();
+    const password = String(body.password || '').trim();
+    if (!email || !password) {
+      throw new BadRequestException('Email and password are required to finish device sign-in.');
+    }
+
+    const apiKey = process.env.FIREBASE_WEB_API_KEY || process.env.FIREBASE_API_KEY;
+    if (!apiKey) {
+      throw new InternalServerErrorException('Firebase web API key is not configured.');
+    }
+
+    const signInRes = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, returnSecureToken: true }),
+      },
+    );
+
+    if (!signInRes.ok) {
+      const errorBody = (await signInRes.json().catch(() => ({}))) as { error?: { message?: string } };
+      throw new UnauthorizedException(errorBody.error?.message || 'Invalid email or password.');
+    }
+
+    const payload = (await signInRes.json()) as { idToken?: string; localId?: string; email?: string };
+    if (!payload.idToken) {
+      throw new InternalServerErrorException('Unable to complete device sign-in.');
+    }
+
+    await ref.set({
+      status: 'approved',
+      uid: payload.localId || '',
+      email: payload.email || email,
+      idToken: payload.idToken,
+      approvedAt: Date.now(),
+    }, { merge: true });
+
+    return {
+      ok: true,
+      status: 'approved',
+      email: payload.email || email,
+      token: payload.idToken,
+    };
+  }
+
+  @Post('device/status')
+  async getDeviceAuthStatus(@Body() body: { deviceCode?: string }, @Req() request: Request) {
+    const deviceCode = normalizeDeviceCode(body.deviceCode);
+    if (!deviceCode) {
+      throw new BadRequestException('deviceCode is required.');
+    }
+
+    const ref = this.firebaseAdmin.db().collection('device_auth_sessions').doc(`device_auth:${deviceCode}`);
+    const snapshot = await ref.get();
+    if (!snapshot.exists) {
+      return { ok: true, status: 'expired' };
+    }
+
+    const record = snapshot.data() as {
+      status?: string;
+      expiresAt?: number;
+      token?: string;
+      idToken?: string;
+      email?: string;
+      uid?: string;
+    };
+
+    if (isDeviceAuthExpired({ createdAt: Date.now(), expiresAt: Number(record.expiresAt || Date.now()) })) {
+      await ref.set({ status: 'expired' }, { merge: true });
+      return { ok: true, status: 'expired' };
+    }
+
+    return {
+      ok: true,
+      status: record.status || 'pending',
+      email: record.email || null,
+      uid: record.uid || null,
+      token: record.token || record.idToken || null,
     };
   }
 

@@ -2,7 +2,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ChefuClient } from '@chefu/sdk';
+import { spawn } from 'node:child_process';
+import { ChefuClient } from '@chefu-code/sdk';
 
 const API_BASE_URL = process.env.CHEFU_API_BASE_URL || 'https://api.chefu.co.za';
 const HOME_DIR = os.homedir();
@@ -67,6 +68,24 @@ function clearStoredSession() {
   }
 }
 
+function openBrowser(url) {
+  const platform = process.platform;
+  const commands =
+    platform === 'darwin'
+      ? ['open', [url]]
+      : platform === 'win32'
+        ? ['cmd', ['/c', 'start', '', url]]
+        : ['xdg-open', [url]];
+
+  try {
+    const [command, args] = commands;
+    const child = spawn(command, args, { stdio: 'ignore', detached: true });
+    child.unref();
+  } catch {
+    // no-op
+  }
+}
+
 function buildClient(session = readStoredSession()) {
   const client = new ChefuClient({ baseURL: API_BASE_URL });
   if (session?.token) {
@@ -79,28 +98,92 @@ async function cmdLogin(args, jsonOutput) {
   const email = args.email || args.e;
   const password = args.password || args.p;
 
-  if (!email || !password) {
-    throw new Error('Usage: chefu login --email you@example.com --password secret');
-  }
+  if (email && password) {
+    const client = buildClient();
+    const result = await client.login({ email, password });
 
-  const client = buildClient();
-  const result = await client.login({ email, password });
+    const session = {
+      email,
+      token: result.token || result.idToken || '',
+      refreshToken: result.refreshToken || '',
+      updatedAt: new Date().toISOString(),
+    };
 
-  const session = {
-    email,
-    token: result.token || result.idToken || '',
-    refreshToken: result.refreshToken || '',
-    updatedAt: new Date().toISOString(),
-  };
+    writeStoredSession(session);
 
-  writeStoredSession(session);
+    if (jsonOutput) {
+      printJson({ ok: true, user: { email }, token: session.token });
+      return;
+    }
 
-  if (jsonOutput) {
-    printJson({ ok: true, user: { email }, token: session.token });
+    printSuccess('Logged in successfully.', `User: ${email}`);
     return;
   }
 
-  printSuccess('Logged in successfully.', `User: ${email}`);
+  const client = new ChefuClient({ baseURL: API_BASE_URL });
+  const challenge = await client.request('/auth/device/start', { method: 'POST' });
+
+  const url = challenge.verificationUri || 'https://myaccount.chefu.co.za/device';
+  const userCode = challenge.userCode || challenge.code || 'CHEFU-0000';
+
+  if (!jsonOutput) {
+    console.log('');
+    console.log(style(colors.cyan, 'Open this URL in your browser:') + ' ' + style(colors.bold, url));
+    console.log(style(colors.cyan, 'Enter this code:') + ' ' + style(colors.green, userCode));
+    console.log(style(colors.yellow, 'After signing in, press Enter to finish authentication.'));
+    console.log('');
+    openBrowser(url);
+  }
+
+  if (process.stdin.isTTY) {
+    await new Promise((resolve) => {
+      process.stdin.once('data', resolve);
+    });
+  }
+
+  const poll = async () => {
+    const status = await client.request('/auth/device/status', {
+      method: 'POST',
+      body: JSON.stringify({ deviceCode: challenge.deviceCode }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (status.status === 'approved' && status.token) {
+      const session = {
+        email: status.email || '',
+        token: status.token,
+        refreshToken: '',
+        updatedAt: new Date().toISOString(),
+      };
+      writeStoredSession(session);
+
+      if (jsonOutput) {
+        printJson({ ok: true, user: { email: session.email }, token: session.token });
+      } else {
+        printSuccess('Logged in successfully.', `User: ${session.email || 'unknown'}`);
+      }
+      return true;
+    }
+
+    if (status.status === 'expired') {
+      throw new Error('The device login expired. Please run chefu login again.');
+    }
+
+    return false;
+  };
+
+  let completed = false;
+  const started = Date.now();
+  while (!completed && Date.now() - started < 2 * 60 * 1000) {
+    completed = await poll();
+    if (!completed) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  }
+
+  if (!completed) {
+    throw new Error('Authentication timed out. Please run chefu login again.');
+  }
 }
 
 async function cmdLogout(jsonOutput) {
