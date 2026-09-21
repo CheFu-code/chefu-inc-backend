@@ -31,7 +31,7 @@ app.
 Product modules own app-specific workflows and route groups.
 
 - `academy-sdk`: public SDK API, SDK auth, developer keys, course/video catalog.
-- `courses`: authenticated CHEFU Academy learning and export workflows.
+- `courses`: authenticated Chefu Academy learning and export workflows.
 - `flow`: Flow Mail config, mailbox, send, and webhook flows.
 
 Future apps should get their own product module instead of adding app-specific

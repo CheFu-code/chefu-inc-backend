@@ -31,12 +31,12 @@ export type ChefuOauthClient = {
 export const CHEFU_APPS: ChefuApp[] = [
     {
         id: "academy",
-        name: "CHEFU Academy",
+        name: "Chefu Academy",
         origins: ["https://academy.chefu.co.za"],
     },
     {
         id: "root",
-        name: "CHEFU Technologies",
+        name: "Chefu Technologies",
         origins: [
             "https://chefu.co.za",
             "https://www.chefu.co.za",
@@ -45,7 +45,7 @@ export const CHEFU_APPS: ChefuApp[] = [
     },
     {
         id: "admin",
-        name: "CHEFU Admin",
+        name: "Chefu Admin",
         origins: ["https://internal.chefu.co.za"],
     },
     {
@@ -98,7 +98,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
     {
         id: "chefu-technologies",
         appId: "root",
-        name: "CHEFU Technologies",
+        name: "Chefu Technologies",
         redirectUris: [
             "https://chefu.co.za/auth/callback",
             "https://myaccount.chefu.co.za/auth/callback",
@@ -108,7 +108,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
     {
         id: "chefu-academy-web",
         appId: "academy",
-        name: "CHEFU Academy",
+        name: "Chefu Academy",
         redirectUris: ["https://academy.chefu.co.za/auth/callback"],
         scopes: [
             "openid",
@@ -122,7 +122,7 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
     {
         id: "chefu-academy-mobile",
         appId: "academy",
-        name: "CHEFU Academy Mobile",
+        name: "Chefu Academy Mobile",
         redirectUris: ["chefu-academy://auth/sso"],
         scopes: [
             "openid",
@@ -136,14 +136,14 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
     {
         id: "chefu-admin-web",
         appId: "admin",
-        name: "CHEFU Admin",
+        name: "Chefu Admin",
         redirectUris: ["https://internal.chefu.co.za/auth/callback"],
         scopes: ["openid", "profile", "email", "admin:manage"],
     },
     {
         id: "chefu-merchant-web",
         appId: "merchant",
-        name: "CHEFU Merchant",
+        name: "Chefu Merchant",
         redirectUris: ["https://merchant.chefu.co.za/auth/callback"],
         scopes: ["openid", "profile", "email", "admin:manage"],
     },

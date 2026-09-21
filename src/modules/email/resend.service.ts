@@ -354,7 +354,7 @@ export class ResendService {
         return {
             from: this.fromAddress,
             to: [data.email],
-            subject: 'Security alert: CHEFU Academy API key revoked',
+            subject: 'Security alert: Chefu Academy API key revoked',
             template: {
                 id: this.apiKeyCompromisedTemplateId,
                 variables: {
@@ -417,8 +417,8 @@ export class ResendService {
 
         const normalized = appId.trim().toLowerCase();
         const labels: Record<string, string> = {
-            academy: 'CHEFU Academy',
-            admin: 'CHEFU Admin',
+            academy: 'Chefu Academy',
+            admin: 'Chefu Admin',
             flow: 'Flow Mail',
             muzalo: 'Muzalo',
             quantum: 'Quantum',

@@ -971,7 +971,7 @@ export class FlowService implements OnModuleDestroy {
         email: payload.testEmail,
         firstName: 'Test',
         lastName: 'Recipient',
-        company: 'CHEFU Technologies',
+        company: 'Chefu Technologies',
         tags: ['test'],
       });
     }
@@ -1157,7 +1157,7 @@ export class FlowService implements OnModuleDestroy {
   ) {
     return {
       audienceName: payload.audienceName,
-      company: recipient.company || 'CHEFU Technologies',
+      company: recipient.company || 'Chefu Technologies',
       email: recipient.email,
       firstName: recipient.firstName || recipient.email.split('@')[0],
       lastName: recipient.lastName || '',
@@ -1454,7 +1454,7 @@ export class FlowService implements OnModuleDestroy {
         return {
           email: value,
           label: this.senderLabel(value),
-          name: name !== 'CHEFU Technologies' ? name : undefined,
+          name: name !== 'Chefu Technologies' ? name : undefined,
           source: 'env' as const,
         };
       });
@@ -1567,7 +1567,7 @@ export class FlowService implements OnModuleDestroy {
     const match = sender.match(/^(.+?)\s*<(.+?)>$/);
     if (match?.[1]) return match[1].replace(/^"|"$/g, '').trim();
 
-    return this.emailAddress(sender).split('@')[0] || 'CHEFU Technologies';
+    return this.emailAddress(sender).split('@')[0] || 'Chefu Technologies';
   }
 
   private recipientDisplayName(recipient: FlowRecipient) {

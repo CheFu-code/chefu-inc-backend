@@ -149,7 +149,7 @@ export function renderFlowEmailShell({
     const safeAudience = audienceName ? escapeHtml(audienceName) : '';
     const safeBrand = escapeHtml(brandName);
     const safeRecipient = recipientName ? escapeHtml(recipientName) : 'there';
-    const safeSender = senderName ? escapeHtml(senderName) : 'CHEFU Technologies';
+    const safeSender = senderName ? escapeHtml(senderName) : 'Chefu Technologies';
     const safeTitle = escapeHtml(title);
 
     return `<!doctype html>
