@@ -24,6 +24,11 @@ import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { SESSION_COOKIE_NAME } from '../auth/session.constants';
 import { FLOW_ACCESS_DENIED_MESSAGE } from './flow-access';
 import {
+  CreateFlowAccessKeyDto,
+  FlowAccessBodyDto,
+  FlowAllowedEmailDto,
+} from './flow.dto';
+import {
   FlowAccessKeyService,
   FlowAccessPermission,
 } from './flow-access-key.service';
@@ -50,7 +55,7 @@ export class FlowController {
 
   @Post('access/login')
   async accessLogin(
-    @Body() body: { accessKey?: string; code?: string },
+    @Body() body: FlowAccessBodyDto,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
@@ -63,7 +68,7 @@ export class FlowController {
 
   @Post('access/activate')
   async accessActivate(
-    @Body() body: { accessKey?: string; code?: string },
+    @Body() body: FlowAccessBodyDto,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
@@ -83,7 +88,7 @@ export class FlowController {
   @Post('admin/access-keys')
   @UseGuards(AuthGuard, AdminGuard)
   async createAccessKey(
-    @Body() body: { expiresAt?: string; label?: string; permission?: string },
+    @Body() body: CreateFlowAccessKeyDto,
     @Req() request: Request & { user?: AuthenticatedUser },
   ) {
     return this.flowAccessKeys.createKey(body, request.user);
@@ -111,7 +116,7 @@ export class FlowController {
 
   @Post('allowed-emails')
   async createAllowedEmail(
-    @Body() body: { email?: string; name?: string },
+    @Body() body: FlowAllowedEmailDto,
     @Headers('x-flow-api-key') flowApiKey?: string,
     @Req() request?: Request & { user?: AuthenticatedUser },
   ) {
@@ -149,7 +154,7 @@ export class FlowController {
   @Post('admin/allowed-emails')
   @UseGuards(AuthGuard, AdminGuard)
   async addAllowedEmail(
-    @Body() body: { email?: string; name?: string },
+    @Body() body: FlowAllowedEmailDto,
     @Req() request: Request & { user?: AuthenticatedUser },
   ) {
     return this.flowService.addAllowedEmail(

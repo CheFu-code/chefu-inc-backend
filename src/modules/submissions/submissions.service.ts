@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { FieldValue } from 'firebase-admin/firestore';
 import { randomUUID } from 'node:crypto';
+import isEmail from 'validator/lib/isEmail';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 
@@ -106,7 +107,7 @@ export class SubmissionsService {
 
   private requiredString(value: unknown, label: string, max: number) { const result = this.string(value, max); if (!result) throw new BadRequestException(`${label} is required.`); return result; }
   private string(value: unknown, max: number) { const result = typeof value === 'string' ? value.trim() : ''; if (result.length > max) throw new BadRequestException('A submitted field is too long.'); return result; }
-  private email(value: unknown) { const result = this.string(value, 254).toLowerCase(); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(result)) throw new BadRequestException('A valid email is required.'); return result; }
+  private email(value: unknown) { const result = this.string(value, 254).toLowerCase(); if (!isEmail(result)) throw new BadRequestException('A valid email is required.'); return result; }
   private url(value: unknown) { const result = this.string(value, 500); if (!result) return ''; try { const parsed = new URL(result); if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error(); return parsed.toString(); } catch { throw new BadRequestException('Links must be valid HTTP or HTTPS URLs.'); } }
   private safeFileName(value: unknown) { const result = this.string(value, 160).replace(/[^a-zA-Z0-9._-]/g, '_'); return result && !result.startsWith('.') ? result : ''; }
 }

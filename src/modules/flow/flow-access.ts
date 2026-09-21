@@ -1,3 +1,5 @@
+import isEmail from 'validator/lib/isEmail';
+
 export const FLOW_SESSION_HEADER = 'x-flow-session';
 export const FLOW_ACCESS_DENIED_MESSAGE =
     'This account is not approved for Flow Mail. Please sign in with an authorized sender account to continue.';
@@ -48,7 +50,7 @@ export function normalizeEmailAddress(value: string) {
     const match = value.match(/<([^>]+)>/);
     const email = (match?.[1] || value).trim().toLowerCase();
 
-    return /^\S+@\S+\.\S+$/.test(email) ? email : '';
+    return isEmail(email) ? email : '';
 }
 
 export function formatSenderIdentity(email: string, name?: string | null): string {

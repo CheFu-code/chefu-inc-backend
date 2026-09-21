@@ -1,3 +1,4 @@
+import { encode } from 'he';
 import sanitizeHtml from 'sanitize-html';
 
 export function applyVariables(
@@ -226,15 +227,7 @@ function chunkTemplateValue(value: string, chunkCount: number) {
 }
 
 function escapeHtml(value: string) {
-    const map: Record<string, string> = {
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#039;',
-    };
-
-    return value.replace(/[&<>"']/g, char => map[char]);
+    return encode(value);
 }
 
 function escapeAttribute(value: string) {

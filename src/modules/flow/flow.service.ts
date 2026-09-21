@@ -9,6 +9,7 @@ import {
 import { FieldValue } from 'firebase-admin/firestore';
 import { createHash, randomUUID } from 'node:crypto';
 import sanitizeHtml from 'sanitize-html';
+import isEmail from 'validator/lib/isEmail';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
   applyVariables,
@@ -722,7 +723,7 @@ export class FlowService implements OnModuleDestroy {
       config.defaultFrom ||
       'Flow Mail <mail@chefu.co.za>';
     const to = this.normalizeAddressList(payload.to).filter(address =>
-      /^\S+@\S+\.\S+$/.test(this.emailAddress(address) || address),
+      isEmail(this.emailAddress(address) || address),
     );
 
     if (!body && subject === '(no subject)' && !to.length) {
@@ -943,7 +944,7 @@ export class FlowService implements OnModuleDestroy {
     const action = payload.action || 'test';
     const recipients = Array.isArray(payload.recipients)
       ? payload.recipients.filter(recipient =>
-        /^\S+@\S+\.\S+$/.test(String(recipient.email || '')),
+        isEmail(String(recipient.email || '').trim()),
       )
       : [];
     const attachments = this.normalizeSendAttachments(payload.attachments);

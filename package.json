@@ -40,6 +40,7 @@
     "cloudinary": "^2.10.0",
     "cookie-parser": "^1.4.7",
     "firebase-admin": "^13.6.0",
+    "he": "^1.2.0",
     "ioredis": "^6.0.0",
     "lru-cache": "^11.5.2",
     "multer": "^2.4.0",
@@ -49,9 +50,11 @@
     "rxjs": "^7.8.2",
     "sanitize-html": "^2.17.7",
     "svix": "^1.94.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "validator": "^13.15.35"
   },
   "devDependencies": {
+    "@types/he": "^1.2.3",
     "@types/lru-cache": "^7.10.9",
     "@types/node": "^20.19.43",
     "@types/sanitize-html": "^2.16.1",
