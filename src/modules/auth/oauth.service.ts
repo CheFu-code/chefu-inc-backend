@@ -113,6 +113,7 @@ type TokenPayload = {
   client_assertion?: string;
   client_assertion_type?: string;
   client_id?: string;
+  client_secret?: string;
   code?: string;
   code_verifier?: string;
   grant_type?: string;
@@ -467,6 +468,22 @@ export class OAuthService {
     const client = this.appsService.resolveOauthClient(body.client_id);
     if (!client) {
       throw new BadRequestException('Unknown OAuth client.');
+    }
+
+    const appRecord = await this.appsService.getAppRecord(body.client_id);
+    if (appRecord?.client_type === 'confidential') {
+      if (!body.client_secret) {
+        throw new UnauthorizedException('Client secret is required for this confidential client.');
+      }
+
+      const isValidClientSecret = await this.appsService.verifyClientSecret(
+        body.client_id,
+        body.client_secret,
+      );
+
+      if (!isValidClientSecret) {
+        throw new UnauthorizedException('Invalid client secret.');
+      }
     }
 
     const dpopProof = await this.verifyTokenEndpointDpopProof(request, dpop);
