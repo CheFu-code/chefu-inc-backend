@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { FieldValue } from 'firebase-admin/firestore';
 import { createHash, randomUUID } from 'node:crypto';
+import sanitizeHtml from 'sanitize-html';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
   applyVariables,
@@ -1934,7 +1935,7 @@ export class FlowService implements OnModuleDestroy {
       openCount: Number(data.openCount) || 0,
       openedAt:
         typeof data.openedAt === 'string' ? data.openedAt : undefined,
-      preview: String(data.preview || ''),
+      preview: this.previewFromText(String(data.preview || '')),
       reactionCount: isReactionMessage
         ? Number(data.reactionCount) || 1
         : undefined,
@@ -2278,7 +2279,12 @@ export class FlowService implements OnModuleDestroy {
   }
 
   private previewFromText(value: string) {
-    return value.replace(/\s+/g, ' ').trim().slice(0, 180);
+    return this.stripHtml(value)
+      .replace(/(?:^|\s)[^{}]{0,240}\{[^{}]*\}/g, ' ')
+      .replace(/https?:\/\/\S+/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 180);
   }
 
   private async enrichInboundPayload(payload: unknown) {
@@ -2366,7 +2372,11 @@ export class FlowService implements OnModuleDestroy {
   }
 
   private stripHtml(value: string) {
-    return value.replace(/<[^>]+>/g, ' ');
+    return sanitizeHtml(value, {
+      allowedTags: [],
+      allowedAttributes: {},
+      disallowedTagsMode: 'discard',
+    });
   }
 
   private timestampToIso(value: unknown) {
