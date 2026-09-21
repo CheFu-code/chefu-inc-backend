@@ -16,6 +16,7 @@ import { InfinityModule } from './modules/infinity/infinity.module';
 import { HealthController } from './modules/health/health.controller';
 import { LogixModule } from './modules/logix/logix.module';
 import { MuzaloModule } from './modules/muzalo/muzalo.module';
+import { NookMessagingModule } from './modules/nook-messaging/nook-messaging.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { QuantumModule } from './modules/quantum/quantum.module';
 import { ProductsModule } from './modules/products/products.module';
@@ -46,6 +47,7 @@ const productModules = [
   InfinityModule,
   LogixModule,
   MuzaloModule,
+  NookMessagingModule,
   QuantumModule,
   ProductsModule,
   SubmissionsModule,

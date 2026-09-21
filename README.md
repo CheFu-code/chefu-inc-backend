@@ -108,6 +108,7 @@ On the frontend host, set:
 - `POST /api/keys/report-leak`
 - `GET /auth/me`
 - `DELETE /auth/session`
+- `POST /nook/messages/:conversationId/messages`
 - `POST /ai/generate`
 - `POST /email/password-changed`
 - `GET /flow/access/session`
