@@ -5,7 +5,10 @@ export type CloudenceFileDocument = {
   name: string;
   type: CloudenceFileType;
   extension: string;
+  /** Raw Cloudinary delivery URL (stored at upload time). */
   url: string;
+  /** Pre-computed signed delivery URL cached in Firestore (avoids HMAC on every list). */
+  signedUrl?: string;
   size: number;
   ownerId: string;
   owner: {
@@ -25,10 +28,10 @@ export type CloudenceFileDocument = {
   shareExpiresAt?: string;
 };
 
+/** Kept for backward-compat; dataBase64 is no longer used — upload now accepts multipart via multer. */
 export type UploadCloudenceFileInput = {
   name?: string;
   contentType?: string;
-  dataBase64?: string;
 };
 
 export type UpdateCloudenceFileInput = {

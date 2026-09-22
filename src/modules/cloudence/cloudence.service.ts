@@ -58,7 +58,12 @@ export class CloudenceService {
     });
   }
 
-  async upload(user: AuthenticatedUser, input: UploadCloudenceFileInput) {
+  /**
+   * Upload a file from a raw binary buffer (received via multipart/form-data through multer).
+   * All existing security checks (magic bytes, DLP, SVG sanitisation, EXIF strip,
+   * SHA-256, quota) run on the buffer directly — no base64 decode needed.
+   */
+  async upload(user: AuthenticatedUser, rawBuffer: Buffer, rawName: string, rawContentType: string) {
     assertCloudinaryConfigured();
 
     // Rate limit: max 15 uploads per minute per user
@@ -72,21 +77,17 @@ export class CloudenceService {
       throw new BadRequestException('Upload rate limit reached. Please wait a minute before uploading more files.');
     }
 
-    const rawName = String(input?.name || '').trim();
-    const name = this.sanitizeFileName(rawName);
-    const contentType = String(input?.contentType || 'application/octet-stream').toLowerCase();
-    const rawBase64 = String(input?.dataBase64 || '');
-    const base64 = rawBase64.replace(/^data:[^;]+;base64,/, '');
+    const name = this.sanitizeFileName(String(rawName || '').trim());
+    const contentType = String(rawContentType || 'application/octet-stream').toLowerCase();
 
-    if (!name || !base64 || !/^[A-Za-z0-9+/=\r\n]+$/.test(base64)) {
-      throw new BadRequestException('A valid file is required.');
-    }
+    if (!name) throw new BadRequestException('A valid file name is required.');
+    if (!rawBuffer || rawBuffer.length === 0) throw new BadRequestException('A valid file is required.');
 
     this.assertSafeExtension(name);
 
-    let buffer: Buffer<ArrayBufferLike> = Buffer.from(base64, 'base64');
+    let buffer: Buffer<ArrayBufferLike> = rawBuffer as Buffer<ArrayBufferLike>;
     const { maxBytes, label } = this.getMaxBytesForType(name, contentType);
-    if (!buffer.length || buffer.length > maxBytes) {
+    if (buffer.length > maxBytes) {
       throw new BadRequestException(`File size exceeds allowed limit (${label}).`);
     }
 
@@ -128,23 +129,25 @@ export class CloudenceService {
 
     const now = new Date().toISOString();
     const id = `cloudence_${randomUUID()}`;
-    const document: CloudenceFileDocument = {
-      id,
-      name,
-      type,
-      extension,
+
+    // Pre-compute and cache the signed delivery URL once at upload time so that
+    // list() can return it from Firestore without running N×HMAC-SHA1 per request.
+    const partialDoc = {
+      id, name, type, extension,
       url: result.secure_url,
       size: buffer.length,
       ownerId: user.uid,
       owner: { id: user.uid, fullName: user.email.split('@')[0], email: user.email },
-      users: [],
+      users: [] as string[],
       publicId: result.public_id,
       resourceType: result.resource_type || 'raw',
-      createdAt: now,
-      updatedAt: now,
+      createdAt: now, updatedAt: now,
       isDeleted: false,
       sha256,
     };
+    const signedUrl = this.signUrl(partialDoc);
+
+    const document: CloudenceFileDocument = { ...partialDoc, signedUrl };
 
     await this.firebaseAdmin.db().collection(COLLECTION).doc(id).set(document);
 
@@ -687,7 +690,12 @@ export class CloudenceService {
     }
   }
 
-  private signUrl(file: Pick<CloudenceFileDocument, 'publicId' | 'resourceType' | 'extension' | 'url'>): string {
+  private signUrl(file: Pick<CloudenceFileDocument, 'publicId' | 'resourceType' | 'extension' | 'url' | 'signedUrl'>): string {
+    // Fast path: return the pre-computed signed URL cached in Firestore at upload time.
+    // This avoids running HMAC-SHA1 for every file in every list() call (was N×CPU per request).
+    if ((file as CloudenceFileDocument).signedUrl) {
+      return (file as CloudenceFileDocument).signedUrl!;
+    }
     if (!file.publicId) return file.url;
     try {
       return cloudinary.url(file.publicId, {

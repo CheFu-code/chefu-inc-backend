@@ -11,12 +11,17 @@ import {
   Res,
   UnauthorizedException,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { Request, Response } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { CloudenceService } from './cloudence.service';
-import { UpdateCloudenceFileInput, UploadCloudenceFileInput } from './cloudence.types';
+import { UpdateCloudenceFileInput } from './cloudence.types';
 
 type RequestWithUser = Request & { user?: AuthenticatedUser };
 
@@ -25,9 +30,29 @@ type RequestWithUser = Request & { user?: AuthenticatedUser };
 export class CloudenceController {
   constructor(private readonly cloudence: CloudenceService) {}
 
+  /**
+   * Accepts multipart/form-data with a field named "file".
+   * Using memoryStorage so the buffer is available directly without disk I/O.
+   * All security checks (magic bytes, DLP, EXIF strip, quota) run in the service
+   * on the raw Buffer — no base64 overhead at any stage.
+   */
   @Post()
-  upload(@Req() request: RequestWithUser, @Body() body: UploadCloudenceFileInput) {
-    return this.cloudence.upload(this.requireUser(request), body);
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 55 * 1024 * 1024 }, // 55 MB hard cap (service enforces per-type limits)
+    }),
+  )
+  upload(
+    @Req() request: RequestWithUser,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('name') nameOverride?: string,
+  ) {
+    if (!file?.buffer || file.buffer.length === 0) {
+      throw new BadRequestException('No file received. Send a multipart/form-data request with a "file" field.');
+    }
+    const name = nameOverride || file.originalname || 'unnamed';
+    return this.cloudence.upload(this.requireUser(request), file.buffer, name, file.mimetype);
   }
 
   @Get()
@@ -82,3 +107,4 @@ export class CloudenceController {
     return request.user;
   }
 }
+
