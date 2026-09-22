@@ -84,8 +84,9 @@ export class CloudenceService {
     this.assertSafeExtension(name);
 
     let buffer: Buffer<ArrayBufferLike> = Buffer.from(base64, 'base64');
-    if (!buffer.length || buffer.length > MAX_FILE_BYTES) {
-      throw new BadRequestException('Files must be between 1 byte and 50 MB.');
+    const { maxBytes, label } = this.getMaxBytesForType(name, contentType);
+    if (!buffer.length || buffer.length > maxBytes) {
+      throw new BadRequestException(`File size exceeds allowed limit (${label}).`);
     }
 
     // Inspect file content magic bytes to detect disguised executables/scripts
@@ -119,6 +120,7 @@ export class CloudenceService {
       public_id: `chefu/cloudence/${user.uid}/${randomUUID()}`,
       resource_type: 'auto',
       overwrite: false,
+      flags: 'strip_profile', // Strip EXIF GPS coordinates and camera metadata for physical privacy
       tags: ['chefu', 'cloudence', type, user.email],
       context: { original_name: name, content_type: contentType, sha256 },
     });
@@ -158,7 +160,8 @@ export class CloudenceService {
 
   async list(user: AuthenticatedUser, input: { type?: string; search?: string; sort?: string; limit?: number }) {
     const collection = this.firebaseAdmin.db().collection(COLLECTION);
-    const search = String(input?.search || '').trim().toLowerCase();
+    const rawSearch = String(input?.search || '').slice(0, 100);
+    const search = rawSearch.replace(/[\x00-\x1F\x7F]/g, '').trim().toLowerCase();
     const type = String(input?.type || '').trim();
     const limit = Math.min(Math.max(Number(input?.limit || 100), 1), 100);
     const { field, direction } = this.resolveSort(input?.sort);
@@ -677,6 +680,26 @@ export class CloudenceService {
 
   private extension(name: string) {
     return name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+  }
+
+  private getMaxBytesForType(name: string, contentType: string): { maxBytes: number; label: string } {
+    const ext = this.extension(name);
+    if (ext === 'svg' || contentType.includes('svg')) {
+      return { maxBytes: 5 * 1024 * 1024, label: '5 MB for vector SVG files' };
+    }
+    if (
+      contentType.startsWith('text/') ||
+      ['txt', 'json', 'xml', 'yaml', 'yml', 'md', 'csv', 'log', 'env', 'conf'].includes(ext)
+    ) {
+      return { maxBytes: 10 * 1024 * 1024, label: '10 MB for text and data documents' };
+    }
+    if (contentType.startsWith('image/') || ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) {
+      return { maxBytes: 20 * 1024 * 1024, label: '20 MB for image files' };
+    }
+    if (contentType.includes('pdf') || ext === 'pdf' || ['docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt'].includes(ext)) {
+      return { maxBytes: 25 * 1024 * 1024, label: '25 MB for PDF and office documents' };
+    }
+    return { maxBytes: 50 * 1024 * 1024, label: '50 MB for media files' };
   }
 
   private uploadBuffer(buffer: Buffer<ArrayBufferLike>, options: UploadApiOptions): Promise<{ secure_url: string; public_id: string; resource_type?: string }> {
