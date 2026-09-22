@@ -1,7 +1,7 @@
 import "./instrument";
 import { NestFactory } from "@nestjs/core";
 import cookieParser from "cookie-parser";
-import * as compression from "compression";
+import compression from "compression";
 import { AppModule } from "./app.module";
 import { Logger } from "@nestjs/common";
 import { NestExpressApplication } from "@nestjs/platform-express";
