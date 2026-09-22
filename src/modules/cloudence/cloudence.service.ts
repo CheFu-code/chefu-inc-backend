@@ -23,6 +23,7 @@ import {
 
 const COLLECTION = 'cloudenceFiles';
 const AUDIT_COLLECTION = 'cloudence_audit_logs';
+const QUOTA_COLLECTION = 'cloudence_quotas';
 const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB per file
 const MAX_STORAGE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB quota per user
 const MAX_SHARE_RECIPIENTS = 25; // Anti-phishing / anti-spam share cap
@@ -147,6 +148,9 @@ export class CloudenceService {
 
     await this.firebaseAdmin.db().collection(COLLECTION).doc(id).set(document);
 
+    // Atomically increment user quota cache
+    await this.updateQuotaOnUpload(user.uid, type, buffer.length, now);
+
     await this.logAudit(user, 'file.uploaded', id, {
       name,
       size: buffer.length,
@@ -158,37 +162,54 @@ export class CloudenceService {
     return this.sanitizeFileForUser(document, user);
   }
 
-  async list(user: AuthenticatedUser, input: { type?: string; search?: string; sort?: string; limit?: number }) {
+  async list(user: AuthenticatedUser, input: { type?: string; types?: string; search?: string; sort?: string; limit?: number }) {
     const collection = this.firebaseAdmin.db().collection(COLLECTION);
     const rawSearch = String(input?.search || '').slice(0, 100);
     const search = rawSearch.replace(/[\x00-\x1F\x7F]/g, '').trim().toLowerCase();
     const type = String(input?.type || '').trim();
+    const typesInput = String(input?.types || '').trim();
+    const targetTypes = typesInput
+      ? typesInput.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
+      : (type && type !== 'all' ? [type.toLowerCase()] : []);
+
     const limit = Math.min(Math.max(Number(input?.limit || 100), 1), 100);
     const { field, direction } = this.resolveSort(input?.sort);
+
+    // Fetch batch with limit * 2 (capped at 200) to ensure soft-deleted or non-matching records do not starve results
+    const fetchLimit = Math.min(limit * 2, 200);
+
     const [ownedSnapshot, sharedSnapshot] = await Promise.all([
-      collection.where('ownerId', '==', user.uid).orderBy(field, direction).limit(limit).get(),
-      collection.where('users', 'array-contains', user.email).orderBy(field, direction).limit(limit).get(),
+      collection.where('ownerId', '==', user.uid).orderBy(field, direction).limit(fetchLimit).get(),
+      collection.where('users', 'array-contains', user.email).orderBy(field, direction).limit(fetchLimit).get(),
     ]);
 
     const now = new Date();
-    const documents = [...ownedSnapshot.docs, ...sharedSnapshot.docs]
-      .map((doc) => doc.data() as CloudenceFileDocument)
-      .filter((file, index, files) => files.findIndex((candidate) => candidate.id === file.id) === index)
-      .filter((file) => {
-        if (file.isDeleted) return false;
-        // Non-owners cannot see file if the share expiration has passed
-        if (file.ownerId !== user.uid && file.shareExpiresAt) {
-          return new Date(file.shareExpiresAt) > now;
-        }
-        return true;
-      })
-      .filter((file) => !type || type === 'all' || file.type === type)
-      .filter((file) => !search || file.name.toLowerCase().includes(search))
-      .sort((left, right) => this.compareFiles(left, right, field, direction))
-      .slice(0, limit)
-      .map((file) => this.sanitizeFileForUser(file, user));
+    // O(N) deduplication using Map instead of O(N^2) findIndex
+    const uniqueFiles = new Map<string, CloudenceFileDocument>();
+    for (const doc of [...ownedSnapshot.docs, ...sharedSnapshot.docs]) {
+      const data = doc.data() as CloudenceFileDocument;
+      if (!uniqueFiles.has(data.id)) {
+        uniqueFiles.set(data.id, data);
+      }
+    }
 
-    return { total: documents.length, documents };
+    const documents: CloudenceFileDocument[] = [];
+    for (const file of uniqueFiles.values()) {
+      if (file.isDeleted) continue;
+      // Non-owners cannot see file if the share expiration has passed
+      if (file.ownerId !== user.uid && file.shareExpiresAt) {
+        if (new Date(file.shareExpiresAt) <= now) continue;
+      }
+      if (targetTypes.length && !targetTypes.includes(file.type)) continue;
+      if (search && !file.name.toLowerCase().includes(search)) continue;
+      documents.push(file);
+    }
+
+    // Sort according to requested sort order
+    documents.sort((left, right) => this.compareFiles(left, right, field, direction));
+    const sliced = documents.slice(0, limit).map((file) => this.sanitizeFileForUser(file, user));
+
+    return { total: sliced.length, documents: sliced };
   }
 
   private resolveSort(value?: string): { field: 'createdAt' | 'name' | 'size'; direction: 'asc' | 'desc' } {
@@ -308,6 +329,9 @@ export class CloudenceService {
     };
     await ref.set(updated);
 
+    // Atomically decrement quota for the file owner
+    await this.updateQuotaOnDelete(file!.ownerId, file!.type, file!.size);
+
     await this.logAudit(user, 'file.deleted', id, {
       name: file!.name,
       size: file!.size,
@@ -319,7 +343,25 @@ export class CloudenceService {
   }
 
   async usage(user: AuthenticatedUser) {
-    // Only query owned files so shared files don't consume user's quota.
+    const quotaRef = this.firebaseAdmin.db().collection(QUOTA_COLLECTION).doc(user.uid);
+    const quotaSnap = await quotaRef.get();
+
+    if (quotaSnap.exists) {
+      const data = quotaSnap.data() || {};
+      if (data.image && data.document && data.video && data.audio && data.other) {
+        return {
+          image: data.image,
+          document: data.document,
+          video: data.video,
+          audio: data.audio,
+          other: data.other,
+          used: Number(data.used) || 0,
+          all: MAX_STORAGE_BYTES,
+        };
+      }
+    }
+
+    // Cold cache fallback: compute once, cache in Firestore, and return
     const snapshot = await this.firebaseAdmin.db().collection(COLLECTION)
       .where('ownerId', '==', user.uid)
       .select('type', 'size', 'updatedAt', 'isDeleted')
@@ -352,23 +394,81 @@ export class CloudenceService {
       totalSpace.used += size;
     }
 
+    // Cache the aggregated summary in Firestore for O(1) subsequent loads
+    await quotaRef.set({
+      image: totalSpace.image,
+      document: totalSpace.document,
+      video: totalSpace.video,
+      audio: totalSpace.audio,
+      other: totalSpace.other,
+      used: totalSpace.used,
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
+
     return totalSpace;
   }
 
   async getOwnedStorageBytes(userId: string): Promise<number> {
     try {
+      const quotaRef = this.firebaseAdmin.db().collection(QUOTA_COLLECTION).doc(userId);
+      const quotaSnap = await quotaRef.get();
+      if (quotaSnap.exists) {
+        return Number(quotaSnap.data()?.used) || 0;
+      }
       const snapshot = await this.firebaseAdmin.db().collection(COLLECTION)
         .where('ownerId', '==', userId)
         .select('size', 'isDeleted')
         .get();
-      return snapshot.docs.reduce((acc, doc) => {
+      const used = snapshot.docs.reduce((acc, doc) => {
         const data = doc.data();
         if (data.isDeleted) return acc;
         return acc + (Number(data.size) || 0);
       }, 0);
+      await quotaRef.set({ used, updatedAt: new Date().toISOString() }, { merge: true });
+      return used;
     } catch (error) {
       this.logger.warn(`Storage bytes query failed: ${error instanceof Error ? error.message : error}`);
       return 0;
+    }
+  }
+
+  private async updateQuotaOnUpload(userId: string, type: CloudenceFileType, size: number, date: string) {
+    try {
+      const quotaRef = this.firebaseAdmin.db().collection(QUOTA_COLLECTION).doc(userId);
+      const snap = await quotaRef.get();
+      if (!snap.exists) return;
+      const data = snap.data() || {};
+      const typeData = data[type] || { size: 0, latestDate: '' };
+      await quotaRef.set({
+        used: (Number(data.used) || 0) + size,
+        [type]: {
+          size: (Number(typeData.size) || 0) + size,
+          latestDate: !typeData.latestDate || date > typeData.latestDate ? date : typeData.latestDate,
+        },
+        updatedAt: new Date().toISOString(),
+      }, { merge: true });
+    } catch (error) {
+      this.logger.warn(`Failed to update quota on upload: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+
+  private async updateQuotaOnDelete(userId: string, type: CloudenceFileType, size: number) {
+    try {
+      const quotaRef = this.firebaseAdmin.db().collection(QUOTA_COLLECTION).doc(userId);
+      const snap = await quotaRef.get();
+      if (!snap.exists) return;
+      const data = snap.data() || {};
+      const typeData = data[type] || { size: 0, latestDate: '' };
+      await quotaRef.set({
+        used: Math.max(0, (Number(data.used) || 0) - size),
+        [type]: {
+          size: Math.max(0, (Number(typeData.size) || 0) - size),
+          latestDate: typeData.latestDate || '',
+        },
+        updatedAt: new Date().toISOString(),
+      }, { merge: true });
+    } catch (error) {
+      this.logger.warn(`Failed to update quota on delete: ${error instanceof Error ? error.message : error}`);
     }
   }
 

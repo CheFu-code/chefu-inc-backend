@@ -34,12 +34,14 @@ export class CloudenceController {
   list(
     @Req() request: RequestWithUser,
     @Query('type') type?: string,
+    @Query('types') types?: string,
     @Query('search') search?: string,
     @Query('sort') sort?: string,
     @Query('limit') limit?: string,
   ) {
     return this.cloudence.list(this.requireUser(request), {
       type,
+      types,
       search,
       sort,
       limit: limit ? Number(limit) : undefined,
