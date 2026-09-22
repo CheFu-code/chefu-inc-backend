@@ -7,7 +7,6 @@ export type ChefuAppId =
     | "muzalo"
     | "quantum"
     | "infinity"
-    | "drippybanks"
     | "logix"
     | "logix-dash"
     | "merchant"
@@ -127,11 +126,6 @@ export const CHEFU_APPS: ChefuApp[] = [
         origins: ["https://dashboard.logix.chefu.co.za"],
     },
     {
-        id: "drippybanks",
-        name: "Drippy Banks",
-        origins: ["https://drippybanks.chefu.co.za"],
-    },
-    {
         id: "merchant",
         name: "Merchant",
         origins: ["https://merchant.chefu.co.za"],
@@ -240,16 +234,6 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         appId: "infinity",
         name: "Infinity Web",
         redirectUris: ["https://infinity.chefu.co.za/auth/callback"],
-        scopes: ["openid", "profile", "email"],
-    },
-    {
-        id: "drippybanks-web",
-        appId: "drippybanks",
-        name: "Drippy Banks",
-        redirectUris: [
-            "https://drippybanks.chefu.co.za/auth/callback",
-            "https://myaccount.chefu.co.za/auth/callback",
-        ],
         scopes: ["openid", "profile", "email"],
     },
     {

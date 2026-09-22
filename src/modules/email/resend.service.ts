@@ -29,14 +29,6 @@ export interface ApiKeyCompromisedNotificationData {
     timestamp: Date;
 }
 
-export interface WelcomePromoNotificationData {
-    email: string;
-    userName?: string;
-    promoCode: string;
-    discountPercent: number;
-    expiryDate: Date;
-    appId?: string;
-}
 
 export interface PasskeyAddedNotificationData {
     email: string;
@@ -70,9 +62,6 @@ export class ResendService {
     private readonly apiKeyCompromisedTemplateId =
         process.env.API_KEY_COMPROMISED_TEMPLATE_ID ||
         'api-key-compromised';
-    private readonly welcomePromoTemplateId =
-        process.env.WELCOME_PROMO_TEMPLATE_ID ||
-        'welcome-promo';
 
     private readonly fromAddress =
         process.env.SIGNIN_ALERT_FROM ||
@@ -203,34 +192,6 @@ export class ResendService {
                 event: 'api_key_compromised_notification_sent',
                 email: data.email,
                 publicId: data.publicId,
-            }),
-        );
-    }
-
-    async sendWelcomePromoNotification(
-        data: WelcomePromoNotificationData,
-    ): Promise<void> {
-        const apiKey = this.getApiKey();
-
-        const response = await fetch(this.RESEND_API_URL, {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(this.getWelcomePromoPayload(data)),
-        });
-
-        if (!response.ok) {
-            const error = await response.text();
-            throw new Error(`Resend request failed: ${response.status} ${error}`);
-        }
-
-        this.logger.log(
-            JSON.stringify({
-                event: 'drippybanks_welcome_promo_sent',
-                email: data.email,
-                promoCode: data.promoCode,
             }),
         );
     }
@@ -381,36 +342,6 @@ export class ResendService {
         };
     }
 
-    private getWelcomePromoPayload(data: WelcomePromoNotificationData) {
-        const userName = data.userName || data.email.split('@')[0] || 'there';
-        const expiryDate = data.expiryDate.toLocaleDateString('en-ZA', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-        });
-        const fromAddress = this.resolveNotificationFromAddress(data.appId);
-
-        return {
-            from: fromAddress,
-            to: [data.email],
-            subject: 'Your Drippy Banks welcome code is here',
-            template: {
-                id: this.welcomePromoTemplateId,
-                variables: {
-                    USER_NAME: userName,
-                    PROMO_CODE: data.promoCode,
-                    DISCOUNT_PERCENT: String(data.discountPercent),
-                    EXPIRY_DATE: expiryDate,
-                    YEAR: new Date().getUTCFullYear().toString(),
-                    userName,
-                    promoCode: data.promoCode,
-                    discountPercent: String(data.discountPercent),
-                    expiryDate,
-                    year: new Date().getUTCFullYear().toString(),
-                },
-            },
-        };
-    }
 
     private resolveAppLabel(appId?: string) {
         if (!appId) return 'CHEFU Account';
@@ -422,7 +353,6 @@ export class ResendService {
             flow: 'Flow Mail',
             muzalo: 'Muzalo',
             quantum: 'Quantum',
-            drippybanks: 'Drippy Banks',
         };
 
         return labels[normalized] || 'CHEFU Account';
