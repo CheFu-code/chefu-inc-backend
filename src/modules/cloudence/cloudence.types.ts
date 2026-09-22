@@ -39,3 +39,24 @@ export type UpdateCloudenceFileInput = {
   users?: string[];
   shareExpiresAt?: string;
 };
+
+/**
+ * Lean response DTO — only public-safe fields sent over HTTPS to the frontend.
+ * Strips sha256, ownerId, publicId, isDeleted, deletedAt, deletedBy, resourceType, signedUrl.
+ * Defense-in-depth: normalizeFile() on the Next.js side also strips, but this prevents
+ * leakage at the API boundary regardless of what the frontend does.
+ */
+export type CloudenceFileResponse = {
+  id: string;
+  name: string;
+  type: CloudenceFileType;
+  extension: string;
+  /** Resolved signed delivery URL — pre-computed at upload, not re-derived per request. */
+  url: string;
+  size: number;
+  owner: { id: string; fullName: string; email: string };
+  users: string[];
+  createdAt: string;
+  updatedAt: string;
+  shareExpiresAt?: string;
+};

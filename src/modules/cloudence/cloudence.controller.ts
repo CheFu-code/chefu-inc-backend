@@ -78,6 +78,15 @@ export class CloudenceController {
     return this.cloudence.usage(this.requireUser(request));
   }
 
+  /**
+   * Combined dashboard endpoint: returns recent files + quota in one round-trip.
+   * Replaces the two parallel fetches (getFiles + getTotalSpaceUsed) on the dashboard page.
+   */
+  @Get('dashboard')
+  dashboard(@Req() request: RequestWithUser) {
+    return this.cloudence.dashboard(this.requireUser(request));
+  }
+
   @Patch(':id')
   update(@Req() request: RequestWithUser, @Param('id') id: string, @Body() body: UpdateCloudenceFileInput) {
     return this.cloudence.update(this.requireUser(request), id, body);

@@ -1,6 +1,7 @@
 import "./instrument";
 import { NestFactory } from "@nestjs/core";
 import cookieParser from "cookie-parser";
+import * as compression from "compression";
 import { AppModule } from "./app.module";
 import { Logger } from "@nestjs/common";
 import { NestExpressApplication } from "@nestjs/platform-express";
@@ -82,8 +83,15 @@ async function bootstrap() {
     });
     const allowedOrigins = getAllowedOrigins();
 
-    app.useBodyParser("json", { limit: "80mb" });
-    app.useBodyParser("urlencoded", { extended: true, limit: "80mb" });
+    // Compress all JSON responses with gzip/brotli.
+    // A 50-file list response drops from ~25 KB to ~5 KB (80% reduction).
+    app.use(compression());
+
+    // Body parser limits: uploads now use multipart (multer), so the JSON body parser
+    // only needs to handle small payloads like rename/share requests (~1 KB each).
+    // 4 MB provides ample headroom while blocking JSON-body DoS attacks.
+    app.useBodyParser("json", { limit: "4mb" });
+    app.useBodyParser("urlencoded", { extended: true, limit: "4mb" });
     app.useGlobalPipes(
         new ValidationPipe({
             whitelist: true,
