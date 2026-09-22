@@ -11,6 +11,7 @@ export type ChefuAppId =
     | "logix"
     | "logix-dash"
     | "merchant"
+    | "cloudence"
     | "root";
 type ChefuAppAlias = "music";
 
@@ -135,6 +136,11 @@ export const CHEFU_APPS: ChefuApp[] = [
         name: "Merchant",
         origins: ["https://merchant.chefu.co.za"],
     },
+    {
+        id: "cloudence",
+        name: "Cloudence",
+        origins: ["https://cloudence.chefu.co.za"],
+    },
 ];
 
 const CHEFU_APP_ALIASES: Record<ChefuAppAlias, ChefuAppId> = {
@@ -244,6 +250,13 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
             "https://drippybanks.chefu.co.za/auth/callback",
             "https://myaccount.chefu.co.za/auth/callback",
         ],
+        scopes: ["openid", "profile", "email"],
+    },
+    {
+        id: "cloudence-web",
+        appId: "cloudence",
+        name: "Cloudence",
+        redirectUris: ["https://cloudence.chefu.co.za/auth/callback"],
         scopes: ["openid", "profile", "email"],
     },
 ];
