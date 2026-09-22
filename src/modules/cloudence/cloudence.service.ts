@@ -83,15 +83,20 @@ export class CloudenceService {
   }
 
   async list(user: AuthenticatedUser, input: { type?: string; search?: string; limit?: number }) {
-    const snapshot = await this.firebaseAdmin.db().collection(COLLECTION).orderBy('updatedAt', 'desc').get();
+    const collection = this.firebaseAdmin.db().collection(COLLECTION);
+    const [ownedSnapshot, sharedSnapshot] = await Promise.all([
+      collection.where('ownerId', '==', user.uid).get(),
+      collection.where('users', 'array-contains', user.email).get(),
+    ]);
     const search = String(input?.search || '').trim().toLowerCase();
     const type = String(input?.type || '').trim();
     const limit = Math.min(Math.max(Number(input?.limit || 100), 1), 100);
-    const documents = snapshot.docs
+    const documents = [...ownedSnapshot.docs, ...sharedSnapshot.docs]
       .map((doc) => doc.data() as CloudenceFileDocument)
-      .filter((file) => file.ownerId === user.uid || file.users.includes(user.email))
+      .filter((file, index, files) => files.findIndex((candidate) => candidate.id === file.id) === index)
       .filter((file) => !type || type === 'all' || file.type === type)
       .filter((file) => !search || file.name.toLowerCase().includes(search))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .slice(0, limit);
 
     return { total: documents.length, documents };
