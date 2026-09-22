@@ -5,7 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { UploadApiOptions, v2 as cloudinary } from 'cloudinary';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -25,6 +25,7 @@ const COLLECTION = 'cloudenceFiles';
 const AUDIT_COLLECTION = 'cloudence_audit_logs';
 const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB per file
 const MAX_STORAGE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB quota per user
+const MAX_SHARE_RECIPIENTS = 25; // Anti-phishing / anti-spam share cap
 const ALLOWED_TYPES = new Set(['document', 'image', 'video', 'audio', 'other']);
 
 // Block executables, scripts, and potential malware vectors
@@ -90,11 +91,17 @@ export class CloudenceService {
     // Inspect file content magic bytes to detect disguised executables/scripts
     this.assertSafeBuffer(buffer, name, contentType);
 
+    // DLP scan: block accidental secret, private key, and cloud credential leaks
+    this.assertNoSecretLeak(buffer, name, contentType);
+
     // Sanitize SVG vector files against stored XSS
     const ext = this.extension(name);
     if (ext === 'svg' || contentType.includes('svg')) {
       buffer = this.sanitizeSvgBuffer(buffer);
     }
+
+    // Compute cryptographic SHA-256 integrity checksum
+    const sha256 = createHash('sha256').update(buffer).digest('hex');
 
     // Enforce 2GB user storage quota before upload
     const currentUsage = await this.getOwnedStorageBytes(user.uid);
@@ -113,7 +120,7 @@ export class CloudenceService {
       resource_type: 'auto',
       overwrite: false,
       tags: ['chefu', 'cloudence', type, user.email],
-      context: { original_name: name, content_type: contentType },
+      context: { original_name: name, content_type: contentType, sha256 },
     });
 
     const now = new Date().toISOString();
@@ -133,6 +140,7 @@ export class CloudenceService {
       createdAt: now,
       updatedAt: now,
       isDeleted: false,
+      sha256,
     };
 
     await this.firebaseAdmin.db().collection(COLLECTION).doc(id).set(document);
@@ -142,6 +150,7 @@ export class CloudenceService {
       size: buffer.length,
       type,
       extension,
+      sha256,
     });
 
     return this.sanitizeFileForUser(document, user);
@@ -157,10 +166,19 @@ export class CloudenceService {
       collection.where('ownerId', '==', user.uid).orderBy(field, direction).limit(limit).get(),
       collection.where('users', 'array-contains', user.email).orderBy(field, direction).limit(limit).get(),
     ]);
+
+    const now = new Date();
     const documents = [...ownedSnapshot.docs, ...sharedSnapshot.docs]
       .map((doc) => doc.data() as CloudenceFileDocument)
       .filter((file, index, files) => files.findIndex((candidate) => candidate.id === file.id) === index)
-      .filter((file) => !file.isDeleted) // Exclude soft-deleted files
+      .filter((file) => {
+        if (file.isDeleted) return false;
+        // Non-owners cannot see file if the share expiration has passed
+        if (file.ownerId !== user.uid && file.shareExpiresAt) {
+          return new Date(file.shareExpiresAt) > now;
+        }
+        return true;
+      })
       .filter((file) => !type || type === 'all' || file.type === type)
       .filter((file) => !search || file.name.toLowerCase().includes(search))
       .sort((left, right) => this.compareFiles(left, right, field, direction))
@@ -211,6 +229,8 @@ export class CloudenceService {
     }
 
     let users = file!.users;
+    let shareExpiresAt = file!.shareExpiresAt;
+
     if (input.users !== undefined) {
       // Rate limit: max 30 share operations per minute per user
       const rateLimit = await this.runtimeLimits.reserve({
@@ -231,9 +251,27 @@ export class CloudenceService {
       }
       // Deduplicate and ensure owner does not add themselves
       users = [...new Set(rawUsers.filter((email) => email !== user.email))];
+
+      // Anti-phishing & anti-spam: limit total shared recipients per file
+      if (users.length > MAX_SHARE_RECIPIENTS) {
+        throw new BadRequestException(`A file can be shared with a maximum of ${MAX_SHARE_RECIPIENTS} users.`);
+      }
     }
 
-    const updated = { ...file!, name, users, updatedAt: new Date().toISOString() };
+    if (input.shareExpiresAt !== undefined) {
+      if (input.shareExpiresAt && isNaN(Date.parse(input.shareExpiresAt))) {
+        throw new BadRequestException('shareExpiresAt must be a valid ISO date string.');
+      }
+      shareExpiresAt = input.shareExpiresAt ? new Date(input.shareExpiresAt).toISOString() : undefined;
+    }
+
+    const updated = {
+      ...file!,
+      name,
+      users,
+      shareExpiresAt,
+      updatedAt: new Date().toISOString(),
+    };
     await ref.set(updated);
 
     if (input.name !== undefined && name !== file!.name) {
@@ -243,6 +281,7 @@ export class CloudenceService {
       await this.logAudit(user, 'file.shared', id, {
         previousUsers: file!.users,
         updatedUsers: users,
+        shareExpiresAt,
       });
     }
 
@@ -330,7 +369,50 @@ export class CloudenceService {
     }
   }
 
-  private assertSafeBuffer(buffer: Buffer, name: string, contentType: string) {
+  async getDownloadUrl(user: AuthenticatedUser, id: string) {
+    const ref = this.firebaseAdmin.db().collection(COLLECTION).doc(id);
+    const snapshot = await ref.get();
+    const file = snapshot.data() as CloudenceFileDocument | undefined;
+
+    if (!file || file.isDeleted) {
+      throw new NotFoundException('File was not found.');
+    }
+
+    const isOwner = file.ownerId === user.uid;
+    const isShared = file.users.includes(user.email);
+
+    if (!isOwner && !isShared) {
+      throw new ForbiddenException('You do not have permission to download this file.');
+    }
+
+    if (!isOwner && file.shareExpiresAt && new Date() > new Date(file.shareExpiresAt)) {
+      throw new ForbiddenException('The sharing link for this file has expired.');
+    }
+
+    await this.logAudit(user, 'file.downloaded' as any, id, {
+      name: file.name,
+      sha256: file.sha256,
+    });
+
+    // Generate a secure, expiring signed delivery URL with attachment header
+    const downloadUrl = cloudinary.url(file.publicId, {
+      sign_url: true,
+      secure: true,
+      resource_type: (file.resourceType as 'image' | 'video' | 'raw') || 'raw',
+      type: 'upload',
+      flags: `attachment:${encodeURIComponent(file.name)}`,
+      ...(file.extension ? { format: file.extension } : {}),
+    });
+
+    return {
+      downloadUrl,
+      name: file.name,
+      sha256: file.sha256,
+      size: file.size,
+    };
+  }
+
+  private assertSafeBuffer(buffer: Buffer<ArrayBufferLike>, name: string, contentType: string) {
     if (buffer.length < 2) return;
 
     // 1. Windows PE / DOS Executables (MZ)
@@ -398,10 +480,56 @@ export class CloudenceService {
       if (gifHeader !== 'GIF8') {
         throw new BadRequestException('Invalid GIF file format. Missing GIF signature.');
       }
+    } else if (['docx', 'xlsx', 'pptx', 'zip'].includes(ext)) {
+      // 7. Microsoft Office & ZIP archive signature check (PK\x03\x04 or PK\x05\x06)
+      if (
+        buffer.length < 4 ||
+        buffer[0] !== 0x50 ||
+        buffer[1] !== 0x4B ||
+        (buffer[2] !== 0x03 && buffer[2] !== 0x05 && buffer[2] !== 0x07)
+      ) {
+        throw new BadRequestException(`Invalid ${ext.toUpperCase()} file format. File is missing the standard PK archive header.`);
+      }
     }
   }
 
-  private sanitizeSvgBuffer(buffer: Buffer): Buffer {
+  private assertNoSecretLeak(buffer: Buffer<ArrayBufferLike>, name: string, contentType: string) {
+    const ext = this.extension(name);
+    const isTextual =
+      contentType.startsWith('text/') ||
+      contentType.includes('json') ||
+      contentType.includes('xml') ||
+      contentType.includes('yaml') ||
+      contentType.includes('javascript') ||
+      ['txt', 'env', 'json', 'yml', 'yaml', 'xml', 'conf', 'config', 'properties', 'ini', 'pem', 'key', 'crt'].includes(ext);
+
+    if (!isTextual) return;
+
+    // Scan first 1MB of text for accidental credential/private key leakage
+    const sample = buffer.subarray(0, Math.min(buffer.length, 1024 * 1024)).toString('utf8');
+
+    // 1. Private SSH/RSA/EC/PGP Keys
+    if (/-----BEGIN[ A-Z0-9_-]*(?:PRIVATE KEY|RSA PRIVATE KEY|OPENSSH PRIVATE KEY|EC PRIVATE KEY)-----/i.test(sample)) {
+      throw new BadRequestException('Security alert: The file contains an unencrypted private key and was blocked by Data Loss Prevention (DLP).');
+    }
+
+    // 2. AWS Access Key IDs
+    if (/\bAKIA[0-9A-Z]{16}\b/.test(sample)) {
+      throw new BadRequestException('Security alert: The file contains AWS Access Key credentials and was blocked by Data Loss Prevention (DLP).');
+    }
+
+    // 3. GitHub Personal Access Tokens
+    if (/\b(?:ghp|gho|ghu|ghs|ghr)_[0-9a-zA-Z]{36}\b/.test(sample)) {
+      throw new BadRequestException('Security alert: The file contains a GitHub Access Token and was blocked by Data Loss Prevention (DLP).');
+    }
+
+    // 4. OpenAI / AI Service Secret Keys
+    if (/\bsk-[a-zA-Z0-9]{20,T3BlbkFJ[a-zA-Z0-9]{20,}\b/.test(sample) || /\bsk-proj-[a-zA-Z0-9_-]{40,}\b/.test(sample)) {
+      throw new BadRequestException('Security alert: The file contains an AI API Secret Key and was blocked by Data Loss Prevention (DLP).');
+    }
+  }
+
+  private sanitizeSvgBuffer(buffer: Buffer<ArrayBufferLike>): Buffer<ArrayBufferLike> {
     const rawSvg = buffer.toString('utf8');
     const cleanSvg = sanitizeHtml(rawSvg, {
       allowedTags: [
@@ -420,13 +548,14 @@ export class CloudenceService {
       },
       disallowedTagsMode: 'discard',
     });
-    return Buffer.from(cleanSvg, 'utf8') as Buffer;
+    return Buffer.from(cleanSvg, 'utf8') as Buffer<ArrayBufferLike>;
   }
 
   private sanitizeFileName(rawName: string): string {
     if (!rawName) return 'unnamed';
     let sanitized = rawName
       .replace(/\0/g, '') // remove null bytes
+      .replace(/[\u202A-\u202E\u2066-\u2069\u200B-\u200D\uFEFF]/g, '') // strip RTLO, directional marks, and zero-width spaces
       .replace(/<[^>]*>/g, '') // strip html tags
       .replace(/\.\.+[/\\]/g, '') // strip path traversal sequences
       .replace(/[/\\]+/g, '_') // sanitize path separators
@@ -492,7 +621,7 @@ export class CloudenceService {
 
   private async logAudit(
     actor: AuthenticatedUser,
-    action: 'file.uploaded' | 'file.renamed' | 'file.shared' | 'file.deleted',
+    action: 'file.uploaded' | 'file.renamed' | 'file.shared' | 'file.deleted' | 'file.downloaded',
     fileId: string,
     details: Record<string, unknown>,
   ) {

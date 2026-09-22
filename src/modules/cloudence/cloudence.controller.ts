@@ -8,10 +8,11 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { CloudenceService } from './cloudence.service';
@@ -53,6 +54,20 @@ export class CloudenceController {
   @Patch(':id')
   update(@Req() request: RequestWithUser, @Param('id') id: string, @Body() body: UpdateCloudenceFileInput) {
     return this.cloudence.update(this.requireUser(request), id, body);
+  }
+
+  @Get(':id/download')
+  async download(
+    @Req() request: RequestWithUser,
+    @Param('id') id: string,
+    @Query('json') json?: string,
+    @Res() res?: Response,
+  ) {
+    const result = await this.cloudence.getDownloadUrl(this.requireUser(request), id);
+    if (json === 'true') {
+      return res?.json(result);
+    }
+    return res?.redirect(result.downloadUrl);
   }
 
   @Delete(':id')

@@ -21,6 +21,8 @@ export type CloudenceFileDocument = {
   isDeleted?: boolean;
   deletedAt?: string;
   deletedBy?: string;
+  sha256?: string;
+  shareExpiresAt?: string;
 };
 
 export type UploadCloudenceFileInput = {
@@ -32,4 +34,5 @@ export type UploadCloudenceFileInput = {
 export type UpdateCloudenceFileInput = {
   name?: string;
   users?: string[];
+  shareExpiresAt?: string;
 };
