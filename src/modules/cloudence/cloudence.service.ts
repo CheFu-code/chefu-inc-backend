@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -132,7 +133,9 @@ export class CloudenceService {
     const ref = this.firebaseAdmin.db().collection(COLLECTION).doc(id);
     const snapshot = await ref.get();
     const file = snapshot.data() as CloudenceFileDocument | undefined;
-    this.assertCanEdit(file, user);
+    // Determine the intent so the error message is meaningful to the caller.
+    const action = input.users !== undefined ? 'share' : 'rename';
+    this.assertCanEdit(file, user, action);
 
     const name = input.name === undefined ? file!.name : String(input.name).trim();
     if (!name) throw new BadRequestException('File name is required.');
@@ -148,7 +151,7 @@ export class CloudenceService {
     const ref = this.firebaseAdmin.db().collection(COLLECTION).doc(id);
     const snapshot = await ref.get();
     const file = snapshot.data() as CloudenceFileDocument | undefined;
-    this.assertCanEdit(file, user);
+    this.assertCanEdit(file, user, 'delete');
 
     await ref.delete();
     await cloudinary.uploader.destroy(file!.publicId, { resource_type: file!.resourceType as 'image' | 'video' | 'raw' }).catch((error) => {
@@ -180,9 +183,23 @@ export class CloudenceService {
     return totalSpace;
   }
 
-  private assertCanEdit(file: CloudenceFileDocument | undefined, user: AuthenticatedUser): asserts file is CloudenceFileDocument {
+  private assertCanEdit(
+    file: CloudenceFileDocument | undefined,
+    user: AuthenticatedUser,
+    action: 'rename' | 'share' | 'delete',
+  ): asserts file is CloudenceFileDocument {
     if (!file) throw new NotFoundException('File was not found.');
-    if (file.ownerId !== user.uid) throw new NotFoundException('File was not found.');
+    if (file.ownerId !== user.uid) {
+      const reason =
+        action === 'share'
+          ? 'You cannot share this file because you are not its owner. Only the owner can manage sharing.'
+          : action === 'delete'
+          ? 'You cannot delete this file because you are not its owner. Only the owner can delete it.'
+          : action === 'rename'
+          ? 'You cannot rename this file because you are not its owner. Only the owner can rename it.'
+          : 'You are not permitted to modify this file. Only the file owner can perform this action.';
+      throw new ForbiddenException(reason);
+    }
   }
 
   private fileType(name: string, contentType: string): CloudenceFileType {
