@@ -8,6 +8,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { UploadApiOptions, v2 as cloudinary } from 'cloudinary';
+import { AggregateField, FieldValue } from 'firebase-admin/firestore';
 import { assertCloudinaryConfigured } from '../../common/env';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -19,8 +20,23 @@ import {
 } from './cloudence.types';
 
 const COLLECTION = 'cloudenceFiles';
-const MAX_FILE_BYTES = 50 * 1024 * 1024;
+const AUDIT_COLLECTION = 'cloudence_audit_logs';
+const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB per file
+const MAX_STORAGE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB quota per user
 const ALLOWED_TYPES = new Set(['document', 'image', 'video', 'audio', 'other']);
+
+// Block executables, scripts, and potential malware vectors
+const BLOCKED_EXTENSIONS = new Set([
+  'exe', 'bat', 'cmd', 'sh', 'bash', 'zsh', 'ps1', 'psm1', 'psd1',
+  'msi', 'msp', 'scr', 'pif', 'com', 'hta', 'cpl', 'vbs', 'vbe', 'wsf', 'wsh',
+  'php', 'php3', 'php4', 'php5', 'phtml', 'phar',
+  'py', 'pyc', 'pyo', 'pyw', 'rb', 'pl', 'cgi',
+  'jar', 'war', 'ear',
+  'dll', 'so', 'dylib', 'sys', 'drv',
+  'js', 'mjs', 'cjs', 'ts',
+]);
+
+const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
 @Injectable()
 export class CloudenceService {
@@ -38,7 +54,8 @@ export class CloudenceService {
   async upload(user: AuthenticatedUser, input: UploadCloudenceFileInput) {
     assertCloudinaryConfigured();
 
-    const name = String(input?.name || '').trim();
+    const rawName = String(input?.name || '').trim();
+    const name = this.sanitizeFileName(rawName);
     const contentType = String(input?.contentType || 'application/octet-stream').toLowerCase();
     const rawBase64 = String(input?.dataBase64 || '');
     const base64 = rawBase64.replace(/^data:[^;]+;base64,/, '');
@@ -47,9 +64,21 @@ export class CloudenceService {
       throw new BadRequestException('A valid file is required.');
     }
 
+    this.assertSafeExtension(name);
+
     const buffer = Buffer.from(base64, 'base64');
     if (!buffer.length || buffer.length > MAX_FILE_BYTES) {
       throw new BadRequestException('Files must be between 1 byte and 50 MB.');
+    }
+
+    // Enforce 2GB user storage quota before upload
+    const currentUsage = await this.getOwnedStorageBytes(user.uid);
+    if (currentUsage + buffer.length > MAX_STORAGE_BYTES) {
+      const usedMb = (currentUsage / (1024 * 1024)).toFixed(1);
+      const fileMb = (buffer.length / (1024 * 1024)).toFixed(1);
+      throw new BadRequestException(
+        `Storage quota of 2 GB exceeded. Current usage is ${usedMb} MB and this file is ${fileMb} MB.`,
+      );
     }
 
     const type = this.fileType(name, contentType);
@@ -61,6 +90,7 @@ export class CloudenceService {
       tags: ['chefu', 'cloudence', type, user.email],
       context: { original_name: name, content_type: contentType },
     });
+
     const now = new Date().toISOString();
     const id = `cloudence_${randomUUID()}`;
     const document: CloudenceFileDocument = {
@@ -80,7 +110,15 @@ export class CloudenceService {
     };
 
     await this.firebaseAdmin.db().collection(COLLECTION).doc(id).set(document);
-    return document;
+
+    await this.logAudit(user, 'file.uploaded', id, {
+      name,
+      size: buffer.length,
+      type,
+      extension,
+    });
+
+    return this.withSignedUrl(document);
   }
 
   async list(user: AuthenticatedUser, input: { type?: string; search?: string; sort?: string; limit?: number }) {
@@ -99,7 +137,8 @@ export class CloudenceService {
       .filter((file) => !type || type === 'all' || file.type === type)
       .filter((file) => !search || file.name.toLowerCase().includes(search))
       .sort((left, right) => this.compareFiles(left, right, field, direction))
-      .slice(0, limit);
+      .slice(0, limit)
+      .map((file) => this.withSignedUrl(file));
 
     return { total: documents.length, documents };
   }
@@ -137,14 +176,39 @@ export class CloudenceService {
     const action = input.users !== undefined ? 'share' : 'rename';
     this.assertCanEdit(file, user, action);
 
-    const name = input.name === undefined ? file!.name : String(input.name).trim();
-    if (!name) throw new BadRequestException('File name is required.');
-    const users = input.users === undefined
-      ? file!.users
-      : [...new Set(input.users.map(String).map((email) => email.trim().toLowerCase()).filter(Boolean))];
-    const updated = { ...file, name, users, updatedAt: new Date().toISOString() };
+    let name = file!.name;
+    if (input.name !== undefined) {
+      name = this.sanitizeFileName(String(input.name));
+      if (!name) throw new BadRequestException('File name is required.');
+      this.assertSafeExtension(name);
+    }
+
+    let users = file!.users;
+    if (input.users !== undefined) {
+      const rawUsers = input.users.map(String).map((email) => email.trim().toLowerCase()).filter(Boolean);
+      for (const email of rawUsers) {
+        if (!EMAIL_REGEX.test(email)) {
+          throw new BadRequestException(`"${email}" is not a valid email address.`);
+        }
+      }
+      // Deduplicate and ensure owner does not add themselves
+      users = [...new Set(rawUsers.filter((email) => email !== user.email))];
+    }
+
+    const updated = { ...file!, name, users, updatedAt: new Date().toISOString() };
     await ref.set(updated);
-    return updated;
+
+    if (input.name !== undefined && name !== file!.name) {
+      await this.logAudit(user, 'file.renamed', id, { oldName: file!.name, newName: name });
+    }
+    if (input.users !== undefined) {
+      await this.logAudit(user, 'file.shared', id, {
+        previousUsers: file!.users,
+        updatedUsers: users,
+      });
+    }
+
+    return this.withSignedUrl(updated);
   }
 
   async remove(user: AuthenticatedUser, id: string) {
@@ -157,11 +221,24 @@ export class CloudenceService {
     await cloudinary.uploader.destroy(file!.publicId, { resource_type: file!.resourceType as 'image' | 'video' | 'raw' }).catch((error) => {
       this.logger.warn(`Cloudinary asset deletion failed for ${file!.publicId}: ${error instanceof Error ? error.message : error}`);
     });
+
+    await this.logAudit(user, 'file.deleted', id, {
+      name: file!.name,
+      size: file!.size,
+      publicId: file!.publicId,
+    });
+
     return { status: 'success' };
   }
 
   async usage(user: AuthenticatedUser) {
-    const { documents } = await this.list(user, { limit: 100 });
+    // Only query owned files so shared files don't consume user's quota.
+    // Query without arbitrary limit so all files are accounted for.
+    const snapshot = await this.firebaseAdmin.db().collection(COLLECTION)
+      .where('ownerId', '==', user.uid)
+      .select('type', 'size', 'updatedAt')
+      .get();
+
     const totalSpace = {
       image: { size: 0, latestDate: '' },
       document: { size: 0, latestDate: '' },
@@ -169,18 +246,121 @@ export class CloudenceService {
       audio: { size: 0, latestDate: '' },
       other: { size: 0, latestDate: '' },
       used: 0,
-      all: 2 * 1024 * 1024 * 1024,
+      all: MAX_STORAGE_BYTES,
     };
 
-    for (const file of documents) {
-      totalSpace[file.type].size += file.size;
-      totalSpace.used += file.size;
-      if (!totalSpace[file.type].latestDate || file.updatedAt > totalSpace[file.type].latestDate) {
-        totalSpace[file.type].latestDate = file.updatedAt;
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      const type = (data.type as CloudenceFileType) || 'other';
+      const size = Number(data.size) || 0;
+      const updatedAt = String(data.updatedAt || '');
+
+      if (totalSpace[type]) {
+        totalSpace[type].size += size;
+        if (!totalSpace[type].latestDate || updatedAt > totalSpace[type].latestDate) {
+          totalSpace[type].latestDate = updatedAt;
+        }
       }
+      totalSpace.used += size;
     }
 
     return totalSpace;
+  }
+
+  async getOwnedStorageBytes(userId: string): Promise<number> {
+    try {
+      const snapshot = await this.firebaseAdmin.db().collection(COLLECTION)
+        .where('ownerId', '==', userId)
+        .aggregate({ totalSize: AggregateField.sum('size') })
+        .get();
+      return snapshot.data().totalSize || 0;
+    } catch (error) {
+      this.logger.warn(`Aggregate sum failed, falling back to document select: ${error instanceof Error ? error.message : error}`);
+      const snapshot = await this.firebaseAdmin.db().collection(COLLECTION)
+        .where('ownerId', '==', userId)
+        .select('size')
+        .get();
+      return snapshot.docs.reduce((acc, doc) => acc + (Number(doc.data().size) || 0), 0);
+    }
+  }
+
+  private sanitizeFileName(rawName: string): string {
+    if (!rawName) return 'unnamed';
+    let sanitized = rawName
+      .replace(/\0/g, '') // remove null bytes
+      .replace(/<[^>]*>/g, '') // strip html tags
+      .replace(/\.\.+[/\\]/g, '') // strip path traversal sequences
+      .replace(/[/\\]+/g, '_') // sanitize path separators
+      .replace(/[\x00-\x1F\x7F]/g, '') // strip non-printable control characters
+      .trim();
+
+    if (!sanitized || sanitized === '.' || sanitized === '..') {
+      sanitized = 'file';
+    }
+
+    if (sanitized.length > 255) {
+      const ext = this.extension(sanitized);
+      const base = sanitized.slice(0, 255 - (ext ? ext.length + 1 : 0));
+      sanitized = ext ? `${base}.${ext}` : base;
+    }
+
+    return sanitized;
+  }
+
+  private assertSafeExtension(name: string) {
+    const ext = this.extension(name);
+    if (BLOCKED_EXTENSIONS.has(ext)) {
+      throw new BadRequestException(
+        `Files with .${ext} extension are blocked for security reasons (executable and script files are not permitted).`,
+      );
+    }
+  }
+
+  private signUrl(file: Pick<CloudenceFileDocument, 'publicId' | 'resourceType' | 'extension' | 'url'>): string {
+    if (!file.publicId) return file.url;
+    try {
+      return cloudinary.url(file.publicId, {
+        sign_url: true,
+        secure: true,
+        resource_type: (file.resourceType as 'image' | 'video' | 'raw') || 'raw',
+        type: 'upload',
+        ...(file.extension ? { format: file.extension } : {}),
+      });
+    } catch {
+      return file.url;
+    }
+  }
+
+  private withSignedUrl(file: CloudenceFileDocument): CloudenceFileDocument {
+    return {
+      ...file,
+      url: this.signUrl(file),
+    };
+  }
+
+  private async logAudit(
+    actor: AuthenticatedUser,
+    action: 'file.uploaded' | 'file.renamed' | 'file.shared' | 'file.deleted',
+    fileId: string,
+    details: Record<string, unknown>,
+  ) {
+    const logId = `audit_${randomUUID()}`;
+    const auditEntry = {
+      id: logId,
+      action,
+      fileId,
+      actor: {
+        id: actor.uid,
+        email: actor.email,
+      },
+      details,
+      timestamp: new Date().toISOString(),
+      createdAt: FieldValue.serverTimestamp(),
+    };
+
+    await this.firebaseAdmin.db().collection(AUDIT_COLLECTION).doc(logId).set(auditEntry).catch((err) => {
+      this.logger.warn(`Failed to write audit log for ${action} on ${fileId}: ${err instanceof Error ? err.message : err}`);
+    });
   }
 
   private assertCanEdit(
