@@ -82,8 +82,8 @@ async function bootstrap() {
     });
     const allowedOrigins = getAllowedOrigins();
 
-    app.useBodyParser("json", { limit: "12mb" });
-    app.useBodyParser("urlencoded", { extended: true, limit: "12mb" });
+    app.useBodyParser("json", { limit: "80mb" });
+    app.useBodyParser("urlencoded", { extended: true, limit: "80mb" });
     app.useGlobalPipes(
         new ValidationPipe({
             whitelist: true,

@@ -23,6 +23,7 @@ import { ProductsModule } from './modules/products/products.module';
 import { SubmissionsModule } from './modules/submissions/submissions.module';
 import { SentryModule } from '@sentry/nestjs/setup';
 import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
+import { CloudenceModule } from './modules/cloudence/cloudence.module';
 
 const platformModules = [
   AppsModule,
@@ -51,6 +52,7 @@ const productModules = [
   QuantumModule,
   ProductsModule,
   SubmissionsModule,
+  CloudenceModule,
 ];
 
 @Module({
