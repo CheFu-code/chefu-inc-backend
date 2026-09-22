@@ -18,6 +18,9 @@ export type CloudenceFileDocument = {
   resourceType: string;
   createdAt: string;
   updatedAt: string;
+  isDeleted?: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
 };
 
 export type UploadCloudenceFileInput = {
