@@ -82,24 +82,50 @@ export class CloudenceService {
     return document;
   }
 
-  async list(user: AuthenticatedUser, input: { type?: string; search?: string; limit?: number }) {
+  async list(user: AuthenticatedUser, input: { type?: string; search?: string; sort?: string; limit?: number }) {
     const collection = this.firebaseAdmin.db().collection(COLLECTION);
-    const [ownedSnapshot, sharedSnapshot] = await Promise.all([
-      collection.where('ownerId', '==', user.uid).get(),
-      collection.where('users', 'array-contains', user.email).get(),
-    ]);
     const search = String(input?.search || '').trim().toLowerCase();
     const type = String(input?.type || '').trim();
     const limit = Math.min(Math.max(Number(input?.limit || 100), 1), 100);
+    const { field, direction } = this.resolveSort(input?.sort);
+    const [ownedSnapshot, sharedSnapshot] = await Promise.all([
+      collection.where('ownerId', '==', user.uid).orderBy(field, direction).limit(limit).get(),
+      collection.where('users', 'array-contains', user.email).orderBy(field, direction).limit(limit).get(),
+    ]);
     const documents = [...ownedSnapshot.docs, ...sharedSnapshot.docs]
       .map((doc) => doc.data() as CloudenceFileDocument)
       .filter((file, index, files) => files.findIndex((candidate) => candidate.id === file.id) === index)
       .filter((file) => !type || type === 'all' || file.type === type)
       .filter((file) => !search || file.name.toLowerCase().includes(search))
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .sort((left, right) => this.compareFiles(left, right, field, direction))
       .slice(0, limit);
 
     return { total: documents.length, documents };
+  }
+
+  private resolveSort(value?: string): { field: 'createdAt' | 'name' | 'size'; direction: 'asc' | 'desc' } {
+    const [field, direction] = String(value || '$createdAt-desc').split('-');
+    if (
+      (field === '$createdAt' || field === 'name' || field === 'size') &&
+      (direction === 'asc' || direction === 'desc')
+    ) {
+      return { field: field === '$createdAt' ? 'createdAt' : field, direction };
+    }
+    return { field: 'createdAt', direction: 'desc' };
+  }
+
+  private compareFiles(
+    left: CloudenceFileDocument,
+    right: CloudenceFileDocument,
+    field: 'createdAt' | 'name' | 'size',
+    direction: 'asc' | 'desc',
+  ) {
+    const leftValue = left[field];
+    const rightValue = right[field];
+    const comparison = typeof leftValue === 'number' && typeof rightValue === 'number'
+      ? leftValue - rightValue
+      : String(leftValue).localeCompare(String(rightValue));
+    return direction === 'asc' ? comparison : -comparison;
   }
 
   async update(user: AuthenticatedUser, id: string, input: UpdateCloudenceFileInput) {
