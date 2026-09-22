@@ -208,25 +208,43 @@ export class CloudenceService {
     const limit = Math.min(Math.max(Number(input?.limit || 100), 1), 100);
     const { field, direction } = this.resolveSort(input?.sort);
 
+    const userEmail = (user.email || '').toLowerCase().trim();
+
     // Fetch batch with limit * 2 (capped at 200) to ensure soft-deleted or non-matching records do not starve results
     const fetchLimit = Math.min(limit * 2, 200);
 
-    // Push isDeleted:false into Firestore so deleted docs are excluded at DB level,
-    // saving billed reads for every document that was ever soft-deleted.
-    const [ownedSnapshot, sharedSnapshot] = await Promise.all([
-      collection
-        .where('ownerId', '==', user.uid)
-        .where('isDeleted', '==', false)
-        .orderBy(field, direction)
-        .limit(fetchLimit)
-        .get(),
-      collection
-        .where('users', 'array-contains', user.email)
-        .where('isDeleted', '==', false)
-        .orderBy(field, direction)
-        .limit(fetchLimit)
-        .get(),
-    ]);
+    // Query owned files with fallback if composite index is pending
+    const ownedPromise = collection
+      .where('ownerId', '==', user.uid)
+      .where('isDeleted', '==', false)
+      .orderBy(field, direction)
+      .limit(fetchLimit)
+      .get()
+      .catch((err) => {
+        this.logger.warn(`Indexed owned query failed (falling back to simple query): ${err instanceof Error ? err.message : err}`);
+        return collection
+          .where('ownerId', '==', user.uid)
+          .limit(fetchLimit)
+          .get();
+      });
+
+    // Query shared files: normalize email to lowercase, with graceful fallback to standard single-field
+    // array-contains index if the multi-field composite index (users + isDeleted + order) is not built in Firestore.
+    const sharedPromise = collection
+      .where('users', 'array-contains', userEmail)
+      .where('isDeleted', '==', false)
+      .orderBy(field, direction)
+      .limit(fetchLimit)
+      .get()
+      .catch((err) => {
+        this.logger.warn(`Indexed shared query failed (falling back to standard index): ${err instanceof Error ? err.message : err}`);
+        return collection
+          .where('users', 'array-contains', userEmail)
+          .limit(fetchLimit)
+          .get();
+      });
+
+    const [ownedSnapshot, sharedSnapshot] = await Promise.all([ownedPromise, sharedPromise]);
 
     const now = new Date();
     // O(N) deduplication using Map instead of O(N^2) findIndex
@@ -238,9 +256,9 @@ export class CloudenceService {
       }
     }
 
-    // isDeleted already excluded at Firestore level; still guard share expiry and type in memory.
     const documents: CloudenceFileDocument[] = [];
     for (const file of uniqueFiles.values()) {
+      if (file.isDeleted) continue; // Safety guard if fallback query was used
       // Non-owners cannot see file if the share expiration has passed
       if (file.ownerId !== user.uid && file.shareExpiresAt) {
         if (new Date(file.shareExpiresAt) <= now) continue;
