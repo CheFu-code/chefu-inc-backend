@@ -127,28 +127,60 @@ export class FlowService implements OnModuleDestroy {
 
   async getMessages(folder = 'inbox', cursor?: string) {
     const requestedFolder = String(folder || 'inbox').toLowerCase();
-    const query = this.mailboxQuery(requestedFolder);
-    const pagedQuery = cursor ? query.startAfter(new Date(cursor)) : query;
+
+    let query = this.mailboxQuery(requestedFolder)
+      .orderBy('createdAt', 'desc');
+
+    if (cursor) {
+      const cursorDate = new Date(cursor);
+
+      if (Number.isNaN(cursorDate.getTime())) {
+        throw new BadRequestException('Invalid pagination cursor.');
+      }
+
+      query = query.startAfter(cursorDate);
+    }
+
     let usedFallback = false;
     let snapshot: FirebaseFirestore.QuerySnapshot;
+
     try {
-      snapshot = await pagedQuery
-        .orderBy('createdAt', 'desc')
+      snapshot = await query
         .limit(this.mailboxPageSize)
         .get();
     } catch (error) {
       const code = (error as { code?: number | string }).code;
-      if (code !== 9 && code !== 'failed-precondition') throw error;
+
+      if (code !== 9 && code !== 'failed-precondition') {
+        throw error;
+      }
+
       usedFallback = true;
-      const fallback = await this.messagesCollection()
-        .orderBy('createdAt', 'desc')
+
+      // IMPORTANT:
+      // The fallback also needs to respect the cursor.
+      let fallbackQuery = this.messagesCollection()
+        .orderBy('createdAt', 'desc');
+
+      if (cursor) {
+        const cursorDate = new Date(cursor);
+
+        if (Number.isNaN(cursorDate.getTime())) {
+          throw new BadRequestException('Invalid pagination cursor.');
+        }
+
+        fallbackQuery = fallbackQuery.startAfter(cursorDate);
+      }
+
+      snapshot = await fallbackQuery
         .limit(this.mailboxPageSize)
         .get();
-      snapshot = fallback;
     }
+
     const allMessages = snapshot.docs.map(doc =>
       this.toMessage(doc.id, doc.data(), false),
     );
+
     const messages = this.messagesForMailboxWindow(
       allMessages,
       requestedFolder,
@@ -159,9 +191,12 @@ export class FlowService implements OnModuleDestroy {
       folder: requestedFolder,
       messages,
       counts: this.countFolders(allMessages),
-      nextCursor: snapshot.size === this.mailboxPageSize
-        ? this.firestoreTimestampToIso(snapshot.docs[snapshot.docs.length - 1].get('createdAt'))
-        : null,
+      nextCursor:
+        snapshot.size === this.mailboxPageSize
+          ? this.firestoreTimestampToIso(
+            snapshot.docs[snapshot.docs.length - 1].get('createdAt'),
+          )
+          : null,
     };
   }
 
@@ -316,32 +351,32 @@ export class FlowService implements OnModuleDestroy {
 
     try {
       await Promise.all(
-      renderedEmails.map(({ body, email, html, recipient, subject }, index) =>
-        this.messagesCollection().add({
-          attachments: normalized.attachments.length,
-          clickCount: 0,
-          createdAt: FieldValue.serverTimestamp(),
-          deliveryStatus: 'sent',
-          direction: 'outbound',
-          folder: 'sent',
-          from: normalized.from,
-          html,
-          label: normalized.action === 'test' ? 'Test' : 'Sent',
-          preview: this.previewForBody(body, normalized.bodyFormat),
-          resendEmailId: this.sentEmailId(response, index),
-          sendGroupId,
-          sentAt,
-          openCount: 0,
-          starred: false,
-          subject,
-          text: this.textForBody(body, normalized.bodyFormat),
-          threadKey: this.threadKeyForMessage(subject, normalized.from, [
-            recipient.email,
-          ]),
-          to: [recipient.email],
-          unread: false,
-          updatedAt: FieldValue.serverTimestamp(),
-        }),
+        renderedEmails.map(({ body, email, html, recipient, subject }, index) =>
+          this.messagesCollection().add({
+            attachments: normalized.attachments.length,
+            clickCount: 0,
+            createdAt: FieldValue.serverTimestamp(),
+            deliveryStatus: 'sent',
+            direction: 'outbound',
+            folder: 'sent',
+            from: normalized.from,
+            html,
+            label: normalized.action === 'test' ? 'Test' : 'Sent',
+            preview: this.previewForBody(body, normalized.bodyFormat),
+            resendEmailId: this.sentEmailId(response, index),
+            sendGroupId,
+            sentAt,
+            openCount: 0,
+            starred: false,
+            subject,
+            text: this.textForBody(body, normalized.bodyFormat),
+            threadKey: this.threadKeyForMessage(subject, normalized.from, [
+              recipient.email,
+            ]),
+            to: [recipient.email],
+            unread: false,
+            updatedAt: FieldValue.serverTimestamp(),
+          }),
         ),
       );
       await sendGroupRef.update({ status: 'completed', updatedAt: FieldValue.serverTimestamp() });
@@ -1391,18 +1426,18 @@ export class FlowService implements OnModuleDestroy {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         response = await fetch(`${this.resendApiUrl}${path}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.resendApiKey}`,
-        'Content-Type': 'application/json',
-        ...extraHeaders,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(RESEND_REQUEST_TIMEOUT_MS),
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.resendApiKey}`,
+            'Content-Type': 'application/json',
+            ...extraHeaders,
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(RESEND_REQUEST_TIMEOUT_MS),
         });
         const resendResponse = response;
         data = await resendResponse.json().catch(async () => ({
-      message: await resendResponse.text().catch(() => ''),
+          message: await resendResponse.text().catch(() => ''),
         }));
       } catch (error) {
         if (attempt === 2) throw error;
