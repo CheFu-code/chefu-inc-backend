@@ -1,5 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { assertResendConfigured } from '../../common/env';
+import { Injectable, Logger } from "@nestjs/common";
+import { assertResendConfigured } from "../../common/env";
 
 export interface SignInNotificationData {
     email: string;
@@ -29,7 +29,6 @@ export interface ApiKeyCompromisedNotificationData {
     timestamp: Date;
 }
 
-
 export interface PasskeyAddedNotificationData {
     email: string;
     userName?: string;
@@ -47,32 +46,26 @@ export interface PasskeyAddedNotificationData {
 export class ResendService {
     private readonly logger = new Logger(ResendService.name);
     private readonly RESEND_API_KEY = process.env.RESEND_API_KEY;
-    private readonly RESEND_API_URL = 'https://api.resend.com/emails';
+    private readonly RESEND_API_URL = "https://api.resend.com/emails";
 
     private readonly passkeyAddedTemplateId =
         process.env.PASSKEY_ADDED_TEMPLATE_ID ||
         process.env.NEW_PASSKEY_ADDED_TEMPLATE_ID ||
-        'new-passkey-added';
+        "new-passkey-added";
     private readonly signInTemplateId =
-        process.env.SIGNIN_ALERT_TEMPLATE_ID ||
-        'signin-alert';
+        process.env.SIGNIN_ALERT_TEMPLATE_ID || "signin-alert";
     private readonly passwordChangedTemplateId =
-        process.env.PASSWORD_CHANGED_TEMPLATE_ID ||
-        'password-changed';
+        process.env.PASSWORD_CHANGED_TEMPLATE_ID || "password-changed";
     private readonly apiKeyCompromisedTemplateId =
-        process.env.API_KEY_COMPROMISED_TEMPLATE_ID ||
-        'api-key-compromised';
+        process.env.API_KEY_COMPROMISED_TEMPLATE_ID || "api-key-compromised";
 
     private readonly fromAddress =
         process.env.SIGNIN_ALERT_FROM ||
         process.env.SECURITY_EMAIL_FROM ||
-        'Security <security@chefu.co.za>';
-    private readonly supportUrl =
-        process.env.SIGNIN_ALERT_SUPPORT_URL ||
-        'https://chefu.co.za/support';
+        "Security <security@chefu.co.za>";
+    private readonly supportUrl = "https://chefu.co.za/support";
     private readonly securityUrl =
-        process.env.SIGNIN_ALERT_SECURITY_URL ||
-        'https://myaccount.chefu.co.za/account?section=security';
+        "https://myaccount.chefu.co.za/account?section=security";
     private readonly notificationFromAddress =
         process.env.NOTIFICATION_EMAIL_FROM ||
         process.env.SECURITY_EMAIL_FROM ||
@@ -86,7 +79,7 @@ export class ResendService {
 
     private getApiKey(): string {
         assertResendConfigured();
-        return (process.env.RESEND_API_KEY || '').trim();
+        return (process.env.RESEND_API_KEY || "").trim();
     }
 
     async sendPasskeyAddedNotification(
@@ -95,10 +88,10 @@ export class ResendService {
         const apiKey = this.getApiKey();
 
         const response = await fetch(this.RESEND_API_URL, {
-            method: 'POST',
+            method: "POST",
             headers: {
                 Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
+                "Content-Type": "application/json",
             },
             body: JSON.stringify(this.getPasskeyAddedPayload(data)),
         });
@@ -110,7 +103,7 @@ export class ResendService {
 
         this.logger.log(
             JSON.stringify({
-                event: 'passkey_added_notification_sent',
+                event: "passkey_added_notification_sent",
                 email: data.email,
             }),
         );
@@ -120,10 +113,10 @@ export class ResendService {
         const apiKey = this.getApiKey();
 
         const response = await fetch(this.RESEND_API_URL, {
-            method: 'POST',
+            method: "POST",
             headers: {
                 Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
+                "Content-Type": "application/json",
             },
             body: JSON.stringify(this.getSignInPayload(data)),
         });
@@ -135,7 +128,7 @@ export class ResendService {
 
         this.logger.log(
             JSON.stringify({
-                event: 'sign_in_notification_sent',
+                event: "sign_in_notification_sent",
                 email: data.email,
             }),
         );
@@ -147,10 +140,10 @@ export class ResendService {
         const apiKey = this.getApiKey();
 
         const response = await fetch(this.RESEND_API_URL, {
-            method: 'POST',
+            method: "POST",
             headers: {
                 Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
+                "Content-Type": "application/json",
             },
             body: JSON.stringify(this.getPasswordChangedPayload(data)),
         });
@@ -162,7 +155,7 @@ export class ResendService {
 
         this.logger.log(
             JSON.stringify({
-                event: 'password_changed_notification_sent',
+                event: "password_changed_notification_sent",
                 email: data.email,
             }),
         );
@@ -174,10 +167,10 @@ export class ResendService {
         const apiKey = this.getApiKey();
 
         const response = await fetch(this.RESEND_API_URL, {
-            method: 'POST',
+            method: "POST",
             headers: {
                 Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
+                "Content-Type": "application/json",
             },
             body: JSON.stringify(this.getApiKeyCompromisedPayload(data)),
         });
@@ -189,7 +182,7 @@ export class ResendService {
 
         this.logger.log(
             JSON.stringify({
-                event: 'api_key_compromised_notification_sent',
+                event: "api_key_compromised_notification_sent",
                 email: data.email,
                 publicId: data.publicId,
             }),
@@ -203,7 +196,7 @@ export class ResendService {
         return {
             from: fromAddress,
             to: [data.email],
-            subject: 'Security alert: New passkey added',
+            subject: "Security alert: New passkey added",
             template: {
                 id: this.passkeyAddedTemplateId,
                 variables: {
@@ -244,8 +237,8 @@ export class ResendService {
                     APP_NAME: appLabel,
                     PROVIDER: details.provider,
                     TIME: details.time,
-                    DEVICE: details.device || 'Unknown device',
-                    IP_ADDRESS: details.ipAddress || 'Unknown IP address',
+                    DEVICE: details.device || "Unknown device",
+                    IP_ADDRESS: details.ipAddress || "Unknown IP address",
                     SECURITY_URL: this.securityUrl,
                     SUPPORT_URL: this.supportUrl,
                     YEAR: new Date().getUTCFullYear().toString(),
@@ -253,8 +246,8 @@ export class ResendService {
                     appName: appLabel,
                     provider: details.provider,
                     time: details.time,
-                    device: details.device || 'Unknown device',
-                    ipAddress: details.ipAddress || 'Unknown IP address',
+                    device: details.device || "Unknown device",
+                    ipAddress: details.ipAddress || "Unknown IP address",
                     securityUrl: this.securityUrl,
                     supportUrl: this.supportUrl,
                     year: new Date().getUTCFullYear().toString(),
@@ -265,7 +258,7 @@ export class ResendService {
 
     private getPasswordChangedPayload(data: PasswordChangedNotificationData) {
         const details = this.getPasswordDetails(data);
-        
+
         return {
             from: this.fromAddress,
             to: [data.email],
@@ -275,15 +268,15 @@ export class ResendService {
                 variables: {
                     USER_NAME: details.userName,
                     TIME: details.time,
-                    DEVICE: details.device || 'Unknown device',
-                    IP_ADDRESS: details.ipAddress || 'Unknown IP address',
+                    DEVICE: details.device || "Unknown device",
+                    IP_ADDRESS: details.ipAddress || "Unknown IP address",
                     SECURITY_URL: this.securityUrl,
                     SUPPORT_URL: this.supportUrl,
                     YEAR: new Date().getUTCFullYear().toString(),
                     userName: details.userName,
                     time: details.time,
-                    device: details.device || 'Unknown device',
-                    ipAddress: details.ipAddress || 'Unknown IP address',
+                    device: details.device || "Unknown device",
+                    ipAddress: details.ipAddress || "Unknown IP address",
                     securityUrl: this.securityUrl,
                     supportUrl: this.supportUrl,
                     year: new Date().getUTCFullYear().toString(),
@@ -292,30 +285,28 @@ export class ResendService {
         };
     }
 
-    private getApiKeyCompromisedPayload(
-        data: ApiKeyCompromisedNotificationData,
-    ) {
+    private getApiKeyCompromisedPayload(data: ApiKeyCompromisedNotificationData) {
         const details = {
-            userName: data.userName || data.email.split('@')[0] || 'there',
-            keyName: data.keyName || 'Untitled key',
+            userName: data.userName || data.email.split("@")[0] || "there",
+            keyName: data.keyName || "Untitled key",
             publicId: data.publicId,
-            source: data.source || 'a public location',
-            url: data.url || '',
-            time: data.timestamp.toLocaleString('en-US', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                timeZoneName: 'short',
+            source: data.source || "a public location",
+            url: data.url || "",
+            time: data.timestamp.toLocaleString("en-US", {
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                timeZoneName: "short",
             }),
         };
 
         return {
             from: this.fromAddress,
             to: [data.email],
-            subject: 'Security alert: Chefu Academy API key revoked',
+            subject: "Security alert: Chefu Academy API key revoked",
             template: {
                 id: this.apiKeyCompromisedTemplateId,
                 variables: {
@@ -342,20 +333,19 @@ export class ResendService {
         };
     }
 
-
     private resolveAppLabel(appId?: string) {
-        if (!appId) return 'CHEFU Account';
+        if (!appId) return "Chefu Technologies";
 
         const normalized = appId.trim().toLowerCase();
         const labels: Record<string, string> = {
-            academy: 'Chefu Academy',
-            admin: 'Chefu Admin',
-            flow: 'Flow Mail',
-            muzalo: 'Muzalo',
-            quantum: 'Quantum',
+            academy: "Chefu Academy",
+            admin: "Chefu Admin",
+            flow: "Flow Mail",
+            muzalo: "Muzalo",
+            quantum: "Quantum",
         };
 
-        return labels[normalized] || 'CHEFU Account';
+        return labels[normalized] || "Chefu Technologies";
     }
 
     private resolveFromAddress(appId?: string) {
@@ -392,106 +382,112 @@ export class ResendService {
 
         try {
             const parsed = JSON.parse(raw) as Record<string, unknown>;
-            return Object.entries(parsed).reduce<Record<string, string>>((acc, [key, value]) => {
-                if (typeof value === 'string' && value.trim()) {
-                    acc[key.trim().toLowerCase()] = value.trim();
-                }
-                return acc;
-            }, {});
+            return Object.entries(parsed).reduce<Record<string, string>>(
+                (acc, [key, value]) => {
+                    if (typeof value === "string" && value.trim()) {
+                        acc[key.trim().toLowerCase()] = value.trim();
+                    }
+                    return acc;
+                },
+                {},
+            );
         } catch {
-            this.logger.warn('Invalid sender map JSON. Check SECURITY_EMAIL_FROM_BY_APP or NOTIFICATION_EMAIL_FROM_BY_APP.');
+            this.logger.warn(
+                "Invalid sender map JSON. Check SECURITY_EMAIL_FROM_BY_APP or NOTIFICATION_EMAIL_FROM_BY_APP.",
+            );
             return {};
         }
     }
 
     private normalizeAppId(appId?: string) {
         if (!appId) {
-            return '';
+            return "";
         }
         return appId.trim().toLowerCase();
     }
 
     private getDetails(data: SignInNotificationData) {
         return {
-            userName: data.userName || data.email.split('@')[0] || 'there',
+            userName: data.userName || data.email.split("@")[0] || "there",
             provider: this.formatProvider(data.provider),
-            time: data.timestamp.toLocaleString('en-US', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                timeZoneName: 'short',
+            time: data.timestamp.toLocaleString("en-US", {
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                timeZoneName: "short",
             }),
-            device: data.deviceInfo ? this.formatDevice(data.deviceInfo) : '',
-            ipAddress: data.ipAddress || '',
+            device: data.deviceInfo ? this.formatDevice(data.deviceInfo) : "",
+            ipAddress: data.ipAddress || "",
         };
     }
 
     private getPasswordDetails(data: PasswordChangedNotificationData) {
         return {
-            userName: data.userName || data.email.split('@')[0] || 'there',
-            time: data.timestamp.toLocaleString('en-US', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                timeZoneName: 'short',
+            userName: data.userName || data.email.split("@")[0] || "there",
+            time: data.timestamp.toLocaleString("en-US", {
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                timeZoneName: "short",
             }),
-            device: data.deviceInfo ? this.formatDevice(data.deviceInfo) : '',
-            ipAddress: data.ipAddress || '',
+            device: data.deviceInfo ? this.formatDevice(data.deviceInfo) : "",
+            ipAddress: data.ipAddress || "",
         };
     }
 
     private getPasskeyAddedDetails(data: PasskeyAddedNotificationData) {
         return {
-            userName: data.userName || data.email.split('@')[0] || 'there',
+            userName: data.userName || data.email.split("@")[0] || "there",
             device: this.formatDevice(data.device),
             addedAt: this.formatAddedAt(data.addedAt),
-            origin: data.origin || 'https://myaccount.chefu.co.za',
-            ipAddress: data.ipAddress || 'Unknown IP address',
+            origin: data.origin || "https://myaccount.chefu.co.za",
+            ipAddress: data.ipAddress || "Unknown IP address",
             securityUrl: data.securityUrl || this.securityUrl,
-            supportEmail: data.supportEmail || process.env.SUPPORT_EMAIL || 'support@chefu.co.za',
+            supportEmail:
+                data.supportEmail || process.env.SUPPORT_EMAIL || "support@chefu.co.za",
             year: data.year || new Date().getUTCFullYear().toString(),
         };
     }
 
     private formatAddedAt(date?: Date): string {
         const d = date || new Date();
-        return d.toLocaleString('en-US', {
-            timeZone: 'UTC',
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
+        return d.toLocaleString("en-US", {
+            timeZone: "UTC",
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
             hour12: false,
         });
     }
 
     private formatDevice(raw?: string): string {
-        if (!raw) return 'Passkey Authenticator';
+        if (!raw) return "Passkey Authenticator";
 
         const ua = raw;
-        let os = '';
-        if (/iPhone/i.test(ua)) os = 'iPhone';
-        else if (/iPad/i.test(ua)) os = 'iPad';
-        else if (/Macintosh|Mac OS X/i.test(ua)) os = 'macOS';
-        else if (/Windows/i.test(ua)) os = 'Windows';
-        else if (/Android/i.test(ua)) os = 'Android';
-        else if (/Linux/i.test(ua)) os = 'Linux';
-        else if (/CrOS/i.test(ua)) os = 'ChromeOS';
+        let os = "";
+        if (/iPhone/i.test(ua)) os = "iPhone";
+        else if (/iPad/i.test(ua)) os = "iPad";
+        else if (/Macintosh|Mac OS X/i.test(ua)) os = "macOS";
+        else if (/Windows/i.test(ua)) os = "Windows";
+        else if (/Android/i.test(ua)) os = "Android";
+        else if (/Linux/i.test(ua)) os = "Linux";
+        else if (/CrOS/i.test(ua)) os = "ChromeOS";
 
-        let browser = '';
-        if (/Edg\//i.test(ua)) browser = 'Edge';
-        else if (/OPR\/|Opera/i.test(ua)) browser = 'Opera';
-        else if (/Chrome\//i.test(ua)) browser = 'Chrome';
-        else if (/Safari\//i.test(ua)) browser = 'Safari';
-        else if (/Firefox\//i.test(ua)) browser = 'Firefox';
+        let browser = "";
+        if (/Edg\//i.test(ua)) browser = "Edge";
+        else if (/OPR\/|Opera/i.test(ua)) browser = "Opera";
+        else if (/Chrome\//i.test(ua)) browser = "Chrome";
+        else if (/Safari\//i.test(ua)) browser = "Safari";
+        else if (/Firefox\//i.test(ua)) browser = "Firefox";
 
         if (browser && os) {
             return `${browser} on ${os}`;
@@ -507,12 +503,12 @@ export class ResendService {
 
     private formatProvider(provider: string): string {
         const providers: Record<string, string> = {
-            'google.com': 'Google',
-            'facebook.com': 'Facebook',
-            password: 'Email and password',
-            anonymous: 'Anonymous',
-            email: 'Email',
-            custom: 'Custom token',
+            "google.com": "Google",
+            "facebook.com": "Facebook",
+            password: "Email and password",
+            anonymous: "Anonymous",
+            email: "Email",
+            custom: "Passkey",
         };
 
         return providers[provider] || provider;

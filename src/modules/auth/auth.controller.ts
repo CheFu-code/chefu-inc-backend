@@ -676,7 +676,7 @@ export class AuthController {
         }),
         error instanceof Error ? error.stack : undefined,
       );
-      throw new UnauthorizedException('Failed to verify Firebase session.');
+      throw new UnauthorizedException('Unable to verify your session. Please sign in again.');
     }
 
     if (
@@ -733,7 +733,7 @@ export class AuthController {
         }),
         error instanceof Error ? error.stack : undefined,
       );
-      throw new UnauthorizedException('Failed to verify Firebase session.');
+      throw new UnauthorizedException('Unable to verify your session. Please sign in again.');
     }
 
     await this.ensureUserProfile(decodedToken, sessionAppId, request);

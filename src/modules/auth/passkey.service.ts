@@ -650,7 +650,7 @@ export class PasskeyService {
         return {
             origins,
             rpID,
-            rpName: process.env.PASSKEY_RP_NAME || 'CHEFU Account',
+            rpName: process.env.PASSKEY_RP_NAME || 'Chefu Technologies',
         };
     }
 

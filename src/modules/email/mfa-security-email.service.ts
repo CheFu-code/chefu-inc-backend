@@ -34,7 +34,7 @@ export class MfaSecurityEmailService {
     'https://myaccount.chefu.co.za/account?section=security';
   private readonly supportUrl =
     process.env.SIGNIN_ALERT_SUPPORT_URL ||
-    'https://academy.chefu.co.za/support';
+    'https://www.chefu.co.za/security';
 
   async send(data: MfaSecurityEmailData) {
     if (!this.resendApiKey) {
