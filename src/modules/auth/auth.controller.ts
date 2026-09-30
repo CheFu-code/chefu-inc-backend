@@ -7,6 +7,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  HttpException,
   Inject,
   InternalServerErrorException,
   Logger,
@@ -180,13 +181,18 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(200)
-  async login(@Body() body: { email?: string; password?: string }) {
+  async login(
+    @Body() body: { email?: string; password?: string },
+    @Req() request: Request,
+  ) {
     const email = String(body.email || '').trim().toLowerCase();
     const password = String(body.password || '').trim();
 
     if (!email || !password) {
       throw new BadRequestException('Email and password are required.');
     }
+
+    await this.enforceAuthRateLimit(email, request.ip || 'unknown');
 
     const apiKey = process.env.FIREBASE_WEB_API_KEY || process.env.FIREBASE_API_KEY;
     if (!apiKey) {
@@ -548,6 +554,8 @@ export class AuthController {
       throw new BadRequestException('Email and password are required to finish device sign-in.');
     }
 
+    await this.enforceAuthRateLimit(email, request.ip || 'unknown');
+
     const apiKey = process.env.FIREBASE_WEB_API_KEY || process.env.FIREBASE_API_KEY;
     if (!apiKey) {
       throw new InternalServerErrorException('Firebase web API key is not configured.');
@@ -795,6 +803,9 @@ export class AuthController {
     },
     @Req() request: Request,
   ) {
+    const email = String(body.email || '').trim().toLowerCase();
+    await this.enforceAuthRateLimit(email, request.ip || 'unknown');
+
     return this.mfaBackupCodes.consumeBackupCode({
       email: body.email,
       code: body.code,
@@ -1915,6 +1926,52 @@ export class AuthController {
     }
     await this.profilePictureService.deleteProfilePicture(user);
     return { message: 'Profile picture deleted successfully.' };
+  }
+
+  private async enforceAuthRateLimit(email: string, ip: string) {
+    const windowMs = 15 * 60 * 1_000; // 15 minutes
+
+    const [byEmail, byIp] = await Promise.all([
+      this.runtimeLimits.reserve({
+        collection: 'runtime_auth_rate_limits',
+        key: `email:${email}`,
+        limit: 5,
+        windowMs,
+      }),
+      this.runtimeLimits.reserve({
+        collection: 'runtime_auth_rate_limits',
+        key: `ip:${ip}`,
+        limit: 20,
+        windowMs,
+      }),
+    ]);
+
+    if (byEmail.limited || byIp.limited) {
+      const retryAfter = Math.max(
+        byEmail.retryAfterSeconds,
+        byIp.retryAfterSeconds,
+      );
+
+      this.logger.warn(
+        JSON.stringify({
+          event: 'auth_rate_limit_denied',
+          reason: byEmail.limited ? 'per_email' : 'per_ip',
+          ipHash: hashForAudit(ip),
+          emailHash: hashForAudit(email),
+          retryAfterSeconds: retryAfter,
+        }),
+      );
+
+      throw new HttpException(
+        {
+          statusCode: 429,
+          error: 'Too Many Requests',
+          message: `Too many login attempts. Please try again in ${retryAfter} seconds.`,
+          retryAfter,
+        },
+        429,
+      );
+    }
   }
 
   private async isFlowSessionAllowed(email?: string | null) {
