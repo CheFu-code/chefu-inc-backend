@@ -308,7 +308,7 @@ export class WhatsappService {
          */
         const payload = {
             messaging_product: 'whatsapp',
-            to: phone,
+            to: phone.replace(/^\+/, ''),
             type: 'template',
             template: {
                 name: templateName,
