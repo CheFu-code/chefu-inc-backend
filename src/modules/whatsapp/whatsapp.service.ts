@@ -352,11 +352,40 @@ export class WhatsappService {
             });
             const responseData = await response.json().catch(() => ({})) as {
                 messages?: { id?: string }[];
-                error?: { message?: string };
+                error?: {
+                    message?: string;
+                    type?: string;
+                    code?: number;
+                    error_subcode?: number;
+                    fbtrace_id?: string;
+                    error_data?: {
+                        details?: string;
+                    };
+                };
             };
 
             if (!response.ok) {
-                throw new Error(responseData.error?.message ?? `Meta API returned ${response.status}`);
+                const metaError = responseData.error;
+                const details = [
+                    metaError?.message,
+                    metaError?.error_data?.details,
+                ]
+                    .filter(Boolean)
+                    .join(' | ');
+                const error = new Error(
+                    details || `Meta API returned ${response.status}`,
+                );
+                Object.assign(error, {
+                    meta: {
+                        status: response.status,
+                        type: metaError?.type,
+                        code: metaError?.code,
+                        subcode: metaError?.error_subcode,
+                        traceId: metaError?.fbtrace_id,
+                        details: metaError?.error_data?.details,
+                    },
+                });
+                throw error;
             }
 
             const messageId = responseData.messages?.[0]?.id;
@@ -365,11 +394,19 @@ export class WhatsappService {
                 success: true,
                 messageId,
             };
-        } catch (error: any) {
+        } catch (error: unknown) {
             this.logger.error(
                 'Meta WhatsApp API error',
                 error instanceof Error ? error.message : 'Unknown error',
             );
+            if (error instanceof Error && 'meta' in error) {
+                this.logger.error(
+                    JSON.stringify({
+                        event: 'whatsapp_meta_api_error',
+                        ...(error as Error & { meta: Record<string, unknown> }).meta,
+                    }),
+                );
+            }
 
             return {
                 success: false,
