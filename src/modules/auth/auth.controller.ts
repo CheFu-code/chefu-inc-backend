@@ -24,7 +24,6 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { createHash, randomBytes } from 'node:crypto';
 import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
-import { assertWhatsAppConfigured } from '../../common/env';
 import { AppsService } from '../apps/apps.service';
 import { CHEFU_APP_HEADER, ChefuAppId } from '../apps/app-registry';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -823,85 +822,6 @@ export class AuthController {
       email: request.user?.email,
       uid: request.user?.uid,
     });
-  }
-
-  @Post('send-otp')
-  async sendOtp(@Body() body: { phone?: string }, @Req() request: Request) {
-    if (!body.phone) {
-      throw new BadRequestException('Phone required.');
-    }
-
-    const to = this.normalizePhone(body.phone);
-    if (!to) {
-      throw new BadRequestException(
-        'Invalid phone format. Use country code plus number.',
-      );
-    }
-
-    await this.enforceOtpThrottle(request.ip || 'unknown');
-    this.logger.log(
-      JSON.stringify({
-        event: 'otp_send_started',
-        ipHash: hashForAudit(request.ip),
-        phoneLast4: to.slice(-4),
-      }),
-    );
-
-    assertWhatsAppConfigured();
-    const phoneNumberId = (process.env.WHATSAPP_PHONE_NUMBER_ID || '').trim();
-    const token = (process.env.WHATSAPP_SYSTEM_USER_TOKEN || '').trim();
-
-    const upstream = await fetch(
-      `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to,
-          type: 'template',
-          template: {
-            name: 'hello_world',
-            language: {
-              code: 'en_US',
-            },
-          },
-        }),
-      },
-    );
-
-    const data = (await upstream.json().catch(() => ({}))) as {
-      messages?: { id?: string }[];
-    };
-
-    if (!upstream.ok) {
-      this.logger.error(
-        JSON.stringify({
-          event: 'otp_send_failed',
-          statusCode: upstream.status,
-          details: data,
-        }),
-      );
-      throw new InternalServerErrorException({
-        error: 'Failed to send OTP template',
-        details: data,
-      });
-    }
-
-    this.logger.log(
-      JSON.stringify({
-        event: 'otp_send_succeeded',
-        messageId: data.messages?.[0]?.id || null,
-      }),
-    );
-
-    return {
-      success: true,
-      messageId: data.messages?.[0]?.id,
-    };
   }
 
   @Delete('session')
@@ -1869,25 +1789,6 @@ export class AuthController {
     }
 
     return null;
-  }
-
-  private normalizePhone(input: string) {
-    const digits = input.replace(/\D/g, '');
-    if (digits.length < 8 || digits.length > 15) return null;
-    return digits;
-  }
-
-  private async enforceOtpThrottle(ip: string) {
-    const result = await this.runtimeLimits.reserve({
-      collection: 'runtime_otp_send_limits',
-      key: ip,
-      limit: 5,
-      windowMs: 10 * 60 * 1000,
-    });
-
-    if (result.limited) {
-      throw new BadRequestException('Too many OTP requests. Try again later.');
-    }
   }
 
   @Post('profile-picture')
