@@ -195,6 +195,15 @@ export class WhatsappService {
         await this.firebaseAdmin.auth().updateUser(userId, {
             phoneNumber: normalizedPhone,
         });
+        const user = await this.firebaseAdmin.auth().getUser(userId);
+        if (!user.email) {
+            throw new BadRequestException('Authenticated account email is missing.');
+        }
+        await this.firebaseAdmin
+            .db()
+            .collection('users')
+            .doc(user.email)
+            .set({ phone: normalizedPhone }, { merge: true });
 
         this.logger.log(
             `WhatsApp phone verified: ${this.maskPhone(normalizedPhone)}`,
@@ -220,7 +229,7 @@ export class WhatsappService {
 
         const apiVersion = process.env.WHATSAPP_API_VERSION?.trim() ?? 'v23.0';
 
-        const templateName = process.env.WHATSAPP_OTP_TEMPLATE_NAME?.trim() ?? 'chefu_login_code';
+        const templateName = process.env.WHATSAPP_OTP_TEMPLATE_NAME?.trim() ?? 'chefu_auth';
 
         const language = process.env.WHATSAPP_OTP_LANGUAGE?.trim() ?? 'en_US';
 
@@ -240,13 +249,8 @@ export class WhatsappService {
             `/${phoneNumberId}/messages`;
 
         /*
-         * This payload is for a template whose OTP is
-         * supplied as a template variable.
-         *
-         * If your Meta authentication template uses the
-         * specialized copy-code authentication component,
-         * adjust the components section to exactly match
-         * the approved template configuration.
+         * Authentication templates with a copy-code button require
+         * the OTP in both the body and button components.
          */
         const payload = {
             messaging_product: 'whatsapp',
@@ -260,6 +264,17 @@ export class WhatsappService {
                 components: [
                     {
                         type: 'body',
+                        parameters: [
+                            {
+                                type: 'text',
+                                text: otp,
+                            },
+                        ],
+                    },
+                    {
+                        type: 'button',
+                        sub_type: 'url',
+                        index: '0',
                         parameters: [
                             {
                                 type: 'text',
