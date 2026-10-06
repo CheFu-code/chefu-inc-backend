@@ -86,10 +86,7 @@ export class WhatsappService {
             lastSentAt: new Date(),
         };
 
-        /*
-         * Send the OTP through Meta BEFORE considering
-         * the OTP successfully issued.
-         */
+
         const result = await this.sendAuthenticationTemplate(
             normalizedPhone,
             otp,
@@ -278,14 +275,13 @@ export class WhatsappService {
         otp: string,
     ): Promise<WhatsappSendResult> {
         const accessToken = process.env.WHATSAPP_SYSTEM_USER_TOKEN?.trim();
-
         const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim();
-
         const apiVersion = process.env.WHATSAPP_API_VERSION?.trim() ?? 'v23.0';
 
-        const templateName = process.env.WHATSAPP_OTP_TEMPLATE_NAME?.trim() ?? 'chefu_auth';
-
+        // Updated default to 'chefu_auth_code' as verified in your dashboard
+        const templateName = process.env.WHATSAPP_OTP_TEMPLATE_NAME?.trim() ?? 'chefu_auth_code';
         const language = process.env.WHATSAPP_OTP_LANGUAGE?.trim() ?? 'en_US';
+
         const startedAt = Date.now();
 
         if (!accessToken || !phoneNumberId) {
@@ -305,11 +301,9 @@ export class WhatsappService {
             };
         }
 
-        const url =
-            `https://graph.facebook.com/${apiVersion}` +
-            `/${phoneNumberId}/messages`;
-
+        const url = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
         const recipient = phone.replace(/^\+/, '');
+
         const payload = {
             messaging_product: 'whatsapp',
             recipient_type: 'individual',
@@ -332,7 +326,7 @@ export class WhatsappService {
                     },
                     {
                         type: 'button',
-                        sub_type: 'url',
+                        sub_type: 'copy_code', // Changed from 'url' to 'copy_code'
                         index: '0',
                         parameters: [
                             {
@@ -372,22 +366,12 @@ export class WhatsappService {
                 body: JSON.stringify(payload),
                 signal: AbortSignal.timeout(10000),
             });
+
             const responseText = await response.text();
-            let responseData: {
-                messages?: { id?: string }[];
-                error?: {
-                    message?: string;
-                    type?: string;
-                    code?: number;
-                    error_subcode?: number;
-                    fbtrace_id?: string;
-                    error_data?: {
-                        details?: string;
-                    };
-                };
-            } = {};
+            let responseData: any = {};
+
             try {
-                responseData = JSON.parse(responseText) as typeof responseData;
+                responseData = JSON.parse(responseText);
             } catch {
                 this.logger.warn(
                     JSON.stringify({
@@ -422,9 +406,7 @@ export class WhatsappService {
                 ]
                     .filter(Boolean)
                     .join(' | ');
-                const error = new Error(
-                    details || `Meta API returned ${response.status}`,
-                );
+                const error = new Error(details || `Meta API returned ${response.status}`);
                 Object.assign(error, {
                     meta: {
                         status: response.status,
@@ -444,11 +426,9 @@ export class WhatsappService {
                 throw error;
             }
 
-            const messageId = responseData.messages?.[0]?.id;
-
             return {
                 success: true,
-                messageId,
+                messageId: responseData.messages?.[0]?.id,
             };
         } catch (error: unknown) {
             this.logger.error(
@@ -461,20 +441,19 @@ export class WhatsappService {
                     error: error instanceof Error ? error.message : 'Unknown error',
                 }),
             );
+
             if (error instanceof Error && 'meta' in error) {
                 this.logger.error(
                     JSON.stringify({
                         event: 'whatsapp_meta_api_error',
-                        ...(error as Error & { meta: Record<string, unknown> }).meta,
+                        ...(error as any).meta,
                     }),
                 );
             }
 
             return {
                 success: false,
-                error:
-                    error instanceof Error ? error.message :
-                    'Unknown WhatsApp API error',
+                error: error instanceof Error ? error.message : 'Unknown WhatsApp API error',
             };
         }
     }
