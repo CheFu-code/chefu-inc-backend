@@ -216,6 +216,60 @@ export class WhatsappService {
         };
     }
 
+    async startLoginVerification(
+        idToken: string,
+        requestedPhone?: string,
+    ): Promise<{
+        success: boolean;
+        requiresPhone?: boolean;
+        phone?: string;
+        message?: string;
+    }> {
+        const decodedToken = await this.firebaseAdmin.auth().verifyIdToken(idToken, true);
+        const authUser = await this.firebaseAdmin.auth().getUser(decodedToken.uid);
+        const phone = authUser.phoneNumber || requestedPhone?.trim().replace(/\s+/g, '');
+
+        if (!phone) {
+            return {
+                success: true,
+                requiresPhone: true,
+                message: 'A verified WhatsApp number is required to continue.',
+            };
+        }
+
+        if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+            throw new BadRequestException(
+                'Phone number must be in international E.164 format.',
+            );
+        }
+
+        await this.sendOtp(phone);
+
+        return {
+            success: true,
+            phone,
+            message: 'Verification code sent to your WhatsApp.',
+        };
+    }
+
+    async verifyLoginVerification(
+        idToken: string,
+        phone: string,
+        code: string,
+    ) {
+        const decodedToken = await this.firebaseAdmin.auth().verifyIdToken(idToken, true);
+        const authUser = await this.firebaseAdmin.auth().getUser(decodedToken.uid);
+        const normalizedPhone = phone.trim().replace(/\s+/g, '');
+
+        if (authUser.phoneNumber && authUser.phoneNumber !== normalizedPhone) {
+            throw new BadRequestException(
+                'The verification number does not match your account.',
+            );
+        }
+
+        return this.verifyOtp(normalizedPhone, code, decodedToken.uid);
+    }
+
     /**
      * Send Meta authentication template.
      */

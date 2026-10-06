@@ -2,6 +2,7 @@ import {
     Body,
     Controller,
     Get,
+    Headers,
     HttpCode,
     Post,
     Query,
@@ -62,6 +63,34 @@ export class WhatsappController {
         );
     }
 
+    @Post('auth/whatsapp/login/start')
+    @HttpCode(200)
+    async startLoginVerification(
+        @Headers('authorization') authorization: string | undefined,
+        @Body() body: { phone?: string },
+    ) {
+        const idToken = this.readBearerToken(authorization);
+        return this.whatsappService.startLoginVerification(idToken, body.phone);
+    }
+
+    @Post('auth/whatsapp/login/verify')
+    @HttpCode(200)
+    async verifyLoginVerification(
+        @Headers('authorization') authorization: string | undefined,
+        @Body() body: { phone?: string; code?: string },
+    ) {
+        const idToken = this.readBearerToken(authorization);
+        if (!body.phone || !body.code) {
+            throw new UnauthorizedException('Phone number and verification code are required.');
+        }
+
+        return this.whatsappService.verifyLoginVerification(
+            idToken,
+            body.phone,
+            body.code,
+        );
+    }
+
     /**
      * Meta webhook verification.
      *
@@ -116,5 +145,13 @@ export class WhatsappController {
          * Do heavy processing asynchronously if needed.
          */
         return response.status(200).json({ received: true });
+    }
+
+    private readBearerToken(authorization: string | undefined): string {
+        if (!authorization?.startsWith('Bearer ')) {
+            throw new UnauthorizedException('Missing Firebase ID token.');
+        }
+
+        return authorization.slice('Bearer '.length).trim();
     }
 }
