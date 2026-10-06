@@ -167,16 +167,6 @@ export function validatePayFastEnv(
   return { service: 'PayFast Payment Gateway', missing };
 }
 
-export function validateClerkEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): ServiceEnvGroup {
-  const missing: MissingVariable[] = [];
-  if (!hasEnv('CLERK_WEBHOOK_SECRET', env)) {
-    missing.push({ name: 'CLERK_WEBHOOK_SECRET', description: 'Clerk Webhook Signing Secret' });
-  }
-  return { service: 'Clerk Billing', missing };
-}
-
 export function validateResendEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): ServiceEnvGroup {
@@ -355,8 +345,4 @@ export function assertGeminiConfigured(env: NodeJS.ProcessEnv = process.env): vo
 
 export function assertWhatsAppConfigured(env: NodeJS.ProcessEnv = process.env): void {
   assertServiceConfigured(validateWhatsAppEnv(env));
-}
-
-export function assertClerkConfigured(env: NodeJS.ProcessEnv = process.env): void {
-  assertServiceConfigured(validateClerkEnv(env));
 }

@@ -6,7 +6,6 @@ import { AcademyMobileModule } from './modules/academy-mobile/academy-mobile.mod
 import { AiModule } from './modules/ai/ai.module';
 import { AppsModule } from './modules/apps/apps.module';
 import { AuthModule } from './modules/auth/auth.module';
-import { BillingModule } from './modules/billing/billing.module';
 import { CoursesModule } from './modules/courses/courses.module';
 import { EmailModule } from './modules/email/email.module';
 import { FirebaseAdminModule } from './modules/firebase-admin/firebase-admin.module';
@@ -32,7 +31,6 @@ const platformModules = [
 
 const sharedServiceModules = [
   AiModule,
-  BillingModule,
   EmailModule,
   NotificationsModule,
   WhatsappModule,

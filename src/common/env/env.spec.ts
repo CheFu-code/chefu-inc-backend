@@ -6,7 +6,6 @@ import {
   validateFirebaseAdminEnv,
   validateCloudinaryEnv,
   validatePayFastEnv,
-  validateClerkEnv,
   validateResendEnv,
   validateGeminiEnv,
   validateWhatsAppEnv,
@@ -15,7 +14,6 @@ import {
   assertGeminiConfigured,
   assertWhatsAppConfigured,
   assertPayFastConfigured,
-  assertClerkConfigured,
 } from './env';
 
 const VALID_DEV_ENV: NodeJS.ProcessEnv = {
@@ -216,21 +214,6 @@ void test('validateWhatsAppEnv and assertWhatsAppConfigured identify missing Wha
       WHATSAPP_SYSTEM_USER_TOKEN: 'EAAB_token_123',
       WHATSAPP_APP_SECRET: 'app_secret_123',
     }),
-  );
-});
-
-void test('validateClerkEnv and assertClerkConfigured identify missing Clerk webhook secret', () => {
-  assert.throws(
-    () => assertClerkConfigured({}),
-    (err: unknown) => {
-      assert.ok(err instanceof ConfigurationError);
-      assert.match((err as Error).message, /CLERK_WEBHOOK_SECRET/);
-      return true;
-    },
-  );
-
-  assert.doesNotThrow(() =>
-    assertClerkConfigured({ CLERK_WEBHOOK_SECRET: 'whsec_test_123' }),
   );
 });
 
