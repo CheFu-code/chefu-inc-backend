@@ -286,10 +286,17 @@ export class WhatsappService {
         const templateName = process.env.WHATSAPP_OTP_TEMPLATE_NAME?.trim() ?? 'chefu_auth';
 
         const language = process.env.WHATSAPP_OTP_LANGUAGE?.trim() ?? 'en_US';
+        const startedAt = Date.now();
 
         if (!accessToken || !phoneNumberId) {
             this.logger.error(
-                'WhatsApp Cloud API environment variables are missing.',
+                JSON.stringify({
+                    event: 'whatsapp_meta_config_missing',
+                    hasAccessToken: Boolean(accessToken),
+                    hasPhoneNumberId: Boolean(phoneNumberId),
+                    hasTemplateName: Boolean(templateName),
+                    hasLanguage: Boolean(language),
+                }),
             );
 
             return {
@@ -302,13 +309,11 @@ export class WhatsappService {
             `https://graph.facebook.com/${apiVersion}` +
             `/${phoneNumberId}/messages`;
 
-        /*
-         * Authentication templates with a copy-code button require
-         * the OTP in both the body and button components.
-         */
+        const recipient = phone.replace(/^\+/, '');
         const payload = {
             messaging_product: 'whatsapp',
-            to: phone.replace(/^\+/, ''),
+            recipient_type: 'individual',
+            to: recipient,
             type: 'template',
             template: {
                 name: templateName,
@@ -340,6 +345,23 @@ export class WhatsappService {
             },
         };
 
+        this.logger.log(
+            JSON.stringify({
+                event: 'whatsapp_meta_send_started',
+                apiVersion,
+                phoneNumberId,
+                recipient: this.maskPhone(phone),
+                recipientDigitsLength: recipient.length,
+                templateName,
+                language,
+                componentTypes: payload.template.components.map(component => component.type),
+                bodyParameterCount: payload.template.components[0].parameters.length,
+                buttonParameterCount: payload.template.components[1].parameters.length,
+                buttonSubType: payload.template.components[1].sub_type,
+                buttonIndex: payload.template.components[1].index,
+            }),
+        );
+
         try {
             const response = await fetch(url, {
                 method: 'POST',
@@ -350,7 +372,8 @@ export class WhatsappService {
                 body: JSON.stringify(payload),
                 signal: AbortSignal.timeout(10000),
             });
-            const responseData = await response.json().catch(() => ({})) as {
+            const responseText = await response.text();
+            let responseData: {
                 messages?: { id?: string }[];
                 error?: {
                     message?: string;
@@ -362,7 +385,34 @@ export class WhatsappService {
                         details?: string;
                     };
                 };
-            };
+            } = {};
+            try {
+                responseData = JSON.parse(responseText) as typeof responseData;
+            } catch {
+                this.logger.warn(
+                    JSON.stringify({
+                        event: 'whatsapp_meta_response_not_json',
+                        status: response.status,
+                        contentType: response.headers.get('content-type'),
+                        responseLength: responseText.length,
+                    }),
+                );
+            }
+
+            this.logger.log(
+                JSON.stringify({
+                    event: 'whatsapp_meta_send_response',
+                    status: response.status,
+                    ok: response.ok,
+                    durationMs: Date.now() - startedAt,
+                    contentType: response.headers.get('content-type'),
+                    responseLength: responseText.length,
+                    hasMessageId: Boolean(responseData.messages?.[0]?.id),
+                    metaErrorCode: responseData.error?.code,
+                    metaErrorType: responseData.error?.type,
+                    metaTraceId: responseData.error?.fbtrace_id,
+                }),
+            );
 
             if (!response.ok) {
                 const metaError = responseData.error;
@@ -383,6 +433,12 @@ export class WhatsappService {
                         subcode: metaError?.error_subcode,
                         traceId: metaError?.fbtrace_id,
                         details: metaError?.error_data?.details,
+                        templateName,
+                        language,
+                        phoneNumberId,
+                        recipient: this.maskPhone(phone),
+                        recipientDigitsLength: recipient.length,
+                        durationMs: Date.now() - startedAt,
                     },
                 });
                 throw error;
@@ -396,8 +452,14 @@ export class WhatsappService {
             };
         } catch (error: unknown) {
             this.logger.error(
-                'Meta WhatsApp API error',
-                error instanceof Error ? error.message : 'Unknown error',
+                JSON.stringify({
+                    event: 'whatsapp_meta_send_failed',
+                    durationMs: Date.now() - startedAt,
+                    recipient: this.maskPhone(phone),
+                    templateName,
+                    language,
+                    error: error instanceof Error ? error.message : 'Unknown error',
+                }),
             );
             if (error instanceof Error && 'meta' in error) {
                 this.logger.error(
