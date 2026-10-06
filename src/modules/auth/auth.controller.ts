@@ -167,6 +167,16 @@ export class AuthController {
 
     await this.recordServerDetectedCountry(request.user.email, request);
     const profile = await this.getUserProfile(request.user.email);
+    const authUser = await this.firebaseAdmin.auth().getUser(request.user.uid);
+    const firebasePhone = authUser.phoneNumber || null;
+    if (!profile.phone && firebasePhone) {
+      profile.phone = firebasePhone;
+      await this.firebaseAdmin
+        .db()
+        .collection('users')
+        .doc(request.user.email)
+        .set({ phone: firebasePhone }, { merge: true });
+    }
 
     return {
       user: {
