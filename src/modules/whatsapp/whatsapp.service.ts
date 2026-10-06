@@ -289,7 +289,7 @@ export class WhatsappService {
         const supportPhone =
             process.env.WHATSAPP_SUPPORT_PHONE?.trim() ??
             process.env.WHATSAPP_PHONE_NUMBER?.trim() ??
-            phone;
+            "+27 60 603 1205";
         const startedAt = Date.now();
 
         if (!accessToken || !phoneNumberId) {
