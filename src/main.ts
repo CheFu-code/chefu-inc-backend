@@ -80,6 +80,7 @@ async function bootstrap() {
 
     const app = await NestFactory.create<NestExpressApplication>(AppModule, {
         rawBody: true,
+        logger: ['warn', 'error'],
     });
     const allowedOrigins = getAllowedOrigins();
 
