@@ -101,7 +101,7 @@ export class WhatsappService {
             );
 
             throw new BadRequestException(
-                'Unable to send WhatsApp verification code.',
+                'Unable to send verification code.',
             );
         }
 
