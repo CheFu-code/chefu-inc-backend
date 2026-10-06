@@ -286,6 +286,10 @@ export class WhatsappService {
         const templateName = process.env.WHATSAPP_OTP_TEMPLATE_NAME?.trim() ?? 'chefu_auth';
 
         const language = process.env.WHATSAPP_OTP_LANGUAGE?.trim() ?? 'en_US';
+        const supportPhone =
+            process.env.WHATSAPP_SUPPORT_PHONE?.trim() ??
+            process.env.WHATSAPP_PHONE_NUMBER?.trim() ??
+            phone;
         const startedAt = Date.now();
 
         if (!accessToken || !phoneNumberId) {
@@ -328,6 +332,18 @@ export class WhatsappService {
                                 type: 'text',
                                 text: otp,
                             },
+                            {
+                                type: 'text',
+                                text: 'Chefu Technologies',
+                            },
+                            {
+                                type: 'text',
+                                text: '5 minutes',
+                            },
+                            {
+                                type: 'text',
+                                text: supportPhone,
+                            },
                         ],
                     },
                     {
@@ -356,6 +372,10 @@ export class WhatsappService {
                 language,
                 componentTypes: payload.template.components.map(component => component.type),
                 bodyParameterCount: payload.template.components[0].parameters.length,
+                supportPhoneConfigured: Boolean(
+                    process.env.WHATSAPP_SUPPORT_PHONE?.trim() ||
+                    process.env.WHATSAPP_PHONE_NUMBER?.trim(),
+                ),
                 buttonParameterCount: payload.template.components[1].parameters.length,
                 buttonSubType: payload.template.components[1].sub_type,
                 buttonIndex: payload.template.components[1].index,
