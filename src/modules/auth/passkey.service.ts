@@ -48,6 +48,7 @@ type StoredPasskey = {
     publicKey?: unknown;
     transports?: unknown;
     uid?: unknown;
+    deviceName?: unknown;
 };
 
 type PasskeyConfig = {
@@ -110,7 +111,7 @@ export class PasskeyService {
         user: PasskeyUser,
         clientKey: string,
         input: { challengeId?: string; response?: RegistrationResponseJSON },
-        metadata?: PasskeyRegistrationMetadata,
+        metadata?: PasskeyRegistrationMetadata & { deviceName?: string },
     ) {
         await this.enforceRateLimit('registration-verify', clientKey, 12);
 
@@ -161,6 +162,7 @@ export class PasskeyService {
             publicKey: Buffer.from(registration.credential.publicKey).toString('base64url'),
             transports: registration.credential.transports || [],
             uid: user.uid,
+            deviceName: metadata?.deviceName,
         });
 
         this.logger.log(
@@ -330,6 +332,7 @@ export class PasskeyService {
             email: credential.email,
             createdAt: this.timestampToIso(createdAt),
             lastUsedAt: this.timestampToIso(lastUsedAt),
+            deviceName: credential.deviceName || 'Unknown device',
         }));
     }
 
@@ -407,6 +410,7 @@ export class PasskeyService {
         publicKey: string;
         transports: AuthenticatorTransportFuture[];
         uid: string;
+        deviceName?: string;
     }) {
         const ref = this.credentialRef(input.credentialId);
 
@@ -431,6 +435,7 @@ export class PasskeyService {
                     publicKey: input.publicKey,
                     transports: input.transports,
                     uid: input.uid,
+                    deviceName: this.normalizeDeviceName(input.deviceName),
                     createdAt: existing?.data()?.createdAt || FieldValue.serverTimestamp(),
                     lastUsedAt: null,
                     updatedAt: FieldValue.serverTimestamp(),
@@ -562,7 +567,14 @@ export class PasskeyService {
             publicKey: data.publicKey,
             transports,
             uid: data.uid,
+            deviceName: typeof data.deviceName === 'string' ? data.deviceName : undefined,
         };
+    }
+
+    private normalizeDeviceName(value: unknown) {
+        if (typeof value !== 'string') return 'Unknown device';
+        const normalized = value.trim().replace(/\s+/g, ' ');
+        return normalized.slice(0, 100) || 'Unknown device';
     }
 
     private credentialRef(credentialId: string) {
@@ -676,4 +688,5 @@ type ParsedPasskey = {
     publicKey: string;
     transports: AuthenticatorTransportFuture[];
     uid: string;
+    deviceName?: string;
 };

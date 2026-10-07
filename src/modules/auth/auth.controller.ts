@@ -456,7 +456,6 @@ export class AuthController {
           apps: {
             academy: {
               enabled: true,
-              lastSeenAt: FieldValue.serverTimestamp(),
             },
           },
         },
@@ -1330,7 +1329,7 @@ export class AuthController {
     }
 
     if (profile.privacy) {
-      updates.privacy = this.normalizePrivacy(profile.privacy);
+      updates.privacy = this.normalizePrivacyUpdates(profile.privacy);
     }
 
     if (profile.emailPreferences) {
@@ -1372,6 +1371,27 @@ export class AuthController {
       personalizedAiRecommendations:
         privacy.personalizedAiRecommendations !== false,
     };
+  }
+
+  private normalizePrivacyUpdates(value: unknown) {
+    const privacy =
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {};
+    const updates: Record<string, boolean> = {};
+
+    for (const key of [
+      'publicProfile',
+      'showCompletedCourses',
+      'showCountry',
+      'personalizedAiRecommendations',
+    ]) {
+      if (typeof privacy[key] === 'boolean') {
+        updates[key] = privacy[key] as boolean;
+      }
+    }
+
+    return updates;
   }
 
   private normalizeProfilePictureUpdate(

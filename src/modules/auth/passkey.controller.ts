@@ -55,6 +55,7 @@ export class PasskeyController {
         body: {
             challengeId?: string;
             response?: RegistrationResponseJSON;
+            deviceName?: string;
         },
     ) {
         const user = request.user;
@@ -89,6 +90,7 @@ export class PasskeyController {
                 userAgent,
                 origin,
                 appId,
+                deviceName: typeof body.deviceName === 'string' ? body.deviceName : undefined,
             },
         );
     }
