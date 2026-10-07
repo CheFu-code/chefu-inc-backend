@@ -250,14 +250,26 @@ export class AuthController {
       localId?: string;
       local_id?: string;
       email?: string;
+      mfaPendingCredential?: string;
+      error?: {
+        message?: string;
+        status?: string;
+      };
     } | null;
     const idToken = payload?.idToken || payload?.id_token;
 
     if (!idToken) {
+      const upstreamError = payload?.error?.message || payload?.error?.status;
+      const upstreamErrorCode = upstreamError && /^[A-Z0-9_]+$/.test(upstreamError)
+        ? upstreamError
+        : null;
+      const requiresMfa = Boolean(payload?.mfaPendingCredential);
       this.logger.error(
         JSON.stringify({
           event: 'auth_login_invalid_identity_toolkit_response',
           upstreamStatus: response.status,
+          upstreamErrorCode,
+          requiresMfa,
           responseFields: payload && typeof payload === 'object'
             ? Object.keys(payload)
             : [],
@@ -266,6 +278,11 @@ export class AuthController {
           requestId: request.headers['x-request-id'] || null,
         }),
       );
+      if (requiresMfa || upstreamErrorCode === 'MFA_REQUIRED') {
+        throw new UnauthorizedException(
+          'This account requires multi-factor verification, which Nook sign-in does not support yet. Sign in through Chefu Account or use an account without MFA enabled.',
+        );
+      }
       throw new BadGatewayException(
         'The authentication service returned an unexpected response. Please try again later.',
       );

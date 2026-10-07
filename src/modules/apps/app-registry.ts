@@ -217,6 +217,13 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         scopes: ["openid", "profile", "email"],
     },
     {
+        id: "nook-mobile",
+        appId: "nook",
+        name: "Nook Mobile",
+        redirectUris: ["nook://sso-callback"],
+        scopes: ["openid", "profile", "email"],
+    },
+    {
         id: "infinity-web",
         appId: "infinity",
         name: "Infinity Web",
