@@ -74,6 +74,28 @@ export class ProfilePictureService {
       );
     }
 
+    return this.uploadProfilePictureBuffer(user, buffer, parsed.contentType);
+  }
+
+  async uploadProfilePictureBuffer(
+    user: AuthenticatedUser,
+    buffer: Buffer,
+    contentType: string,
+  ): Promise<ProfilePictureResponse> {
+    assertCloudinaryConfigured();
+
+    if (!ALLOWED_IMAGE_TYPES.has(contentType.toLowerCase())) {
+      throw new BadRequestException(`Unsupported image type: ${contentType}.`);
+    }
+    if (!buffer.length) {
+      throw new BadRequestException("Uploaded image is empty.");
+    }
+    if (buffer.length > MAX_IMAGE_BYTES) {
+      throw new BadRequestException(
+        "Image exceeds the maximum allowed size of 5 MB.",
+      );
+    }
+
     const userEmail = user.email?.trim().toLowerCase();
     if (!userEmail) {
       throw new BadRequestException("User email is required.");

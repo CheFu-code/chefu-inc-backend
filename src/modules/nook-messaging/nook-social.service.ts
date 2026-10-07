@@ -10,6 +10,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
+import { ProfilePictureService } from '../auth/profile-picture.service';
 
 type ProfileDocument = {
   uid: string;
@@ -55,7 +56,10 @@ const USERNAME_PATTERN = /^[a-z0-9._]{3,30}$/;
 
 @Injectable()
 export class NookSocialService {
-  constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
+  constructor(
+    private readonly firebaseAdmin: FirebaseAdminService,
+    private readonly profilePictureService: ProfilePictureService,
+  ) {}
 
   async profile(user: AuthenticatedUser) {
     const snapshot = await this.profileRef(user.uid).get();
@@ -65,7 +69,12 @@ export class NookSocialService {
   async createProfile(user: AuthenticatedUser, body: { username?: string; name?: string }) {
     await this.assertAccountActive(user.uid);
     const username = this.normalizeUsername(body.username);
-    const name = this.requireText(body.name, 'Display name', 60);
+    const account = await this.accountProfile(user.email);
+    const name = this.requireText(
+      String(account.fullname || body.name || ''),
+      'Display name',
+      60,
+    );
     const profileRef = this.profileRef(user.uid);
     const usernameRef = this.usernameRef(username);
 
@@ -109,6 +118,7 @@ export class NookSocialService {
     if (!snapshot.exists) throw new NotFoundException('Create your Nook profile first.');
     const current = snapshot.data() as ProfileDocument;
     const update: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
+    const accountUpdate: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
 
     if (body.username !== undefined) {
       const username = this.normalizeUsername(body.username);
@@ -125,11 +135,21 @@ export class NookSocialService {
         });
       }
     }
-    if (body.name !== undefined) update.name = this.requireText(body.name, 'Display name', 60);
-    if (body.bio !== undefined) update.bio = this.optionalText(body.bio, 150);
+    if (body.name !== undefined) {
+      const name = this.requireText(body.name, 'Display name', 60);
+      update.name = name;
+      accountUpdate.fullname = name;
+      accountUpdate.firstName = name.split(/\s+/)[0];
+      accountUpdate.lastName = name.split(/\s+/).slice(1).join(' ');
+      await this.firebaseAdmin.auth().updateUser(user.uid, { displayName: name });
+    }
+    if (body.bio !== undefined) accountUpdate.bio = this.optionalText(body.bio, 280);
     if (body.website !== undefined) update.website = this.optionalText(body.website, 200);
     if (body.location !== undefined) update.location = this.optionalText(body.location, 200);
     if (Object.keys(update).length > 1 || body.username === undefined) await ref.set(update, { merge: true });
+    if (Object.keys(accountUpdate).length > 1) {
+      await this.accountProfileRef(user.email).set(accountUpdate, { merge: true });
+    }
     return this.getProfileForUser(user.uid, user.uid);
   }
 
@@ -335,7 +355,13 @@ export class NookSocialService {
       resumable: false,
       metadata: { contentType: mimeType, cacheControl: 'private, max-age=300' },
     });
-    await ref.update({ path, bytes: buffer.length, status: 'uploaded', updatedAt: FieldValue.serverTimestamp() });
+    await ref.update({
+      path,
+      bytes: buffer.length,
+      contentType: mimeType.toLowerCase(),
+      status: 'uploaded',
+      updatedAt: FieldValue.serverTimestamp(),
+    });
     return { ok: true };
   }
 
@@ -464,34 +490,34 @@ export class NookSocialService {
     if (!uploadId) throw new BadRequestException('Upload ID is required.');
     const profileRef = this.profileRef(user.uid);
     const uploadRef = this.firebaseAdmin.db().collection('nookSocialUploads').doc(uploadId);
-    await this.firebaseAdmin.db().runTransaction(async transaction => {
-      const [profile, upload] = await Promise.all([
-        transaction.get(profileRef),
-        transaction.get(uploadRef),
-      ]);
-      if (!profile.exists) throw new BadRequestException('Create your profile first.');
-      if (!upload.exists || upload.get('uid') !== user.uid || upload.get('purpose') !== 'avatar') {
-        throw new BadRequestException('Upload is unavailable or not ready.');
-      }
-      const path = upload.get('path');
-      if (typeof path !== 'string') throw new BadRequestException('Upload file is missing.');
-      if (upload.get('status') === 'published' && profile.get('avatarPath') === path) return;
-      if (upload.get('status') !== 'uploaded') throw new BadRequestException('Upload is unavailable or not ready.');
-      if (upload.get('expiresAt').toMillis() <= Date.now()) throw new BadRequestException('Upload session expired.');
-      transaction.update(profileRef, {
-        avatarPath: path,
-        avatarVersion: FieldValue.increment(1),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      transaction.update(uploadRef, { status: 'published', updatedAt: FieldValue.serverTimestamp() });
-    });
+    const [profile, upload] = await Promise.all([profileRef.get(), uploadRef.get()]);
+    if (!profile.exists) throw new BadRequestException('Create your profile first.');
+    if (!upload.exists || upload.get('uid') !== user.uid || upload.get('purpose') !== 'avatar') {
+      throw new BadRequestException('Upload is unavailable or not ready.');
+    }
+    if (upload.get('status') !== 'uploaded') throw new BadRequestException('Upload is unavailable or not ready.');
+    if (upload.get('expiresAt').toMillis() <= Date.now()) throw new BadRequestException('Upload session expired.');
+    const path = upload.get('path');
+    const contentType = upload.get('contentType');
+    if (typeof path !== 'string' || typeof contentType !== 'string') {
+      throw new BadRequestException('Upload file is missing.');
+    }
+    const [buffer] = await this.firebaseAdmin.storageBucket().file(path).download();
+    await this.profilePictureService.uploadProfilePictureBuffer(user, buffer, contentType);
+    await uploadRef.update({ status: 'published', updatedAt: FieldValue.serverTimestamp() });
+    await this.firebaseAdmin.storageBucket().file(path).delete({ ignoreNotFound: true });
     return { ok: true };
   }
 
   async mediaUrl(user: AuthenticatedUser, kind: string, id: string) {
     let path: string | undefined;
     if (kind === 'avatar') {
-      path = (await this.profileRef(id).get()).get('avatarPath');
+      const profile = await this.profileRef(id).get();
+      const email = String(profile.get('email') || '');
+      const account = await this.accountProfile(email);
+      const avatarUrl = this.accountAvatarUrl(account);
+      if (avatarUrl) return { url: avatarUrl };
+      path = profile.get('avatarPath');
     } else if (kind === 'post') {
       path = (await this.firebaseAdmin.db().collection(POSTS).doc(id).get()).get('uploadPath');
     } else if (kind === 'story') {
@@ -663,27 +689,46 @@ export class NookSocialService {
 
   private async presentProfile(id: string, data: ProfileDocument, viewerUid: string) {
     const db = this.firebaseAdmin.db();
-    const [followers, following, posts, followedByViewer] = await Promise.all([
+    const [followers, following, posts, followedByViewer, account] = await Promise.all([
       db.collection(FOLLOWS).where('followedUid', '==', id).count().get(),
       db.collection(FOLLOWS).where('followerUid', '==', id).count().get(),
       db.collection(POSTS).where('uid', '==', id).count().get(),
       db.collection(FOLLOWS).doc(`${viewerUid}_${id}`).get(),
+      this.accountProfile(data.email),
     ]);
+    const avatarUrl = this.accountAvatarUrl(account);
+    const centralBio = typeof account.bio === 'string' ? account.bio : data.bio;
     return {
       _id: id,
       username: data.username,
-      name: data.name,
-      bio: data.bio || '',
+      name: String(account.fullname || data.name),
+      bio: centralBio || '',
       website: data.website || '',
       location: data.location || '',
       isOwn: id === viewerUid,
       isFollowing: followedByViewer.exists,
-      hasAvatar: Boolean(data.avatarPath),
-      avatarVersion: Number(data.avatarVersion || 0),
+      hasAvatar: Boolean(avatarUrl || data.avatarPath),
+      avatarUrl: avatarUrl || undefined,
+      avatarVersion: this.timestampMs(account.profilePictureUpdatedAt) || Number(data.avatarVersion || 0),
       followersCount: followers.data().count,
       followingCount: following.data().count,
       postsCount: posts.data().count,
     };
+  }
+
+  private accountProfileRef(email: string) {
+    return this.firebaseAdmin.db().collection('users').doc(email.trim().toLowerCase());
+  }
+
+  private async accountProfile(email: string) {
+    if (!email) return {};
+    const snapshot = await this.accountProfileRef(email).get();
+    return snapshot.data() || {};
+  }
+
+  private accountAvatarUrl(account: Record<string, unknown>) {
+    const url = account.profilePicture || account.avatarUrl || account.profilePictureUrl;
+    return typeof url === 'string' && url.trim() ? url.trim() : undefined;
   }
 
   private async getProfileForUser(id: string, viewerUid: string) {
