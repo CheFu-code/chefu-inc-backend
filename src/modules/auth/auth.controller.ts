@@ -185,6 +185,8 @@ export class AuthController {
         ...request.user,
         displayName: profile.fullname,
         photoURL: profile.profilePicture || null,
+        createdAt: profile.createdAt,
+        lastLoginAt: profile.lastLoginAt,
       },
       profile,
     };
@@ -1162,6 +1164,8 @@ export class AuthController {
         detectedCountryCode: '',
         detectedCountrySource: '',
         detectedCountryUpdatedAt: null,
+        createdAt: null,
+        lastLoginAt: null,
         language: 'en',
         learningGoal: '',
         skillLevel: null,
@@ -1220,6 +1224,8 @@ export class AuthController {
       detectedCountryCode: this.stringValue(data.detectedCountryCode),
       detectedCountrySource: this.stringValue(data.detectedCountrySource),
       detectedCountryUpdatedAt: this.timestampToIso(data.detectedCountryUpdatedAt),
+      createdAt: this.timestampToIso(data.createdAt),
+      lastLoginAt: this.timestampToIso(data.lastLoginAt),
       language: this.stringValue(data.language) || 'en',
       learningGoal: this.stringValue(data.learningGoal),
       skillLevel: this.enumValue(data.skillLevel, [
