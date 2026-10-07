@@ -114,6 +114,8 @@ type ProfileUpdateBody = {
   firstName?: string;
   lastName?: string;
   phone?: string;
+  website?: string;
+  location?: string;
   profilePicture?: unknown;
   photoURL?: unknown;
   avatarUrl?: unknown;
@@ -484,6 +486,33 @@ export class AuthController {
       if (firebasePhoneNumber) {
         authUpdates.phoneNumber = firebasePhoneNumber;
       }
+    }
+
+    if (body.website !== undefined) {
+      const website = body.website.trim();
+      if (website.length > 200) {
+        throw new BadRequestException('Website must be 200 characters or less.');
+      }
+      if (website) {
+        let parsed: URL;
+        try {
+          parsed = new URL(website);
+        } catch {
+          throw new BadRequestException('Website must be a valid HTTP or HTTPS URL.');
+        }
+        if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname.includes('.')) {
+          throw new BadRequestException('Website must be a valid HTTP or HTTPS URL.');
+        }
+      }
+      updates.website = website;
+    }
+
+    if (body.location !== undefined) {
+      const location = body.location.trim();
+      if (location.length > 200) {
+        throw new BadRequestException('Location must be 200 characters or less.');
+      }
+      updates.location = location;
     }
 
     if (body.addressStreet !== undefined) {
@@ -1314,6 +1343,8 @@ export class AuthController {
         lastName: '',
         profilePicture: '',
         bio: '',
+        website: '',
+        location: '',
         country: '',
         countryCode: '',
         detectedCountryCode: '',
@@ -1359,6 +1390,8 @@ export class AuthController {
       firstName: this.stringValue(data.firstName),
       lastName: this.stringValue(data.lastName),
       phone: this.stringValue(data.phone),
+      website: this.stringValue(data.website),
+      location: this.stringValue(data.location),
       profilePicture: this.stringValue(data.profilePicture),
       avatarUrl: this.stringValue(data.avatarUrl) || this.stringValue(data.profilePicture),
       bio: this.stringValue(data.bio),

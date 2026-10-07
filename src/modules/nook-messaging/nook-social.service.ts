@@ -144,8 +144,22 @@ export class NookSocialService {
       await this.firebaseAdmin.auth().updateUser(user.uid, { displayName: name });
     }
     if (body.bio !== undefined) accountUpdate.bio = this.optionalText(body.bio, 280);
-    if (body.website !== undefined) update.website = this.optionalText(body.website, 200);
-    if (body.location !== undefined) update.location = this.optionalText(body.location, 200);
+    if (body.website !== undefined) {
+      const website = this.optionalText(body.website, 200);
+      if (website) {
+        let parsed: URL;
+        try {
+          parsed = new URL(website);
+        } catch {
+          throw new BadRequestException('Website must be a valid HTTP or HTTPS URL.');
+        }
+        if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname.includes('.')) {
+          throw new BadRequestException('Website must be a valid HTTP or HTTPS URL.');
+        }
+      }
+      accountUpdate.website = website;
+    }
+    if (body.location !== undefined) accountUpdate.location = this.optionalText(body.location, 200);
     if (Object.keys(update).length > 1 || body.username === undefined) await ref.set(update, { merge: true });
     if (Object.keys(accountUpdate).length > 1) {
       await this.accountProfileRef(user.email).set(accountUpdate, { merge: true });
@@ -703,8 +717,8 @@ export class NookSocialService {
       username: data.username,
       name: String(account.fullname || data.name),
       bio: centralBio || '',
-      website: data.website || '',
-      location: data.location || '',
+      website: typeof account.website === 'string' ? account.website : data.website || '',
+      location: typeof account.location === 'string' ? account.location : data.location || '',
       isOwn: id === viewerUid,
       isFollowing: followedByViewer.exists,
       hasAvatar: Boolean(avatarUrl || data.avatarPath),
