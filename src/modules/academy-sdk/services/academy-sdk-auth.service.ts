@@ -240,7 +240,6 @@ export class AcademySdkAuthService {
           uid: user.uid,
           email: normalizedEmail,
           fullname: user.fullname,
-          name: user.fullname,
           profilePicture: null,
           bio: '',
           country: '',

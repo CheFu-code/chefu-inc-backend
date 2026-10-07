@@ -128,7 +128,7 @@ export class EmailController {
 
       await this.resendService.sendPasskeyAddedNotification({
         email,
-        userName: body?.userName || profile.name || email.split('@')[0],
+        userName: body?.userName || profile.fullname || profile.firstName || email.split('@')[0],
         device: body?.device || request.headers['user-agent'],
         addedAt: new Date(),
         origin,
@@ -213,7 +213,7 @@ export class EmailController {
         eventTime: new Date(),
         ipAddress: this.getClientIp(request),
         location: body?.location || profile.location,
-        userName: body?.userName || profile.name,
+        userName: body?.userName || profile.fullname || profile.firstName,
       });
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'unknown';
@@ -273,7 +273,8 @@ export class EmailController {
 
     return {
       location: this.locationLabel(data),
-      name: this.stringValue(data.name) || this.stringValue(data.fullname),
+      fullname: this.stringValue(data.fullname),
+      firstName: this.stringValue(data.firstName),
       securityEmailsEnabled: emailPreferences?.security !== false,
     };
   }

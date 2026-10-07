@@ -106,7 +106,9 @@ type AcademyProfileUpdate = {
 };
 
 type ProfileUpdateBody = {
-  name?: string;
+  fullname?: string;
+  firstName?: string;
+  lastName?: string;
   phone?: string;
   profilePicture?: unknown;
   photoURL?: unknown;
@@ -181,7 +183,7 @@ export class AuthController {
     return {
       user: {
         ...request.user,
-        displayName: profile.name,
+        displayName: profile.fullname,
         photoURL: profile.profilePicture || null,
       },
       profile,
@@ -339,8 +341,8 @@ export class AuthController {
       phoneNumber?: string;
     } = {};
 
-    if (body.name !== undefined) {
-      const name = body.name.trim().replace(/\s+/g, ' ');
+    if (body.fullname !== undefined) {
+      const name = body.fullname.trim().replace(/\s+/g, ' ');
 
       if (name.length < 2) {
         throw new BadRequestException('Display name must be at least 2 characters.');
@@ -350,9 +352,26 @@ export class AuthController {
         throw new BadRequestException('Display name must be 80 characters or less.');
       }
 
-      updates.name = name;
       updates.fullname = name;
+      updates.name = FieldValue.delete();
+      const nameParts = name.split(' ');
+      updates.firstName = nameParts[0];
+      updates.lastName = nameParts.slice(1).join(' ');
       authUpdates.displayName = name;
+    }
+
+    if (body.firstName !== undefined || body.lastName !== undefined) {
+      const firstName = (body.firstName || '').trim().replace(/\s+/g, ' ');
+      const lastName = (body.lastName || '').trim().replace(/\s+/g, ' ');
+      if (!firstName || !lastName) {
+        throw new BadRequestException('First name and last name are required.');
+      }
+      const fullname = `${firstName} ${lastName}`;
+      updates.firstName = firstName;
+      updates.lastName = lastName;
+      updates.fullname = fullname;
+      updates.name = FieldValue.delete();
+      authUpdates.displayName = fullname;
     }
 
     if (body.phone !== undefined) {
@@ -457,7 +476,7 @@ export class AuthController {
     const profile = await this.getUserProfile(user.email);
     const meta = this.buildSessionMeta({
       email: user.email,
-      name: profile.name || user.email.split('@')[0] || '',
+      name: profile.fullname || profile.firstName || user.email.split('@')[0] || '',
       roles: profile.roles,
       uid: user.uid,
     });
@@ -473,7 +492,7 @@ export class AuthController {
       user: {
         ...user,
         roles: profile.roles,
-        displayName: profile.name,
+        displayName: profile.fullname,
         photoURL: profile.profilePicture || null,
       },
       profile,
@@ -859,7 +878,8 @@ export class AuthController {
     const meta = this.buildSessionMeta({
       email: decodedToken.email || '',
       name:
-        userProfile.name ||
+        userProfile.fullname ||
+        userProfile.firstName ||
         decodedToken.name ||
         decodedToken.email?.split('@')[0] ||
         '',
@@ -1132,7 +1152,9 @@ export class AuthController {
   private async getUserProfile(email?: string) {
     if (!email) {
       return {
-        name: '',
+        fullname: '',
+        firstName: '',
+        lastName: '',
         profilePicture: '',
         bio: '',
         country: '',
@@ -1168,18 +1190,15 @@ export class AuthController {
       .get();
 
     const data = snapshot.data() || {};
-    const name =
-      typeof data?.fullname === 'string'
-        ? data.fullname
-        : typeof data?.name === 'string'
-          ? data.name
-          : '';
+    const fullname = this.stringValue(data.fullname);
     const roles = data.roles;
     const emailPreferences = this.normalizeEmailPreferences(
       data.emailPreferences,
     );
     return {
-      name,
+      fullname,
+      firstName: this.stringValue(data.firstName),
+      lastName: this.stringValue(data.lastName),
       phone: this.stringValue(data.phone),
       profilePicture: this.stringValue(data.profilePicture),
       avatarUrl: this.stringValue(data.avatarUrl) || this.stringValue(data.profilePicture),
@@ -1578,7 +1597,16 @@ export class AuthController {
         ? existingUser.fullname
         : typeof existingUser?.name === 'string'
           ? existingUser.name
-          : decodedToken.name || email.split('@')[0] || '';
+        : decodedToken.name || email.split('@')[0] || '';
+    const nameParts = name.trim().split(/\s+/).filter(Boolean);
+    const firstName =
+      typeof existingUser?.firstName === 'string'
+        ? existingUser.firstName
+        : nameParts[0] || '';
+    const lastName =
+      typeof existingUser?.lastName === 'string'
+        ? existingUser.lastName
+        : nameParts.slice(1).join(' ');
     const now = FieldValue.serverTimestamp();
     const detectedCountry = this.getDetectedCountry(request);
     const firebaseProfilePicture =
@@ -1592,7 +1620,9 @@ export class AuthController {
         uid: decodedToken.uid,
         email,
         fullname: name,
-        name,
+        firstName,
+        lastName,
+        name: FieldValue.delete(),
         roles:
           Array.isArray(existingRoles) && existingRoles.length > 0
             ? existingRoles.map(String)

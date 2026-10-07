@@ -186,9 +186,7 @@ export class PasskeyService {
                 const userDoc = await this.firebaseAdmin.db().collection('users').doc(user.email).get();
                 if (userDoc.exists) {
                     const userData = userDoc.data() || {};
-                    userName = typeof userData.name === 'string'
-                        ? userData.name
-                        : typeof userData.fullname === 'string'
+                    userName = typeof userData.fullname === 'string'
                         ? userData.fullname
                         : typeof userData.displayName === 'string'
                         ? userData.displayName
