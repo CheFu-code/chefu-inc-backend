@@ -55,6 +55,7 @@ export class NookMessagingService {
       transaction.update(conversationRef, {
         latestSequence: sequence,
         preview: text.slice(0, 200),
+        lastSenderUid: user.uid,
         lastMessageAt: Timestamp.now(),
         updatedAt: FieldValue.serverTimestamp(),
       });
