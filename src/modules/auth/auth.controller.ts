@@ -1,4 +1,5 @@
 import {
+  BadGatewayException,
   BadRequestException,
   Body,
   Controller,
@@ -239,25 +240,44 @@ export class AuthController {
       );
     }
 
-    const payload = (await response.json()) as {
+    const payload = (await response.json().catch(() => null)) as {
       idToken?: string;
+      id_token?: string;
       refreshToken?: string;
+      refresh_token?: string;
       expiresIn?: string;
+      expires_in?: string;
       localId?: string;
+      local_id?: string;
       email?: string;
-    };
+    } | null;
+    const idToken = payload?.idToken || payload?.id_token;
 
-    if (!payload.idToken) {
-      throw new InternalServerErrorException('Login failed. Please try again.');
+    if (!idToken) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'auth_login_invalid_identity_toolkit_response',
+          upstreamStatus: response.status,
+          responseFields: payload && typeof payload === 'object'
+            ? Object.keys(payload)
+            : [],
+          hasRefreshToken: Boolean(payload?.refreshToken || payload?.refresh_token),
+          hasLocalId: Boolean(payload?.localId || payload?.local_id),
+          requestId: request.headers['x-request-id'] || null,
+        }),
+      );
+      throw new BadGatewayException(
+        'The authentication service returned an unexpected response. Please try again later.',
+      );
     }
 
     return {
-      token: payload.idToken,
-      idToken: payload.idToken,
-      refreshToken: payload.refreshToken || '',
-      expiresIn: payload.expiresIn || '',
+      token: idToken,
+      idToken,
+      refreshToken: payload.refreshToken || payload.refresh_token || '',
+      expiresIn: payload.expiresIn || payload.expires_in || '',
       user: {
-        uid: payload.localId || '',
+        uid: payload.localId || payload.local_id || '',
         email: payload.email || email,
       },
     };

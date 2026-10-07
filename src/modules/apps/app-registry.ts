@@ -10,6 +10,7 @@ export type ChefuAppId =
     | "logix-dash"
     | "merchant"
     | "cloudence"
+    | "nook"
     | "root";
 export type ChefuApp = {
     id: ChefuAppId;
@@ -126,6 +127,11 @@ export const CHEFU_APPS: ChefuApp[] = [
         id: "cloudence",
         name: "Cloudence",
         origins: ["https://cloudence.chefu.co.za"],
+    },
+    {
+        id: "nook",
+        name: "Nook",
+        origins: [],
     },
 ];
 
