@@ -1,8 +1,41 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import * as crypto from 'crypto';
 
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
+
+export const ACCOUNT_SECURITY_ACTIVITY_TYPES = [
+  'password_changed',
+  'password_reset_email_sent',
+  'passkey_registered',
+  'passkey_deleted',
+  'mfa_enabled',
+  'mfa_disabled',
+  'recovery_codes_generated',
+  'recovery_code_used',
+  'verification_email_sent',
+  'email_verified',
+  'signed_in',
+  'signed_out',
+] as const;
+
+export type AccountSecurityActivityType =
+  (typeof ACCOUNT_SECURITY_ACTIVITY_TYPES)[number];
+
+const ACCOUNT_ACTIVITY_LABELS: Record<AccountSecurityActivityType, string> = {
+  password_changed: 'Password changed',
+  password_reset_email_sent: 'Password reset email sent',
+  passkey_registered: 'Passkey added',
+  passkey_deleted: 'Passkey removed',
+  mfa_enabled: 'Two-factor authentication enabled',
+  mfa_disabled: 'Two-factor authentication disabled',
+  recovery_codes_generated: 'Recovery codes generated',
+  recovery_code_used: 'Recovery code used',
+  verification_email_sent: 'Verification email sent',
+  email_verified: 'Email address verified',
+  signed_in: 'Signed in',
+  signed_out: 'Signed out',
+};
 
 type SubjectRevocationInput = {
   uid?: string;
@@ -22,6 +55,68 @@ type TokenRevocationSubject = {
 @Injectable()
 export class SecurityEventsService {
   constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
+
+  async recordAccountActivity(input: {
+    uid: string;
+    email: string;
+    eventType: AccountSecurityActivityType;
+    deviceName?: string;
+  }) {
+    const email = input.email.trim().toLowerCase();
+    const eventId = crypto.randomUUID();
+    const userRef = this.firebaseAdmin.db().collection('users').doc(email);
+    const event = {
+        createdAt: Timestamp.now(),
+        eventId,
+        eventType: input.eventType,
+        ...(input.deviceName ? { deviceName: input.deviceName.slice(0, 100) } : {}),
+        uidHash: this.hash(input.uid),
+    };
+
+    await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const snapshot = await transaction.get(userRef);
+      const existing = snapshot.data()?.recentSecurityActivity;
+      const activities = Array.isArray(existing) ? existing : [];
+      transaction.set(
+        userRef,
+        { recentSecurityActivity: [event, ...activities].slice(0, 20) },
+        { merge: true },
+      );
+    });
+
+    return { eventId };
+  }
+
+  async listAccountActivity(email: string, uid: string) {
+    const snapshot = await this.firebaseAdmin
+      .db()
+      .collection('users')
+      .doc(email.trim().toLowerCase())
+      .get();
+    const events = snapshot.data()?.recentSecurityActivity;
+    if (!Array.isArray(events)) return [];
+
+    return events.flatMap((data: Record<string, unknown>) => {
+      if (
+        typeof data.eventType !== 'string' ||
+        !ACCOUNT_SECURITY_ACTIVITY_TYPES.includes(
+          data.eventType as AccountSecurityActivityType,
+        ) ||
+        data.uidHash !== this.hash(uid)
+      ) {
+        return [];
+      }
+
+      const eventType = data.eventType as AccountSecurityActivityType;
+      return [{
+        eventId: typeof data.eventId === 'string' ? data.eventId : '',
+        eventType,
+        label: ACCOUNT_ACTIVITY_LABELS[eventType],
+        deviceName: typeof data.deviceName === 'string' ? data.deviceName : null,
+        createdAt: this.timestampToIso(data.createdAt),
+      }];
+    });
+  }
 
   async publishSubjectRevocation(input: SubjectRevocationInput) {
     const subject = input.uid || input.email?.toLowerCase();
@@ -111,5 +206,17 @@ export class SecurityEventsService {
 
   hash(value: string) {
     return crypto.createHash('sha256').update(value).digest('hex');
+  }
+
+  private timestampToIso(value: unknown) {
+    if (
+      value &&
+      typeof value === 'object' &&
+      'toDate' in value &&
+      typeof (value as { toDate?: unknown }).toDate === 'function'
+    ) {
+      return (value as { toDate: () => Date }).toDate().toISOString();
+    }
+    return null;
   }
 }

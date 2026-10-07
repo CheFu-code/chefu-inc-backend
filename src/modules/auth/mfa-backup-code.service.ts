@@ -12,6 +12,7 @@ import admin from 'firebase-admin';
 import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { hashForAudit } from '../../common/security-audit';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
+import { SecurityEventsService } from './security-events.service';
 
 type BackupCodeRecord = {
     hash?: unknown;
@@ -33,6 +34,7 @@ export class MfaBackupCodeService {
         @Inject(FirebaseAdminService)
         private readonly firebaseAdmin: FirebaseAdminService,
         private readonly runtimeLimits: RuntimeLimitService,
+        private readonly securityEvents: SecurityEventsService,
     ) { }
 
     async securitySummary({
@@ -109,6 +111,23 @@ export class MfaBackupCodeService {
                 },
                 { merge: true },
             );
+
+        try {
+            await this.securityEvents.recordAccountActivity({
+                uid,
+                email: normalizedEmail,
+                eventType: 'recovery_codes_generated',
+            });
+        } catch (error) {
+            this.logger.error(
+                JSON.stringify({
+                    event: 'account_activity_record_failed',
+                    activity: 'recovery_codes_generated',
+                    uidHash: hashForAudit(uid),
+                    reason: error instanceof Error ? error.message : 'unknown',
+                }),
+            );
+        }
 
         this.logger.warn(
             JSON.stringify({
@@ -204,6 +223,22 @@ export class MfaBackupCodeService {
 
         if (!matched) {
             throw new UnauthorizedException('Invalid recovery code.');
+        }
+        try {
+            await this.securityEvents.recordAccountActivity({
+                uid: userRecord.uid,
+                email: normalizedEmail,
+                eventType: 'recovery_code_used',
+            });
+        } catch (error) {
+            this.logger.error(
+                JSON.stringify({
+                    event: 'account_activity_record_failed',
+                    activity: 'recovery_code_used',
+                    uidHash: hashForAudit(userRecord.uid),
+                    reason: error instanceof Error ? error.message : 'unknown',
+                }),
+            );
         }
 
         const customToken = await this.firebaseAdmin.auth().createCustomToken(userRecord.uid, {

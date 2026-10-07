@@ -23,6 +23,7 @@ import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { hashForAudit } from '../../common/security-audit';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { ResendService } from '../email/resend.service';
+import { SecurityEventsService } from './security-events.service';
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 
@@ -73,6 +74,7 @@ export class PasskeyService {
         private readonly runtimeLimits: RuntimeLimitService,
         @Inject(forwardRef(() => ResendService))
         private readonly resendService: ResendService,
+        private readonly securityEvents: SecurityEventsService,
     ) { }
 
     async createRegistrationOptions(user: PasskeyUser, clientKey: string) {
@@ -97,7 +99,6 @@ export class PasskeyService {
             userID: new TextEncoder().encode(user.uid),
             userName: user.email,
         });
-
         const challengeId = await this.saveChallenge({
             challenge: options.challenge,
             kind: 'registration',
@@ -105,6 +106,29 @@ export class PasskeyService {
         });
 
         return { challengeId, options };
+    }
+
+    private async recordAccountActivity(
+        user: PasskeyUser,
+        eventType: 'passkey_registered' | 'passkey_deleted',
+        deviceName?: string,
+    ) {
+        try {
+            await this.securityEvents.recordAccountActivity({
+                ...user,
+                eventType,
+                deviceName,
+            });
+        } catch (error) {
+            this.logger.error(
+                JSON.stringify({
+                    event: 'account_activity_record_failed',
+                    activity: eventType,
+                    uidHash: hashForAudit(user.uid),
+                    reason: error instanceof Error ? error.message : 'unknown',
+                }),
+            );
+        }
     }
 
     async verifyRegistration(
@@ -164,6 +188,7 @@ export class PasskeyService {
             uid: user.uid,
             deviceName: metadata?.deviceName,
         });
+        await this.recordAccountActivity(user, 'passkey_registered', metadata?.deviceName);
 
         this.logger.log(
             JSON.stringify({
@@ -359,6 +384,10 @@ export class PasskeyService {
                 transaction.delete(ref);
             }
         });
+        await this.recordAccountActivity(
+            { uid, email: credential.email },
+            'passkey_deleted',
+        );
 
         this.logger.log(
             JSON.stringify({

@@ -40,7 +40,10 @@ import {
   SessionMeta,
 } from './session.constants';
 import { MfaBackupCodeService } from './mfa-backup-code.service';
-import { SecurityEventsService } from './security-events.service';
+import {
+  AccountSecurityActivityType,
+  SecurityEventsService,
+} from './security-events.service';
 import { SessionSignerService } from './session-signer.service';
 import { ProfilePictureService } from './profile-picture.service';
 import { ResendService } from '../email/resend.service';
@@ -286,6 +289,58 @@ export class AuthController {
     return this.mfaBackupCodes.securitySummary({
       email: request.user?.email,
       uid: request.user?.uid,
+    });
+  }
+
+  @Get('activity')
+  @UseGuards(AuthGuard)
+  async getAccountActivity(
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
+    const user = request.user;
+    if (!user?.email || !user.uid) {
+      throw new UnauthorizedException('Authenticated user missing from request.');
+    }
+    return this.securityEvents.listAccountActivity(user.email, user.uid);
+  }
+
+  @Post('security-activity')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async recordSecurityActivity(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Body() body: { eventType?: unknown },
+  ) {
+    const user = request.user;
+    if (!user?.email || !user.uid) {
+      throw new UnauthorizedException('Authenticated user missing from request.');
+    }
+
+    if (
+      body.eventType !== 'password_changed' &&
+      body.eventType !== 'password_reset_email_sent' &&
+      body.eventType !== 'mfa_enabled' &&
+      body.eventType !== 'mfa_disabled'
+    ) {
+      throw new BadRequestException('Unsupported security activity.');
+    }
+
+    const eventType = body.eventType as AccountSecurityActivityType;
+    if (eventType === 'mfa_enabled' || eventType === 'mfa_disabled') {
+      const authUser = await this.firebaseAdmin.auth().getUser(user.uid);
+      const mfaEnabled = (authUser.multiFactor?.enrolledFactors.length || 0) > 0;
+      if (
+        (eventType === 'mfa_enabled' && !mfaEnabled) ||
+        (eventType === 'mfa_disabled' && mfaEnabled)
+      ) {
+        throw new BadRequestException('The reported MFA change is not active.');
+      }
+    }
+
+    return this.securityEvents.recordAccountActivity({
+      uid: user.uid,
+      email: user.email,
+      eventType,
     });
   }
 
@@ -697,6 +752,11 @@ export class AuthController {
       expiresIn: '10 minutes',
       appName: body.appName,
     });
+    await this.recordAccountSecurityActivity(
+      decodedToken.uid,
+      user.email,
+      'verification_email_sent',
+    );
     await ref.set({
       codeHash: createHash('sha256').update(code).digest('hex'),
       expiresAt: new Date(Date.now() + 10 * 60_000),
@@ -748,7 +808,33 @@ export class AuthController {
 
     await this.firebaseAdmin.auth().updateUser(decodedToken.uid, { emailVerified: true });
     await ref.delete();
+    if (decodedToken.email) {
+      await this.recordAccountSecurityActivity(
+        decodedToken.uid,
+        decodedToken.email,
+        'email_verified',
+      );
+    }
     return { success: true, verified: true, message: 'Email verified successfully.' };
+  }
+
+  private async recordAccountSecurityActivity(
+    uid: string,
+    email: string,
+    eventType: AccountSecurityActivityType,
+  ) {
+    try {
+      await this.securityEvents.recordAccountActivity({ uid, email, eventType });
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'account_activity_record_failed',
+          activity: eventType,
+          uidHash: hashForAudit(uid),
+          reason: error instanceof Error ? error.message : 'unknown',
+        }),
+      );
+    }
   }
 
   private readBearerToken(authorization: string | undefined): string {
@@ -969,6 +1055,7 @@ export class AuthController {
       ? await this.revokeCurrentSession(request)
       : { revoked: false, uidHash: null, emailHash: null };
 
+    await this.recordSignedOutActivity(request);
     this.clearSessionCookies(response);
     this.logger.log(
       JSON.stringify({
@@ -982,6 +1069,32 @@ export class AuthController {
     );
 
     return { ok: true, revoked: revocation.revoked };
+  }
+
+  private async recordSignedOutActivity(request: Request) {
+    const sessionCookie = request.cookies?.[SESSION_COOKIE_NAME];
+    if (!sessionCookie) return;
+
+    try {
+      const decoded = await this.firebaseAdmin
+        .auth()
+        .verifySessionCookie(sessionCookie, false);
+      if (decoded.uid && decoded.email) {
+        await this.recordAccountSecurityActivity(
+          decoded.uid,
+          decoded.email,
+          'signed_out',
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'account_activity_record_failed',
+          activity: 'signed_out',
+          reason: error instanceof Error ? error.message : 'unknown',
+        }),
+      );
+    }
   }
 
   private buildSessionMeta({
@@ -1694,6 +1807,22 @@ export class AuthController {
       },
       { merge: true },
     );
+    try {
+      await this.securityEvents.recordAccountActivity({
+        uid: decodedToken.uid,
+        email,
+        eventType: 'signed_in',
+      });
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'account_activity_record_failed',
+          activity: 'signed_in',
+          uidHash: hashForAudit(decodedToken.uid),
+          reason: error instanceof Error ? error.message : 'unknown',
+        }),
+      );
+    }
   }
 
 
