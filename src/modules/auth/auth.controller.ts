@@ -20,7 +20,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { createHash, randomBytes } from 'node:crypto';
 import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
@@ -641,6 +641,103 @@ export class AuthController {
     };
   }
 
+  @Post('email-verification/send')
+  @HttpCode(200)
+  async sendEmailVerificationCode(
+    @Headers('authorization') authorization: string | undefined,
+    @Body() body: { appName?: string },
+  ) {
+    const idToken = this.readBearerToken(authorization);
+    const decodedToken = await this.firebaseAdmin.auth().verifyIdToken(idToken, true);
+    const user = await this.firebaseAdmin.auth().getUser(decodedToken.uid);
+
+    if (!user.email) {
+      throw new BadRequestException('An email address is required for verification.');
+    }
+    if (user.emailVerified) {
+      return { success: true, verified: true, message: 'Email is already verified.' };
+    }
+
+    const ref = this.firebaseAdmin.db()
+      .collection('email_verification_challenges')
+      .doc(decodedToken.uid);
+    const existing = await ref.get();
+    if (existing.exists) {
+      const data = existing.data() as { lastSentAt?: Timestamp };
+      if (Date.now() - (data.lastSentAt?.toMillis() ?? 0) < 60_000) {
+        throw new BadRequestException('Please wait before requesting another verification code.');
+      }
+    }
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    await this.resendService.sendEmailVerification({
+      email: user.email,
+      userName: user.displayName || undefined,
+      code,
+      expiresIn: '10 minutes',
+      appName: body.appName,
+    });
+    await ref.set({
+      codeHash: createHash('sha256').update(code).digest('hex'),
+      expiresAt: new Date(Date.now() + 10 * 60_000),
+      lastSentAt: new Date(),
+      attempts: 0,
+    });
+
+    return { success: true, message: 'Verification code sent to your email.' };
+  }
+
+  @Post('email-verification/verify')
+  @HttpCode(200)
+  async verifyEmailVerificationCode(
+    @Headers('authorization') authorization: string | undefined,
+    @Body() body: { code?: string },
+  ) {
+    const idToken = this.readBearerToken(authorization);
+    const decodedToken = await this.firebaseAdmin.auth().verifyIdToken(idToken, true);
+    const code = body.code?.trim() || '';
+    if (!/^\d{6}$/.test(code)) {
+      throw new BadRequestException('Enter the 6-digit verification code.');
+    }
+
+    const ref = this.firebaseAdmin.db()
+      .collection('email_verification_challenges')
+      .doc(decodedToken.uid);
+    const snapshot = await ref.get();
+    if (!snapshot.exists) {
+      throw new BadRequestException('No active verification code found.');
+    }
+    const data = snapshot.data() as {
+      codeHash?: string;
+      expiresAt?: Timestamp | Date;
+      attempts?: number;
+    };
+    const expiresAt = data.expiresAt instanceof Date
+      ? data.expiresAt.getTime()
+      : data.expiresAt?.toDate().getTime() ?? 0;
+    if (expiresAt < Date.now()) {
+      await ref.delete();
+      throw new BadRequestException('Verification code has expired.');
+    }
+    if (createHash('sha256').update(code).digest('hex') !== data.codeHash) {
+      const attempts = (data.attempts || 0) + 1;
+      if (attempts >= 5) await ref.delete();
+      else await ref.update({ attempts });
+      throw new BadRequestException('Invalid verification code.');
+    }
+
+    await this.firebaseAdmin.auth().updateUser(decodedToken.uid, { emailVerified: true });
+    await ref.delete();
+    return { success: true, verified: true, message: 'Email verified successfully.' };
+  }
+
+  private readBearerToken(authorization: string | undefined): string {
+    if (!authorization?.startsWith('Bearer ')) {
+      throw new UnauthorizedException('Missing Firebase ID token.');
+    }
+    return authorization.slice('Bearer '.length).trim();
+  }
+
   @Post('session')
   async createSession(
     @Headers('authorization') authorization: string | undefined,
@@ -694,6 +791,10 @@ export class AuthController {
         error instanceof Error ? error.stack : undefined,
       );
       throw new UnauthorizedException('Unable to verify your session. Please sign in again.');
+    }
+
+    if (decodedToken.email_verified !== true) {
+      throw new ForbiddenException('Please verify your email address before continuing.');
     }
 
     if (

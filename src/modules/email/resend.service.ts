@@ -42,6 +42,14 @@ export interface PasskeyAddedNotificationData {
     appId?: string;
 }
 
+export interface EmailVerificationData {
+    email: string;
+    userName?: string;
+    code: string;
+    expiresIn?: string;
+    appName?: string;
+}
+
 @Injectable()
 export class ResendService {
     private readonly logger = new Logger(ResendService.name);
@@ -58,6 +66,8 @@ export class ResendService {
         process.env.PASSWORD_CHANGED_TEMPLATE_ID || "password-changed";
     private readonly apiKeyCompromisedTemplateId =
         process.env.API_KEY_COMPROMISED_TEMPLATE_ID || "api-key-compromised";
+    private readonly emailVerificationTemplateId =
+        process.env.EMAIL_VERIFICATION_TEMPLATE_ID || "email-verification";
 
     private readonly fromAddress =
         process.env.SIGNIN_ALERT_FROM ||
@@ -187,6 +197,42 @@ export class ResendService {
                 publicId: data.publicId,
             }),
         );
+    }
+
+    async sendEmailVerification(data: EmailVerificationData): Promise<void> {
+        const apiKey = this.getApiKey();
+        const appName = data.appName || "Chefu Technologies";
+        const userName = data.userName || data.email.split("@")[0] || "there";
+        const expiresIn = data.expiresIn || "10 minutes";
+        const year = new Date().getUTCFullYear().toString();
+
+        const response = await fetch(this.RESEND_API_URL, {
+            method: "POST",
+            headers: {
+                Authorization: `******`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                from: this.notificationFromAddress,
+                to: [data.email],
+                subject: `Your ${appName} verification code`,
+                template: {
+                    id: this.emailVerificationTemplateId,
+                    variables: {
+                        VERIFICATION_CODE: data.code,
+                        USER_NAME: userName,
+                        APP_NAME: appName,
+                        EXPIRES_IN: expiresIn,
+                        YEAR: year,
+                    },
+                },
+            }),
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`Resend request failed: ${response.status} ${error}`);
+        }
     }
 
     private getPasskeyAddedPayload(data: PasskeyAddedNotificationData) {
