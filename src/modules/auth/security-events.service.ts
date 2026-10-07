@@ -17,6 +17,7 @@ export const ACCOUNT_SECURITY_ACTIVITY_TYPES = [
   'email_verified',
   'signed_in',
   'signed_out',
+  'sessions_revoked',
 ] as const;
 
 export type AccountSecurityActivityType =
@@ -35,6 +36,7 @@ const ACCOUNT_ACTIVITY_LABELS: Record<AccountSecurityActivityType, string> = {
   email_verified: 'Email address verified',
   signed_in: 'Signed in',
   signed_out: 'Signed out',
+  sessions_revoked: 'All sessions signed out',
 };
 
 type SubjectRevocationInput = {

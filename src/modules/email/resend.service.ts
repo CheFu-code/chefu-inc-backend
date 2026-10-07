@@ -15,6 +15,7 @@ export interface PasswordChangedNotificationData {
     email: string;
     userName?: string;
     deviceInfo?: string;
+    location?: string;
     ipAddress?: string;
     timestamp: Date;
 }
@@ -63,7 +64,7 @@ export class ResendService {
     private readonly signInTemplateId =
         process.env.SIGNIN_ALERT_TEMPLATE_ID || "signin-alert";
     private readonly passwordChangedTemplateId =
-        process.env.PASSWORD_CHANGED_TEMPLATE_ID || "password-changed";
+        process.env.PASSWORD_CHANGED_TEMPLATE_ID || "password-reset-notification";
     private readonly apiKeyCompromisedTemplateId =
         process.env.API_KEY_COMPROMISED_TEMPLATE_ID || "api-key-compromised";
     private readonly emailVerificationTemplateId =
@@ -304,28 +305,22 @@ export class ResendService {
 
     private getPasswordChangedPayload(data: PasswordChangedNotificationData) {
         const details = this.getPasswordDetails(data);
+        const year = new Date().getUTCFullYear().toString();
 
         return {
             from: this.fromAddress,
             to: [data.email],
-            subject: `Security alert: your account password changed`,
+            subject: `Security alert: your password was changed`,
             template: {
                 id: this.passwordChangedTemplateId,
                 variables: {
                     USER_NAME: details.userName,
-                    TIME: details.time,
+                    USER_EMAIL: data.email,
+                    CHANGED_AT: details.time,
                     DEVICE: details.device || "Unknown device",
+                    LOCATION: details.location || "Unknown location",
                     IP_ADDRESS: details.ipAddress || "Unknown IP address",
-                    SECURITY_URL: this.securityUrl,
-                    SUPPORT_URL: this.supportUrl,
-                    YEAR: new Date().getUTCFullYear().toString(),
-                    userName: details.userName,
-                    time: details.time,
-                    device: details.device || "Unknown device",
-                    ipAddress: details.ipAddress || "Unknown IP address",
-                    securityUrl: this.securityUrl,
-                    supportUrl: this.supportUrl,
-                    year: new Date().getUTCFullYear().toString(),
+                    YEAR: year,
                 },
             },
         };
@@ -482,6 +477,7 @@ export class ResendService {
                 timeZoneName: "short",
             }),
             device: data.deviceInfo ? this.formatDevice(data.deviceInfo) : "",
+            location: data.location || "Unknown location",
             ipAddress: data.ipAddress || "",
         };
     }

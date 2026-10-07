@@ -1055,7 +1055,10 @@ export class AuthController {
       ? await this.revokeCurrentSession(request)
       : { revoked: false, uidHash: null, emailHash: null };
 
-    await this.recordSignedOutActivity(request);
+    await this.recordSignedOutActivity(
+      request,
+      revokeGlobally ? 'sessions_revoked' : 'signed_out',
+    );
     this.clearSessionCookies(response);
     this.logger.log(
       JSON.stringify({
@@ -1071,7 +1074,10 @@ export class AuthController {
     return { ok: true, revoked: revocation.revoked };
   }
 
-  private async recordSignedOutActivity(request: Request) {
+  private async recordSignedOutActivity(
+    request: Request,
+    eventType: 'signed_out' | 'sessions_revoked',
+  ) {
     const sessionCookie = request.cookies?.[SESSION_COOKIE_NAME];
     if (!sessionCookie) return;
 
@@ -1083,14 +1089,14 @@ export class AuthController {
         await this.recordAccountSecurityActivity(
           decoded.uid,
           decoded.email,
-          'signed_out',
+          eventType,
         );
       }
     } catch (error) {
       this.logger.warn(
         JSON.stringify({
           event: 'account_activity_record_failed',
-          activity: 'signed_out',
+          activity: eventType,
           reason: error instanceof Error ? error.message : 'unknown',
         }),
       );

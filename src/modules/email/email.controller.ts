@@ -39,7 +39,8 @@ export class EmailController {
   @Post('password-changed')
   @UseGuards(AuthGuard)
   async passwordChanged(
-    @Body() body: { deviceInfo?: string; userName?: string } | undefined,
+    @Body()
+    body: { deviceInfo?: string; location?: string; userName?: string } | undefined,
     @Headers('authorization') authorization: string | undefined,
     @Req() request: RequestWithUser,
   ) {
@@ -60,10 +61,12 @@ export class EmailController {
       };
     }
 
+    const profile = await this.securityProfile(email);
     await this.resendService.sendPasswordChangedNotification({
       email,
-      userName: body?.userName,
+      userName: body?.userName || profile.fullname || profile.firstName,
       deviceInfo: body?.deviceInfo || request.headers['user-agent'],
+      location: body?.location || profile.location,
       ipAddress: this.getClientIp(request),
       timestamp: new Date(),
     });
