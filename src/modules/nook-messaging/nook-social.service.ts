@@ -460,11 +460,30 @@ export class NookSocialService {
   }
 
   async setAvatar(user: AuthenticatedUser, uploadId?: string) {
-    const upload = await this.consumeUpload(user.uid, uploadId, 'avatar');
-    await this.profileRef(user.uid).update({
-      avatarPath: upload.path,
-      avatarVersion: FieldValue.increment(1),
-      updatedAt: FieldValue.serverTimestamp(),
+    await this.assertAccountActive(user.uid);
+    if (!uploadId) throw new BadRequestException('Upload ID is required.');
+    const profileRef = this.profileRef(user.uid);
+    const uploadRef = this.firebaseAdmin.db().collection('nookSocialUploads').doc(uploadId);
+    await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const [profile, upload] = await Promise.all([
+        transaction.get(profileRef),
+        transaction.get(uploadRef),
+      ]);
+      if (!profile.exists) throw new BadRequestException('Create your profile first.');
+      if (!upload.exists || upload.get('uid') !== user.uid || upload.get('purpose') !== 'avatar') {
+        throw new BadRequestException('Upload is unavailable or not ready.');
+      }
+      const path = upload.get('path');
+      if (typeof path !== 'string') throw new BadRequestException('Upload file is missing.');
+      if (upload.get('status') === 'published' && profile.get('avatarPath') === path) return;
+      if (upload.get('status') !== 'uploaded') throw new BadRequestException('Upload is unavailable or not ready.');
+      if (upload.get('expiresAt').toMillis() <= Date.now()) throw new BadRequestException('Upload session expired.');
+      transaction.update(profileRef, {
+        avatarPath: path,
+        avatarVersion: FieldValue.increment(1),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      transaction.update(uploadRef, { status: 'published', updatedAt: FieldValue.serverTimestamp() });
     });
     return { ok: true };
   }
@@ -640,29 +659,6 @@ export class NookSocialService {
     ]);
     if (profile.exists) await profile.ref.delete();
     return { ok: true };
-  }
-
-  private async consumeUpload(uid: string, id: string | undefined, purpose: string) {
-    await this.assertAccountActive(uid);
-    if (!id) throw new BadRequestException('Upload ID is required.');
-    const ref = this.firebaseAdmin.db().collection('nookSocialUploads').doc(id);
-    return this.firebaseAdmin.db().runTransaction(async transaction => {
-      const snapshot = await transaction.get(ref);
-      if (!snapshot.exists || snapshot.get('uid') !== uid || snapshot.get('purpose') !== purpose || snapshot.get('status') !== 'uploaded') {
-        throw new BadRequestException('Upload is unavailable or not ready.');
-      }
-      if (snapshot.get('expiresAt').toMillis() <= Date.now()) throw new BadRequestException('Upload session expired.');
-      const data = snapshot.data()!;
-      if (typeof data.path !== 'string') throw new BadRequestException('Upload file is missing.');
-      transaction.update(ref, { status: 'published', updatedAt: FieldValue.serverTimestamp() });
-      return {
-        path: data.path as string,
-        kind: data.kind as 'image' | 'video',
-        width: Number(data.width || 0),
-        height: Number(data.height || 0),
-        duration: typeof data.duration === 'number' ? data.duration : undefined,
-      };
-    });
   }
 
   private async presentProfile(id: string, data: ProfileDocument, viewerUid: string) {
