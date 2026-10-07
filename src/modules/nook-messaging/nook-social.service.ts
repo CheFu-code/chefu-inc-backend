@@ -678,7 +678,6 @@ export class NookSocialService {
       location: data.location || '',
       isOwn: id === viewerUid,
       isFollowing: followedByViewer.exists,
-      isDemo: false,
       hasAvatar: Boolean(data.avatarPath),
       avatarVersion: Number(data.avatarVersion || 0),
       followersCount: followers.data().count,
