@@ -21,7 +21,7 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomInt } from 'node:crypto';
 import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { AppsService } from '../apps/apps.service';
@@ -669,7 +669,7 @@ export class AuthController {
       }
     }
 
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(randomInt(100000, 1000000));
     await this.resendService.sendEmailVerification({
       email: user.email,
       userName: user.displayName || undefined,
