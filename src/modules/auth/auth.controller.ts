@@ -114,6 +114,7 @@ type ProfileUpdateBody = {
   firstName?: string;
   lastName?: string;
   phone?: string;
+  bio?: string;
   website?: string;
   location?: string;
   profilePicture?: unknown;
@@ -486,6 +487,14 @@ export class AuthController {
       if (firebasePhoneNumber) {
         authUpdates.phoneNumber = firebasePhoneNumber;
       }
+    }
+
+    if (body.bio !== undefined) {
+      const bio = body.bio.trim();
+      if (bio.length > 280) {
+        throw new BadRequestException('Bio must be 280 characters or less.');
+      }
+      updates.bio = bio;
     }
 
     if (body.website !== undefined) {

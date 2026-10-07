@@ -37,13 +37,7 @@ export class NookSocialController {
   }
 
   @Patch('profile')
-  updateProfile(@Req() request: AuthenticatedRequest, @Body() body: {
-    username?: string;
-    name?: string;
-    bio?: string;
-    website?: string;
-    location?: string;
-  }) {
+  updateProfile(@Req() request: AuthenticatedRequest, @Body() body: { username?: string }) {
     return this.social.updateProfile(request.user, body);
   }
 
@@ -157,7 +151,7 @@ export class NookSocialController {
 
   @Post('uploads')
   createUpload(@Req() request: AuthenticatedRequest, @Body() body: {
-    purpose?: 'post' | 'story' | 'avatar';
+    purpose?: 'post' | 'story';
     kind?: 'image' | 'video';
     width?: number;
     height?: number;
@@ -186,11 +180,6 @@ export class NookSocialController {
   @Post('stories')
   publishStory(@Req() request: AuthenticatedRequest, @Body() body: { uploadId?: string; caption?: string }) {
     return this.social.publishStory(request.user, body);
-  }
-
-  @Post('profile/avatar')
-  setAvatar(@Req() request: AuthenticatedRequest, @Body() body: { uploadId?: string }) {
-    return this.social.setAvatar(request.user, body.uploadId);
   }
 
   @Get('media/:kind/:id')

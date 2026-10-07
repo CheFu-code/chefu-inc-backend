@@ -92,19 +92,11 @@ export class NookSocialService {
     return this.profile(user);
   }
 
-  async updateProfile(user: AuthenticatedUser, body: {
-    username?: string;
-    name?: string;
-    bio?: string;
-    website?: string;
-    location?: string;
-  }) {
+  async updateProfile(user: AuthenticatedUser, body: { username?: string }) {
     const ref = this.profileRef(user.uid);
     const snapshot = await ref.get();
     if (!snapshot.exists) throw new NotFoundException('Create your Nook profile first.');
     const current = snapshot.data() as ProfileDocument;
-    const accountUpdate: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
-
     if (body.username !== undefined) {
       const username = this.normalizeUsername(body.username);
       if (username !== current.normalizedUsername) {
@@ -119,33 +111,6 @@ export class NookSocialService {
           transaction.update(ref, { username, normalizedUsername: username });
         });
       }
-    }
-    if (body.name !== undefined) {
-      const name = this.requireText(body.name, 'Display name', 60);
-      accountUpdate.fullname = name;
-      accountUpdate.firstName = name.split(/\s+/)[0];
-      accountUpdate.lastName = name.split(/\s+/).slice(1).join(' ');
-      await this.firebaseAdmin.auth().updateUser(user.uid, { displayName: name });
-    }
-    if (body.bio !== undefined) accountUpdate.bio = this.optionalText(body.bio, 280);
-    if (body.website !== undefined) {
-      const website = this.optionalText(body.website, 200);
-      if (website) {
-        let parsed: URL;
-        try {
-          parsed = new URL(website);
-        } catch {
-          throw new BadRequestException('Website must be a valid HTTP or HTTPS URL.');
-        }
-        if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname.includes('.')) {
-          throw new BadRequestException('Website must be a valid HTTP or HTTPS URL.');
-        }
-      }
-      accountUpdate.website = website;
-    }
-    if (body.location !== undefined) accountUpdate.location = this.optionalText(body.location, 200);
-    if (Object.keys(accountUpdate).length > 1) {
-      await this.accountProfileRef(user.email).set(accountUpdate, { merge: true });
     }
     return this.getProfileForUser(user.uid, user.uid);
   }
@@ -289,16 +254,16 @@ export class NookSocialService {
   }
 
   async createUpload(user: AuthenticatedUser, body: {
-    purpose?: 'post' | 'story' | 'avatar';
+    purpose?: 'post' | 'story';
     kind?: 'image' | 'video';
     width?: number;
     height?: number;
     duration?: number;
   }) {
-    if (!['post', 'story', 'avatar'].includes(String(body.purpose)) || !['image', 'video'].includes(String(body.kind))) {
+    if (!['post', 'story'].includes(String(body.purpose)) || !['image', 'video'].includes(String(body.kind))) {
       throw new BadRequestException('Invalid upload purpose or media type.');
     }
-    if (body.purpose !== 'post' && body.kind !== 'image') throw new BadRequestException('Stories and avatars must be images.');
+    if (body.purpose === 'story' && body.kind !== 'image') throw new BadRequestException('Stories must be images.');
     const width = Number(body.width);
     const height = Number(body.height);
     if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1 || width > 30_000 || height > 30_000) {
@@ -333,7 +298,7 @@ export class NookSocialService {
     if (snapshot.get('expiresAt').toMillis() <= Date.now()) throw new BadRequestException('Upload session expired.');
     const purpose = snapshot.get('purpose') as string;
     const kind = snapshot.get('kind') as string;
-    const maxBytes = purpose === 'avatar' ? 5 : kind === 'video' ? 50 : 10;
+    const maxBytes = kind === 'video' ? 50 : 10;
     const allowed = kind === 'video'
       ? ['video/mp4', 'video/quicktime']
       : ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
@@ -473,29 +438,6 @@ export class NookSocialService {
     if (!snapshot.exists) throw new NotFoundException('Story not found.');
     if (snapshot.get('uid') !== user.uid) throw new ForbiddenException('You can only delete your own stories.');
     await this.deleteMediaAndDoc(ref, snapshot.get('uploadPath'));
-    return { ok: true };
-  }
-
-  async setAvatar(user: AuthenticatedUser, uploadId?: string) {
-    if (!uploadId) throw new BadRequestException('Upload ID is required.');
-    const profileRef = this.profileRef(user.uid);
-    const uploadRef = this.firebaseAdmin.db().collection('nookSocialUploads').doc(uploadId);
-    const [profile, upload] = await Promise.all([profileRef.get(), uploadRef.get()]);
-    if (!profile.exists) throw new BadRequestException('Create your profile first.');
-    if (!upload.exists || upload.get('uid') !== user.uid || upload.get('purpose') !== 'avatar') {
-      throw new BadRequestException('Upload is unavailable or not ready.');
-    }
-    if (upload.get('status') !== 'uploaded') throw new BadRequestException('Upload is unavailable or not ready.');
-    if (upload.get('expiresAt').toMillis() <= Date.now()) throw new BadRequestException('Upload session expired.');
-    const path = upload.get('path');
-    const contentType = upload.get('contentType');
-    if (typeof path !== 'string' || typeof contentType !== 'string') {
-      throw new BadRequestException('Upload file is missing.');
-    }
-    const [buffer] = await this.firebaseAdmin.storageBucket().file(path).download();
-    await this.profilePictureService.uploadProfilePictureBuffer(user, buffer, contentType);
-    await uploadRef.update({ status: 'published', updatedAt: FieldValue.serverTimestamp() });
-    await this.firebaseAdmin.storageBucket().file(path).delete({ ignoreNotFound: true });
     return { ok: true };
   }
 
