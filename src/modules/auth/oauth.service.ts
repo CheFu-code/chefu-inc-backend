@@ -1506,7 +1506,6 @@ export class OAuthService {
     const allowed = (process.env.OAUTH_INTERNAL_AUDIENCES || [
       'admin-service',
       'flow-service',
-      'muzalo-service',
       'quantum-service',
     ].join(','))
       .split(',')

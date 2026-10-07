@@ -21,13 +21,10 @@ Next/React frontends should send `x-chefu-app` when creating a session:
 - `x-chefu-app: academy`
 - `x-chefu-app: admin`
 - `x-chefu-app: flow`
-- `x-chefu-app: muzalo`
 - `x-chefu-app: quantum`
 
 Flow's existing `x-flow-session` header still works and still enforces the
 Flow sender allowlist.
-
-`x-chefu-app: music` is accepted as a legacy alias for Muzalo.
 
 ## OAuth/OIDC
 
@@ -73,7 +70,7 @@ Set these on the backend host:
 - `RESEND_API_KEY` for security notification emails
 - `RUNTIME_LIMIT_STORE=firestore` only when rate limits must be shared across multiple API instances; the default in-memory limiter avoids a Firestore read/write on every request
 - `FLOW_ACCESS_SECRET=<long random secret shared with the Flow frontend>`
-- `FLOW_SENDERS="CHEFU Inc <hello@chefu.co.za>;Flow Mail <mail@chefu.co.za>;Support <support@chefu.co.za>;Security <security@chefu.co.za>;Muzalo <muzalo@chefu.co.za>;Chefu Academy <academy@chefu.co.za>;CHEFU Quantum <quantum@chefu.co.za>"`
+- `FLOW_SENDERS="CHEFU Inc <hello@chefu.co.za>;Flow Mail <mail@chefu.co.za>;Support <support@chefu.co.za>;Security <security@chefu.co.za>;Chefu Academy <academy@chefu.co.za>;CHEFU Quantum <quantum@chefu.co.za>"`
 - `SIGNIN_ALERT_TEMPLATE_ID` if using a saved Resend template for sign-in alerts
 - `PASSWORD_CHANGED_TEMPLATE_ID` if using a saved Resend template for password-change alerts
 - `PASSKEY_ADDED_TEMPLATE_ID` if using a saved Resend template for passkey-added alerts (default: `new-passkey-added`)

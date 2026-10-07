@@ -4,7 +4,6 @@ export type ChefuAppId =
     | "academy"
     | "admin"
     | "flow"
-    | "muzalo"
     | "quantum"
     | "infinity"
     | "logix"
@@ -12,8 +11,6 @@ export type ChefuAppId =
     | "merchant"
     | "cloudence"
     | "root";
-type ChefuAppAlias = "music";
-
 export type ChefuApp = {
     id: ChefuAppId;
     name: string;
@@ -101,11 +98,6 @@ export const CHEFU_APPS: ChefuApp[] = [
         origins: ["https://flow.chefu.co.za"],
     },
     {
-        id: "muzalo",
-        name: "Muzalo",
-        origins: ["https://muzalo.chefu.co.za"],
-    },
-    {
         id: "quantum",
         name: "Quantum",
         origins: ["https://quantum.chefu.co.za"],
@@ -136,10 +128,6 @@ export const CHEFU_APPS: ChefuApp[] = [
         origins: ["https://cloudence.chefu.co.za"],
     },
 ];
-
-const CHEFU_APP_ALIASES: Record<ChefuAppAlias, ChefuAppId> = {
-    music: "muzalo",
-};
 
 export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
     {
@@ -202,13 +190,6 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         scopes: ["openid", "profile", "email", "flow:read", "flow:send"],
     },
     {
-        id: "muzalo-web",
-        appId: "muzalo",
-        name: "Muzalo",
-        redirectUris: ["https://muzalo.chefu.co.za/auth/callback"],
-        scopes: ["openid", "profile", "email", "music:read"],
-    },
-    {
         id: "quantum-web",
         appId: "quantum",
         name: "Quantum",
@@ -263,9 +244,6 @@ export function resolveChefuAppId(value?: string): ChefuAppId | null {
     if (!value) return null;
 
     const normalized = value.trim().toLowerCase();
-    const alias = CHEFU_APP_ALIASES[normalized as ChefuAppAlias];
-    if (alias) return alias;
-
     const app = CHEFU_APPS.find((candidate) => candidate.id === normalized);
     return app?.id || null;
 }

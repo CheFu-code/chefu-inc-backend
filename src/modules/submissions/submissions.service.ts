@@ -63,7 +63,6 @@ export class SubmissionsService {
       highestEducation: this.requiredString(input.highestEducation, 'Highest education', 80),
       workAuthorization: this.requiredString(input.workAuthorization, 'Work authorization', 80),
       portfolioLink: this.url(input.portfolioLink),
-      musicPortfolioLink: this.url(input.musicPortfolioLink),
       cvFileName: cv?.name || '',
       cvFileSize: cv?.buffer.length || null,
       cvFileUrl: '',

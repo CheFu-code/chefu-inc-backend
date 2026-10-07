@@ -387,7 +387,6 @@ export class ResendService {
             academy: "Chefu Academy",
             admin: "Chefu Admin",
             flow: "Flow Mail",
-            muzalo: "Muzalo",
             quantum: "Quantum",
         };
 
