@@ -2,7 +2,6 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
-  InternalServerErrorException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -17,7 +16,7 @@ type ProfileDocument = {
   email: string;
   username: string;
   normalizedUsername: string;
-  name: string;
+  name?: string;
   bio?: string;
   website?: string;
   location?: string;
@@ -66,27 +65,16 @@ export class NookSocialService {
     return snapshot.exists ? this.presentProfile(snapshot.id, snapshot.data() as ProfileDocument, user.uid) : null;
   }
 
-  async createProfile(user: AuthenticatedUser, body: { username?: string; name?: string }) {
-    await this.assertAccountActive(user.uid);
+  async createProfile(user: AuthenticatedUser, body: { username?: string }) {
     const username = this.normalizeUsername(body.username);
-    const account = await this.accountProfile(user.email);
-    const name = this.requireText(
-      String(account.fullname || body.name || ''),
-      'Display name',
-      60,
-    );
     const profileRef = this.profileRef(user.uid);
     const usernameRef = this.usernameRef(username);
 
     await this.firebaseAdmin.db().runTransaction(async transaction => {
-      const [existingProfile, existingUsername, deletion] = await Promise.all([
+      const [existingProfile, existingUsername] = await Promise.all([
         transaction.get(profileRef),
         transaction.get(usernameRef),
-        transaction.get(this.firebaseAdmin.db().collection('nookSocialDeletionRequests').doc(user.uid)),
       ]);
-      if (deletion.exists && ['pending', 'complete'].includes(String(deletion.get('state')))) {
-        throw new ForbiddenException('This Nook account is being deleted.');
-      }
       if (existingProfile.exists) throw new ConflictException('Your profile already exists.');
       if (existingUsername.exists) throw new ConflictException('That username is already taken.');
       const now = FieldValue.serverTimestamp();
@@ -95,7 +83,6 @@ export class NookSocialService {
         email: user.email,
         username,
         normalizedUsername: username,
-        name,
         createdAt: now,
         updatedAt: now,
       });
@@ -112,12 +99,10 @@ export class NookSocialService {
     website?: string;
     location?: string;
   }) {
-    await this.assertAccountActive(user.uid);
     const ref = this.profileRef(user.uid);
     const snapshot = await ref.get();
     if (!snapshot.exists) throw new NotFoundException('Create your Nook profile first.');
     const current = snapshot.data() as ProfileDocument;
-    const update: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
     const accountUpdate: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
 
     if (body.username !== undefined) {
@@ -137,7 +122,6 @@ export class NookSocialService {
     }
     if (body.name !== undefined) {
       const name = this.requireText(body.name, 'Display name', 60);
-      update.name = name;
       accountUpdate.fullname = name;
       accountUpdate.firstName = name.split(/\s+/)[0];
       accountUpdate.lastName = name.split(/\s+/).slice(1).join(' ');
@@ -160,7 +144,6 @@ export class NookSocialService {
       accountUpdate.website = website;
     }
     if (body.location !== undefined) accountUpdate.location = this.optionalText(body.location, 200);
-    if (Object.keys(update).length > 1 || body.username === undefined) await ref.set(update, { merge: true });
     if (Object.keys(accountUpdate).length > 1) {
       await this.accountProfileRef(user.email).set(accountUpdate, { merge: true });
     }
@@ -176,14 +159,13 @@ export class NookSocialService {
     const normalized = query.trim().toLowerCase().replace(/^@/, '');
     const snapshot = await this.firebaseAdmin.db().collection(SOCIAL).orderBy('normalizedUsername').limit(500).get();
     const profiles = await Promise.all(snapshot.docs
-      .filter(doc => !normalized || String(doc.get('normalizedUsername') || '').includes(normalized) ||
-        String(doc.get('name') || '').toLowerCase().includes(normalized))
       .map(doc => this.presentProfile(doc.id, doc.data() as ProfileDocument, user.uid)));
-    return this.page(profiles, page, pageSize);
+    return this.page(profiles.filter(profile =>
+      !normalized || profile.username.includes(normalized) || profile.name.toLowerCase().includes(normalized),
+    ), page, pageSize);
   }
 
   async setFollow(user: AuthenticatedUser, profileId: string, following: boolean) {
-    await this.assertAccountActive(user.uid);
     if (profileId === user.uid) throw new BadRequestException('You cannot follow your own profile.');
     const target = await this.profileRef(profileId).get();
     if (!target.exists) throw new NotFoundException('Profile not found.');
@@ -228,7 +210,6 @@ export class NookSocialService {
   }
 
   async setPostLike(user: AuthenticatedUser, postId: string, liked: boolean) {
-    await this.assertAccountActive(user.uid);
     const post = await this.requirePost(postId);
     const ref = this.firebaseAdmin.db().collection(POSTS).doc(postId).collection('likes').doc(user.uid);
     if (liked) await ref.set({ uid: user.uid, createdAt: FieldValue.serverTimestamp() }, { merge: true });
@@ -237,7 +218,6 @@ export class NookSocialService {
   }
 
   async setBookmark(user: AuthenticatedUser, postId: string, saved: boolean) {
-    await this.assertAccountActive(user.uid);
     await this.requirePost(postId);
     const ref = this.firebaseAdmin.db().collection(BOOKMARKS).doc(`${user.uid}_${postId}`);
     if (saved) await ref.set({ uid: user.uid, postId, createdAt: FieldValue.serverTimestamp() }, { merge: true });
@@ -270,7 +250,6 @@ export class NookSocialService {
   }
 
   async addComment(user: AuthenticatedUser, postId: string, body: { text?: string; requestId?: string }) {
-    await this.assertAccountActive(user.uid);
     const text = this.requireText(body.text, 'Comment', 2000);
     const requestId = body.requestId?.trim();
     if (!requestId || requestId.length > 100) throw new BadRequestException('A valid request ID is required.');
@@ -301,7 +280,6 @@ export class NookSocialService {
   }
 
   async setCommentLike(user: AuthenticatedUser, postId: string, commentId: string, liked: boolean) {
-    await this.assertAccountActive(user.uid);
     const comment = this.firebaseAdmin.db().collection(POSTS).doc(postId).collection('comments').doc(commentId);
     if (!(await comment.get()).exists) throw new NotFoundException('Comment not found.');
     const ref = comment.collection('likes').doc(user.uid);
@@ -317,7 +295,6 @@ export class NookSocialService {
     height?: number;
     duration?: number;
   }) {
-    await this.assertAccountActive(user.uid);
     if (!['post', 'story', 'avatar'].includes(String(body.purpose)) || !['image', 'video'].includes(String(body.kind))) {
       throw new BadRequestException('Invalid upload purpose or media type.');
     }
@@ -500,7 +477,6 @@ export class NookSocialService {
   }
 
   async setAvatar(user: AuthenticatedUser, uploadId?: string) {
-    await this.assertAccountActive(user.uid);
     if (!uploadId) throw new BadRequestException('Upload ID is required.');
     const profileRef = this.profileRef(user.uid);
     const uploadRef = this.firebaseAdmin.db().collection('nookSocialUploads').doc(uploadId);
@@ -527,11 +503,14 @@ export class NookSocialService {
     let path: string | undefined;
     if (kind === 'avatar') {
       const profile = await this.profileRef(id).get();
-      const email = String(profile.get('email') || '');
-      const account = await this.accountProfile(email);
-      const avatarUrl = this.accountAvatarUrl(account);
+      if (!profile.exists) throw new NotFoundException('Profile not found.');
+      const avatarUrl = await this.centralizeLegacyAvatar(
+        id,
+        String(profile.get('email') || ''),
+        profile.get('avatarPath'),
+      );
       if (avatarUrl) return { url: avatarUrl };
-      path = profile.get('avatarPath');
+      throw new NotFoundException('Media not found.');
     } else if (kind === 'post') {
       path = (await this.firebaseAdmin.db().collection(POSTS).doc(id).get()).get('uploadPath');
     } else if (kind === 'story') {
@@ -546,31 +525,6 @@ export class NookSocialService {
       expires: Date.now() + 5 * 60_000,
     });
     return { url };
-  }
-
-  async requestDeletion(user: AuthenticatedUser) {
-    const ref = this.firebaseAdmin.db().collection('nookSocialDeletionRequests').doc(user.uid);
-    const previous = await ref.get();
-    if (previous.exists && previous.get('state') === 'complete') return { ok: true, state: 'complete' };
-    await ref.set({
-      uid: user.uid,
-      state: 'pending',
-      createdAt: previous.exists ? previous.get('createdAt') : FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
-    try {
-      await this.deleteAccountData(user);
-      await ref.set({ state: 'complete', error: FieldValue.delete(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-      return { ok: true, state: 'complete' };
-    } catch {
-      await ref.set({ state: 'failed', error: 'We could not finish removing your Nook data. Please retry.', updatedAt: FieldValue.serverTimestamp() }, { merge: true });
-      throw new InternalServerErrorException('We could not finish removing your Nook data. Please retry.');
-    }
-  }
-
-  async deletionStatus(user: AuthenticatedUser) {
-    const snapshot = await this.firebaseAdmin.db().collection('nookSocialDeletionRequests').doc(user.uid).get();
-    return snapshot.exists ? snapshot.data() : null;
   }
 
   async listConversations(user: AuthenticatedUser, unreadOnly: boolean, page: number, pageSize: number) {
@@ -595,7 +549,6 @@ export class NookSocialService {
   }
 
   async startConversation(user: AuthenticatedUser, profileId: string) {
-    await this.assertAccountActive(user.uid);
     if (profileId === user.uid) throw new BadRequestException('You cannot message yourself.');
     const other = await this.profileRef(profileId).get();
     if (!other.exists) throw new NotFoundException('Profile not found.');
@@ -652,55 +605,6 @@ export class NookSocialService {
     return { ok: true };
   }
 
-  async deleteAccountData(user: AuthenticatedUser) {
-    const profile = await this.profileRef(user.uid).get();
-    const username = profile.get('normalizedUsername');
-    if (typeof username === 'string') await this.usernameRef(username).delete();
-    const storage = this.firebaseAdmin.storageBucket();
-    const [files] = await storage.getFiles({ prefix: `nook/${user.uid}/` });
-    for (let start = 0; start < files.length; start += 50) {
-      await Promise.all(files.slice(start, start + 50).map(file => file.delete({ ignoreNotFound: true })));
-    }
-
-    const db = this.firebaseAdmin.db();
-    const [ownPosts, ownStories, ownUploads, ownBookmarks, followerRows, followedRows, conversations] = await Promise.all([
-      db.collection(POSTS).where('uid', '==', user.uid).get(),
-      db.collection(STORIES).where('uid', '==', user.uid).get(),
-      db.collection('nookSocialUploads').where('uid', '==', user.uid).get(),
-      db.collection(BOOKMARKS).where('uid', '==', user.uid).get(),
-      db.collection(FOLLOWS).where('followerUid', '==', user.uid).get(),
-      db.collection(FOLLOWS).where('followedUid', '==', user.uid).get(),
-      db.collection('nookConversations').where('participantUids', 'array-contains', user.uid).get(),
-    ]);
-    await Promise.all(ownPosts.docs.map(doc => this.deletePostChildren(doc.ref)));
-
-    const allPosts = await db.collection(POSTS).get();
-    for (const post of allPosts.docs) {
-      if (post.get('uid') === user.uid) continue;
-      const [likes, comments, allComments] = await Promise.all([
-        post.ref.collection('likes').where('uid', '==', user.uid).get(),
-        post.ref.collection('comments').where('uid', '==', user.uid).get(),
-        post.ref.collection('comments').get(),
-      ]);
-      const commentLikes = await Promise.all(allComments.docs.map(comment => comment.ref.collection('likes').where('uid', '==', user.uid).get()));
-      await Promise.all(comments.docs.map(comment => this.deleteSubcollection(comment.ref, 'likes')));
-      await this.deleteRefs([...likes.docs.map(doc => doc.ref), ...comments.docs.map(doc => doc.ref)]);
-      await this.deleteRefs(commentLikes.flatMap(snapshot => snapshot.docs.map(doc => doc.ref)));
-    }
-    await Promise.all(conversations.docs.map(doc => this.deleteSubcollection(doc.ref, 'messages')));
-    await this.deleteRefs([
-      ...ownPosts.docs.map(doc => doc.ref),
-      ...ownStories.docs.map(doc => doc.ref),
-      ...ownUploads.docs.map(doc => doc.ref),
-      ...ownBookmarks.docs.map(doc => doc.ref),
-      ...followerRows.docs.map(doc => doc.ref),
-      ...followedRows.docs.map(doc => doc.ref),
-      ...conversations.docs.map(doc => doc.ref),
-    ]);
-    if (profile.exists) await profile.ref.delete();
-    return { ok: true };
-  }
-
   private async presentProfile(id: string, data: ProfileDocument, viewerUid: string) {
     const db = this.firebaseAdmin.db();
     const [followers, following, posts, followedByViewer, account] = await Promise.all([
@@ -708,26 +612,142 @@ export class NookSocialService {
       db.collection(FOLLOWS).where('followerUid', '==', id).count().get(),
       db.collection(POSTS).where('uid', '==', id).count().get(),
       db.collection(FOLLOWS).doc(`${viewerUid}_${id}`).get(),
-      this.accountProfile(data.email),
+      this.centralizeLegacyProfile(id, data),
     ]);
     const avatarUrl = this.accountAvatarUrl(account);
-    const centralBio = typeof account.bio === 'string' ? account.bio : data.bio;
     return {
       _id: id,
       username: data.username,
-      name: String(account.fullname || data.name),
-      bio: centralBio || '',
-      website: typeof account.website === 'string' ? account.website : data.website || '',
-      location: typeof account.location === 'string' ? account.location : data.location || '',
+      name: this.accountName(account),
+      bio: typeof account.bio === 'string' ? account.bio : '',
+      website: typeof account.website === 'string' ? account.website : '',
+      location: typeof account.location === 'string' ? account.location : '',
       isOwn: id === viewerUid,
       isFollowing: followedByViewer.exists,
       hasAvatar: Boolean(avatarUrl || data.avatarPath),
       avatarUrl: avatarUrl || undefined,
-      avatarVersion: this.timestampMs(account.profilePictureUpdatedAt) || Number(data.avatarVersion || 0),
+      avatarVersion: this.timestampMs(account.profilePictureUpdatedAt),
       followersCount: followers.data().count,
       followingCount: following.data().count,
       postsCount: posts.data().count,
     };
+  }
+
+  private async centralizeLegacyProfile(id: string, profile: ProfileDocument) {
+    const accountRef = this.accountProfileRef(profile.email);
+    const account = await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const snapshot = await transaction.get(accountRef);
+      const current = snapshot.data() || {};
+      const migration: Record<string, unknown> = {};
+      if (!Object.hasOwn(current, 'fullname') && profile.name) {
+        migration.fullname = profile.name;
+      }
+      for (const field of ['bio', 'website', 'location'] as const) {
+        if (!Object.hasOwn(current, field) && typeof profile[field] === 'string') {
+          migration[field] = profile[field];
+        }
+      }
+      if (Object.keys(migration).length) {
+        transaction.set(
+          accountRef,
+          { ...migration, updatedAt: FieldValue.serverTimestamp() },
+          { merge: true },
+        );
+      }
+      return { ...current, ...migration };
+    });
+    if (profile.name !== undefined || profile.bio !== undefined ||
+        profile.website !== undefined || profile.location !== undefined) {
+      await this.profileRef(id).update({
+        name: FieldValue.delete(),
+        bio: FieldValue.delete(),
+        website: FieldValue.delete(),
+        location: FieldValue.delete(),
+      });
+    }
+    return account;
+  }
+
+  private async centralizeLegacyAvatar(id: string, email: string, legacyPath: unknown) {
+    let account = await this.accountProfile(email);
+    let url = this.accountAvatarUrl(account);
+    if (url) {
+      if (typeof legacyPath === 'string') await this.removeLegacyAvatar(id, legacyPath);
+      return url;
+    }
+    if (typeof legacyPath !== 'string') return undefined;
+
+    const profileRef = this.profileRef(id);
+    const migrationId = randomUUID();
+    const claimedPath = await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const profile = await transaction.get(profileRef);
+      if (!profile.exists || profile.get('avatarPath') !== legacyPath) return undefined;
+      const startedAt = profile.get('avatarMigrationStartedAt');
+      if (startedAt instanceof Timestamp && Date.now() - startedAt.toMillis() < 60_000) {
+        return undefined;
+      }
+      transaction.update(profileRef, {
+        avatarMigrationId: migrationId,
+        avatarMigrationStartedAt: Timestamp.now(),
+      });
+      return legacyPath;
+    });
+    if (!claimedPath) return undefined;
+
+    try {
+      account = await this.accountProfile(email);
+      url = this.accountAvatarUrl(account);
+      if (!url) {
+        const file = this.firebaseAdmin.storageBucket().file(claimedPath);
+        const [metadata] = await file.getMetadata();
+        const contentType = String(metadata.contentType || 'image/jpeg').toLowerCase();
+        const [buffer] = await file.download();
+        const result = await this.profilePictureService.uploadProfilePictureBuffer(
+          { uid: id, email, roles: [] },
+          buffer,
+          contentType,
+        );
+        url = result.url;
+      }
+      await this.firebaseAdmin.db().runTransaction(async transaction => {
+        const profile = await transaction.get(profileRef);
+        if (profile.get('avatarMigrationId') !== migrationId) return;
+        transaction.update(profileRef, {
+          avatarPath: FieldValue.delete(),
+          avatarVersion: FieldValue.delete(),
+          avatarMigrationId: FieldValue.delete(),
+          avatarMigrationStartedAt: FieldValue.delete(),
+        });
+      });
+      await this.firebaseAdmin.storageBucket().file(claimedPath).delete({ ignoreNotFound: true });
+      return url;
+    } catch (error) {
+      await this.firebaseAdmin.db().runTransaction(async transaction => {
+        const profile = await transaction.get(profileRef);
+        if (profile.get('avatarMigrationId') !== migrationId) return;
+        transaction.update(profileRef, {
+          avatarMigrationId: FieldValue.delete(),
+          avatarMigrationStartedAt: FieldValue.delete(),
+        });
+      });
+      throw error;
+    }
+  }
+
+  private async removeLegacyAvatar(id: string, path: string) {
+    await this.profileRef(id).update({
+      avatarPath: FieldValue.delete(),
+      avatarVersion: FieldValue.delete(),
+    });
+    await this.firebaseAdmin.storageBucket().file(path).delete({ ignoreNotFound: true });
+  }
+
+  private accountName(account: Record<string, unknown>) {
+    const fullname = account.fullname;
+    if (typeof fullname === 'string' && fullname.trim()) return fullname.trim();
+    const firstName = typeof account.firstName === 'string' ? account.firstName.trim() : '';
+    const lastName = typeof account.lastName === 'string' ? account.lastName.trim() : '';
+    return `${firstName} ${lastName}`.trim();
   }
 
   private accountProfileRef(email: string) {
@@ -796,13 +816,6 @@ export class NookSocialService {
     if (typeof path === 'string') await this.firebaseAdmin.storageBucket().file(path).delete({ ignoreNotFound: true });
     if (post) await this.deletePostChildren(ref);
     await ref.delete();
-  }
-
-  private async assertAccountActive(uid: string) {
-    const deletion = await this.firebaseAdmin.db().collection('nookSocialDeletionRequests').doc(uid).get();
-    if (deletion.exists && ['pending', 'complete'].includes(String(deletion.get('state')))) {
-      throw new ForbiddenException('This Nook account is being deleted.');
-    }
   }
 
   private async deletePostChildren(postRef: FirebaseFirestore.DocumentReference) {

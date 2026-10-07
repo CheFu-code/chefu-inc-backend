@@ -32,7 +32,7 @@ export class NookSocialController {
   }
 
   @Post('profiles')
-  createProfile(@Req() request: AuthenticatedRequest, @Body() body: { username?: string; name?: string }) {
+  createProfile(@Req() request: AuthenticatedRequest, @Body() body: { username?: string }) {
     return this.social.createProfile(request.user, body);
   }
 
@@ -196,16 +196,6 @@ export class NookSocialController {
   @Get('media/:kind/:id')
   media(@Req() request: AuthenticatedRequest, @Param('kind') kind: string, @Param('id') id: string) {
     return this.social.mediaUrl(request.user, kind, id);
-  }
-
-  @Post('account/deletion')
-  requestDeletion(@Req() request: AuthenticatedRequest) {
-    return this.social.requestDeletion(request.user);
-  }
-
-  @Get('account/deletion')
-  deletionStatus(@Req() request: AuthenticatedRequest) {
-    return this.social.deletionStatus(request.user);
   }
 
   @Get('conversations')
