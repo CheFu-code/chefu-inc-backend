@@ -3,10 +3,12 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { CloudinaryStorageService } from '../../common/cloudinary-storage.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { ProfilePictureService } from '../auth/profile-picture.service';
@@ -28,7 +30,10 @@ type ProfileDocument = {
 
 type PostDocument = {
   uid: string;
-  uploadPath: string;
+  uploadPath?: string;
+  cloudinaryUrl?: string;
+  cloudinaryPublicId?: string;
+  cloudinaryResourceType?: 'image' | 'video' | 'raw';
   kind: 'image' | 'video';
   caption: string;
   width: number;
@@ -39,7 +44,10 @@ type PostDocument = {
 
 type StoryDocument = {
   uid: string;
-  uploadPath: string;
+  uploadPath?: string;
+  cloudinaryUrl?: string;
+  cloudinaryPublicId?: string;
+  cloudinaryResourceType?: 'image' | 'video' | 'raw';
   caption: string;
   expiresAt: Timestamp;
   createdAt: Timestamp;
@@ -55,9 +63,12 @@ const USERNAME_PATTERN = /^[a-z0-9._]{3,30}$/;
 
 @Injectable()
 export class NookSocialService {
+  private readonly logger = new Logger(NookSocialService.name);
+
   constructor(
     private readonly firebaseAdmin: FirebaseAdminService,
     private readonly profilePictureService: ProfilePictureService,
+    private readonly cloudinaryStorage: CloudinaryStorageService,
   ) {}
 
   async profile(user: AuthenticatedUser) {
@@ -293,7 +304,10 @@ export class NookSocialService {
     if (!snapshot.exists || snapshot.get('uid') !== user.uid) {
       throw new NotFoundException('Upload session is unavailable.');
     }
-    if (snapshot.get('status') === 'uploaded' && typeof snapshot.get('path') === 'string') return { ok: true };
+    if (snapshot.get('status') === 'uploaded' &&
+        (typeof snapshot.get('path') === 'string' || typeof snapshot.get('cloudinaryPublicId') === 'string')) {
+      return { ok: true };
+    }
     if (snapshot.get('status') !== 'pending') throw new NotFoundException('Upload session is unavailable.');
     if (snapshot.get('expiresAt').toMillis() <= Date.now()) throw new BadRequestException('Upload session expired.');
     const purpose = snapshot.get('purpose') as string;
@@ -305,19 +319,33 @@ export class NookSocialService {
     if (!buffer.length || buffer.length > maxBytes * 1024 * 1024 || !allowed.includes(mimeType.toLowerCase())) {
       throw new BadRequestException(`Choose a supported file under ${maxBytes} MB.`);
     }
-    const extension = this.extensionForMime(mimeType);
-    const path = `nook/${user.uid}/${id}.${extension}`;
-    await this.firebaseAdmin.storageBucket().file(path).save(buffer, {
-      resumable: false,
-      metadata: { contentType: mimeType, cacheControl: 'private, max-age=300' },
+    const resourceType = kind === 'video' ? 'video' : 'image';
+    const uploaded = await this.cloudinaryStorage.uploadBuffer(buffer, {
+      public_id: `chefu/nook/${user.uid}/${id}`,
+      resource_type: resourceType,
+      overwrite: false,
+      flags: 'strip_profile',
+      tags: ['chefu', 'nook', purpose, kind],
+      context: { content_type: mimeType.toLowerCase() },
     });
-    await ref.update({
-      path,
-      bytes: buffer.length,
-      contentType: mimeType.toLowerCase(),
-      status: 'uploaded',
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    try {
+      await ref.update({
+        cloudinaryUrl: uploaded.secure_url,
+        cloudinaryPublicId: uploaded.public_id,
+        cloudinaryResourceType: resourceType,
+        bytes: buffer.length,
+        contentType: mimeType.toLowerCase(),
+        status: 'uploaded',
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      try {
+        await this.cloudinaryStorage.delete(uploaded.public_id, resourceType);
+      } catch (cleanupError) {
+        this.logger.error(`Failed to clean up orphaned Nook Cloudinary asset ${uploaded.public_id}.`, cleanupError);
+      }
+      throw error;
+    }
     return { ok: true };
   }
 
@@ -328,7 +356,16 @@ export class NookSocialService {
     if (snapshot.get('uid') !== user.uid) throw new ForbiddenException('Upload does not belong to you.');
     if (!['pending', 'uploaded'].includes(String(snapshot.get('status')))) return { ok: true };
     const path = snapshot.get('path');
-    if (typeof path === 'string') await this.firebaseAdmin.storageBucket().file(path).delete({ ignoreNotFound: true });
+    const publicId = snapshot.get('cloudinaryPublicId');
+    if (typeof publicId === 'string') {
+      const resourceType = snapshot.get('cloudinaryResourceType');
+      if (resourceType !== 'image' && resourceType !== 'video' && resourceType !== 'raw') {
+        throw new BadRequestException('Upload media metadata is invalid.');
+      }
+      await this.cloudinaryStorage.delete(publicId, resourceType);
+    } else if (typeof path === 'string') {
+      await this.firebaseAdmin.storageBucket().file(path).delete({ ignoreNotFound: true });
+    }
     await ref.delete();
     return { ok: true };
   }
@@ -360,6 +397,9 @@ export class NookSocialService {
       transaction.create(postRef, {
         uid: user.uid,
         uploadPath: upload.path,
+        cloudinaryUrl: upload.cloudinaryUrl,
+        cloudinaryPublicId: upload.cloudinaryPublicId,
+        cloudinaryResourceType: upload.cloudinaryResourceType,
         kind: upload.kind,
         caption,
         width: upload.width,
@@ -399,6 +439,9 @@ export class NookSocialService {
       transaction.create(storyRef, {
         uid: user.uid,
         uploadPath: upload.path,
+        cloudinaryUrl: upload.cloudinaryUrl,
+        cloudinaryPublicId: upload.cloudinaryPublicId,
+        cloudinaryResourceType: upload.cloudinaryResourceType,
         caption,
         expiresAt: Timestamp.fromMillis(Date.now() + 24 * 60 * 60_000),
         createdAt: FieldValue.serverTimestamp(),
@@ -428,7 +471,7 @@ export class NookSocialService {
     const snapshot = await ref.get();
     if (!snapshot.exists) throw new NotFoundException('Post not found.');
     if (snapshot.get('uid') !== user.uid) throw new ForbiddenException('You can only delete your own posts.');
-    await this.deleteMediaAndDoc(ref, snapshot.get('uploadPath'), true);
+    await this.deleteMediaAndDoc(ref, snapshot.data() as PostDocument, true);
     return { ok: true };
   }
 
@@ -437,12 +480,13 @@ export class NookSocialService {
     const snapshot = await ref.get();
     if (!snapshot.exists) throw new NotFoundException('Story not found.');
     if (snapshot.get('uid') !== user.uid) throw new ForbiddenException('You can only delete your own stories.');
-    await this.deleteMediaAndDoc(ref, snapshot.get('uploadPath'));
+    await this.deleteMediaAndDoc(ref, snapshot.data() as StoryDocument);
     return { ok: true };
   }
 
   async mediaUrl(user: AuthenticatedUser, kind: string, id: string) {
     let path: string | undefined;
+    let cloudinaryUrl: string | undefined;
     if (kind === 'avatar') {
       const profile = await this.profileRef(id).get();
       if (!profile.exists) throw new NotFoundException('Profile not found.');
@@ -454,13 +498,19 @@ export class NookSocialService {
       if (avatarUrl) return { url: avatarUrl };
       throw new NotFoundException('Media not found.');
     } else if (kind === 'post') {
-      path = (await this.firebaseAdmin.db().collection(POSTS).doc(id).get()).get('uploadPath');
+      const post = await this.firebaseAdmin.db().collection(POSTS).doc(id).get();
+      path = post.get('uploadPath');
+      cloudinaryUrl = post.get('cloudinaryUrl');
     } else if (kind === 'story') {
       const story = await this.firebaseAdmin.db().collection(STORIES).doc(id).get();
-      if (story.exists && story.get('expiresAt').toMillis() > Date.now()) path = story.get('uploadPath');
+      if (story.exists && story.get('expiresAt').toMillis() > Date.now()) {
+        path = story.get('uploadPath');
+        cloudinaryUrl = story.get('cloudinaryUrl');
+      }
     } else {
       throw new BadRequestException('Unknown media type.');
     }
+    if (typeof cloudinaryUrl === 'string' && cloudinaryUrl) return { url: cloudinaryUrl };
     if (!path) throw new NotFoundException('Media not found.');
     const [url] = await this.firebaseAdmin.storageBucket().file(path).getSignedUrl({
       action: 'read',
@@ -754,8 +804,21 @@ export class NookSocialService {
     return snapshot;
   }
 
-  private async deleteMediaAndDoc(ref: FirebaseFirestore.DocumentReference, path: unknown, post = false) {
-    if (typeof path === 'string') await this.firebaseAdmin.storageBucket().file(path).delete({ ignoreNotFound: true });
+  private async deleteMediaAndDoc(
+    ref: FirebaseFirestore.DocumentReference,
+    media: {
+      uploadPath?: string;
+      cloudinaryPublicId?: string;
+      cloudinaryResourceType?: 'image' | 'video' | 'raw';
+    },
+    post = false,
+  ) {
+    if (media.cloudinaryPublicId) {
+      if (!media.cloudinaryResourceType) throw new BadRequestException('Media provider metadata is invalid.');
+      await this.cloudinaryStorage.delete(media.cloudinaryPublicId, media.cloudinaryResourceType);
+    } else if (media.uploadPath) {
+      await this.firebaseAdmin.storageBucket().file(media.uploadPath).delete({ ignoreNotFound: true });
+    }
     if (post) await this.deletePostChildren(ref);
     await ref.delete();
   }
@@ -826,16 +889,4 @@ export class NookSocialService {
     return typeof value === 'number' ? value : 0;
   }
 
-  private extensionForMime(mime: string) {
-    switch (mime.toLowerCase()) {
-      case 'image/jpeg': return 'jpg';
-      case 'image/png': return 'png';
-      case 'image/webp': return 'webp';
-      case 'image/heic': return 'heic';
-      case 'image/heif': return 'heif';
-      case 'video/quicktime': return 'mov';
-      case 'video/mp4': return 'mp4';
-      default: throw new BadRequestException('Unsupported media type.');
-    }
-  }
 }

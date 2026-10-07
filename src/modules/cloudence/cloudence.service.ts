@@ -6,11 +6,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
-import { Readable } from 'node:stream';
 import { UploadApiOptions, v2 as cloudinary } from 'cloudinary';
 import { FieldValue } from 'firebase-admin/firestore';
 import sanitizeHtml from 'sanitize-html';
 import { assertCloudinaryConfigured } from '../../common/env';
+import { CloudinaryStorageService } from '../../common/cloudinary-storage.service';
 import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -79,13 +79,8 @@ export class CloudenceService {
   constructor(
     private readonly firebaseAdmin: FirebaseAdminService,
     private readonly runtimeLimits: RuntimeLimitService,
+    private readonly cloudinaryStorage: CloudinaryStorageService,
   ) {
-    cloudinary.config({
-      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-      api_key: process.env.CLOUDINARY_API_KEY,
-      api_secret: process.env.CLOUDINARY_API_SECRET,
-      secure: true,
-    });
   }
 
   /**
@@ -148,7 +143,7 @@ export class CloudenceService {
 
     const type = this.fileType(name, contentType);
     const extension = this.extension(name);
-    const result = await this.uploadBuffer(buffer, {
+    const result = await this.cloudinaryStorage.uploadBuffer(buffer, {
       public_id: `chefu/cloudence/${user.uid}/${randomUUID()}`,
       resource_type: 'auto',
       overwrite: false,
@@ -917,14 +912,4 @@ export class CloudenceService {
     return { maxBytes: 50 * 1024 * 1024, label: '50 MB for media files' };
   }
 
-  private uploadBuffer(buffer: Buffer<ArrayBufferLike>, options: UploadApiOptions): Promise<{ secure_url: string; public_id: string; resource_type?: string }> {
-    return new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(options, (error, result) => {
-        if (error) return reject(new BadRequestException('File upload failed.'));
-        if (!result?.secure_url || !result.public_id) return reject(new BadRequestException('File upload returned no asset.'));
-        resolve({ secure_url: result.secure_url, public_id: result.public_id, resource_type: result.resource_type });
-      });
-      Readable.from(buffer).pipe(stream);
-    });
-  }
 }
