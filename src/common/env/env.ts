@@ -187,22 +187,6 @@ export function validateGeminiEnv(
   return { service: 'Gemini AI Service', missing };
 }
 
-export function validateWhatsAppEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): ServiceEnvGroup {
-  const missing: MissingVariable[] = [];
-  if (!hasEnv('WHATSAPP_PHONE_NUMBER_ID', env)) {
-    missing.push({ name: 'WHATSAPP_PHONE_NUMBER_ID', description: 'WhatsApp Business Phone Number ID' });
-  }
-  if (!hasEnv('WHATSAPP_SYSTEM_USER_TOKEN', env)) {
-    missing.push({ name: 'WHATSAPP_SYSTEM_USER_TOKEN', description: 'WhatsApp Meta Graph System Token' });
-  }
-  if (!hasEnv('WHATSAPP_APP_SECRET', env)) {
-    missing.push({ name: 'WHATSAPP_APP_SECRET', description: 'Meta App Secret for webhook signature validation' });
-  }
-  return { service: 'WhatsApp Cloud API', missing };
-}
-
 // ── Bootstrap & Production Validator ──
 
 export interface BackendEnvValidationResult {
@@ -341,8 +325,4 @@ export function assertPayFastConfigured(env: NodeJS.ProcessEnv = process.env): v
 
 export function assertGeminiConfigured(env: NodeJS.ProcessEnv = process.env): void {
   assertServiceConfigured(validateGeminiEnv(env));
-}
-
-export function assertWhatsAppConfigured(env: NodeJS.ProcessEnv = process.env): void {
-  assertServiceConfigured(validateWhatsAppEnv(env));
 }

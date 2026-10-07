@@ -70,8 +70,6 @@ Set these on the backend host:
 - Firebase Admin credentials using either `FIREBASE_SERVICE_ACCOUNT` JSON or `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`
 - `FIREBASE_API_KEY` for SDK email/password login compatibility
 - `GEMINI_API_KEY`
-- `WHATSAPP_PHONE_NUMBER_ID`
-- `WHATSAPP_SYSTEM_USER_TOKEN`
 - `RESEND_API_KEY` for security notification emails
 - `RUNTIME_LIMIT_STORE=firestore` only when rate limits must be shared across multiple API instances; the default in-memory limiter avoids a Firestore read/write on every request
 - `FLOW_ACCESS_SECRET=<long random secret shared with the Flow frontend>`

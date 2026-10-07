@@ -8,11 +8,9 @@ import {
   validatePayFastEnv,
   validateResendEnv,
   validateGeminiEnv,
-  validateWhatsAppEnv,
   assertCloudinaryConfigured,
   assertResendConfigured,
   assertGeminiConfigured,
-  assertWhatsAppConfigured,
   assertPayFastConfigured,
 } from './env';
 
@@ -193,27 +191,6 @@ void test('validateGeminiEnv and assertGeminiConfigured identify missing GEMINI_
 
   assert.doesNotThrow(() =>
     assertGeminiConfigured({ GEMINI_API_KEY: 'AIzaSy_fake_test_key_123' }),
-  );
-});
-
-void test('validateWhatsAppEnv and assertWhatsAppConfigured identify missing WhatsApp variables', () => {
-  assert.throws(
-    () => assertWhatsAppConfigured({}),
-    (err: unknown) => {
-      assert.ok(err instanceof ConfigurationError);
-      assert.match((err as Error).message, /WHATSAPP_PHONE_NUMBER_ID/);
-      assert.match((err as Error).message, /WHATSAPP_SYSTEM_USER_TOKEN/);
-      assert.match((err as Error).message, /WHATSAPP_APP_SECRET/);
-      return true;
-    },
-  );
-
-  assert.doesNotThrow(() =>
-    assertWhatsAppConfigured({
-      WHATSAPP_PHONE_NUMBER_ID: '123456789',
-      WHATSAPP_SYSTEM_USER_TOKEN: 'EAAB_token_123',
-      WHATSAPP_APP_SECRET: 'app_secret_123',
-    }),
   );
 });
 
