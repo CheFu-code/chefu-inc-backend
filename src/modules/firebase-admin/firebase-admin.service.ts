@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import admin from 'firebase-admin';
+import { randomUUID } from 'node:crypto';
 import { ConfigurationError, validateFirebaseAdminEnv } from '../../common/env';
 
 function normalizePrivateKey(raw: unknown): string {
@@ -69,6 +70,7 @@ export class FirebaseAdminService {
       : admin.initializeApp({
           credential: admin.credential.cert(serviceAccount),
           storageBucket: process.env.FIREBASE_STORAGE_BUCKET || undefined,
+          databaseURL: process.env.FIREBASE_DATABASE_URL || undefined,
         });
 
     this.logger.log(
@@ -96,8 +98,32 @@ export class FirebaseAdminService {
     return this.firestoreInstance;
   }
 
+  realtimeDatabase(): admin.database.Database {
+    if (!process.env.FIREBASE_DATABASE_URL?.trim()) {
+      throw new Error('FIREBASE_DATABASE_URL is required for Nook realtime messaging.');
+    }
+    return admin.database(this.getApp());
+  }
+
   messaging(): admin.messaging.Messaging {
     return admin.messaging(this.getApp());
+  }
+
+  async publishNookChatEvent(
+    uid: string,
+    conversationId: string,
+    type: 'message' | 'reaction' | 'delivery',
+    sequence: number,
+  ) {
+    if (!process.env.FIREBASE_DATABASE_URL?.trim()) {
+      throw new Error('FIREBASE_DATABASE_URL is required for Nook realtime chat events.');
+    }
+    await admin.database(this.getApp()).ref(`chatEvents/${uid}/${conversationId}`).set({
+      eventId: randomUUID(),
+      type,
+      sequence,
+      sentAt: Date.now(),
+    });
   }
 
   storageBucket() {

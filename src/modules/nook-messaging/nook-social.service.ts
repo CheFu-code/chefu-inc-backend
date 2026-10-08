@@ -911,7 +911,7 @@ export class NookSocialService {
     decision: 'accepted' | 'declined',
   ) {
     const ref = this.firebaseAdmin.db().collection('nookConversations').doc(id);
-    await this.firebaseAdmin.db().runTransaction(async transaction => {
+    const participantUids = await this.firebaseAdmin.db().runTransaction(async transaction => {
       const conversation = await transaction.get(ref);
       if (!conversation.exists) throw new NotFoundException('Conversation not found.');
       const participants = conversation.get('participantUids') as string[] | undefined;
@@ -928,7 +928,18 @@ export class NookSocialService {
         requestStatus: decision,
         updatedAt: FieldValue.serverTimestamp(),
       });
+      return participants;
     });
+    await Promise.all(participantUids.map(async uid => {
+      try {
+        await this.firebaseAdmin.publishNookChatEvent(uid, id, 'message', 0);
+      } catch (error) {
+        this.logger.error(
+          `Failed to publish Nook request event for conversation ${id} to participant ${uid}.`,
+          error,
+        );
+      }
+    }));
     return { status: decision };
   }
 
@@ -936,6 +947,48 @@ export class NookSocialService {
     const conversation = await this.requireConversation(user.uid, id);
     const rows = await conversation.ref.collection('messages').orderBy('sequence', 'desc').offset(page * pageSize).limit(pageSize + 1).get();
     const docs = rows.docs.slice(0, pageSize);
+    const participants = conversation.get('participantUids') as string[];
+    const otherUid = participants.find(participantUid => participantUid !== user.uid);
+    const deliveryBatch = this.firebaseAdmin.db().batch();
+    const delivered = new Set<string>();
+    const newlyDeliveredSequences = new Map<string, number>();
+    for (const doc of docs) {
+      const deliveredToUids = (doc.get('deliveredToUids') as string[] | undefined) || [];
+      if (doc.get('senderUid') === user.uid) {
+        if (otherUid && deliveredToUids.includes(otherUid)) delivered.add(doc.id);
+      } else if (!deliveredToUids.includes(user.uid)) {
+        deliveryBatch.update(doc.ref, {
+          deliveredToUids: FieldValue.arrayUnion(user.uid),
+        });
+        newlyDeliveredSequences.set(
+          String(doc.get('senderUid') || ''),
+          Math.max(
+            newlyDeliveredSequences.get(String(doc.get('senderUid') || '')) || 0,
+            Number(doc.get('sequence') || 0),
+          ),
+        );
+      }
+    }
+    if (newlyDeliveredSequences.size) {
+      await deliveryBatch.commit();
+      await Promise.all([...newlyDeliveredSequences.entries()]
+        .filter(([senderUid]) => senderUid)
+        .map(async ([senderUid, sequence]) => {
+        try {
+          await this.firebaseAdmin.publishNookChatEvent(
+            senderUid,
+            id,
+            'delivery',
+            sequence,
+          );
+        } catch (error) {
+          this.logger.error(
+            `Failed to publish Nook delivery event for conversation ${id} to participant ${senderUid}.`,
+            error,
+          );
+        }
+      }));
+    }
     const now = Date.now();
     const items = docs.map(doc => {
       const deletedForMe =
@@ -963,6 +1016,7 @@ export class NookSocialService {
           now - createdAt <= 2 * 24 * 60 * 60 * 1000 + 12 * 60 * 60 * 1000,
         deletedForMe,
         deletedForEveryone,
+        delivered: delivered.has(doc.id),
         requestId: doc.get('requestId'),
         reactions: deletedForMe || deletedForEveryone
           ? []

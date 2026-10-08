@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -152,7 +152,9 @@ export class NookMessagingService {
       return { id: messageRef.id, sequence, recipientUid, created: true };
     });
 
+    const participants = [user.uid, result.recipientUid];
     if (result.created) {
+      await this.publishConversationEvent(conversationId, participants, 'message', result.sequence);
       void this.notifyRecipient(user, result.recipientUid, conversationId, text)
         .catch(error => this.logger.error('Failed to send Nook message push notification.', error));
     }
@@ -177,7 +179,7 @@ export class NookMessagingService {
     const conversationRef = this.firebaseAdmin.db()
       .collection('nookConversations').doc(conversationId);
     const messageRef = conversationRef.collection('messages').doc(messageId);
-    return this.firebaseAdmin.db().runTransaction(async transaction => {
+    const result = await this.firebaseAdmin.db().runTransaction(async transaction => {
       const conversationSnapshot = await transaction.get(conversationRef);
       if (!conversationSnapshot.exists) {
         throw new BadRequestException('Conversation not found.');
@@ -197,8 +199,19 @@ export class NookMessagingService {
       if (emoji) reactionsBy[user.uid] = emoji;
       else delete reactionsBy[user.uid];
       transaction.update(messageRef, { reactionsBy });
-      return this.summarizeReactions(reactionsBy, user.uid);
+      return {
+        reactions: this.summarizeReactions(reactionsBy, user.uid),
+        participants,
+        sequence: Number(messageSnapshot.get('sequence') || 0),
+      };
     });
+    await this.publishConversationEvent(
+      conversationId,
+      result.participants,
+      'reaction',
+      result.sequence,
+    );
+    return result.reactions;
   }
 
   async editMessage(
@@ -215,7 +228,7 @@ export class NookMessagingService {
     const conversationRef = this.firebaseAdmin.db()
       .collection('nookConversations').doc(conversationId);
     const messageRef = conversationRef.collection('messages').doc(messageId);
-    await this.firebaseAdmin.db().runTransaction(async transaction => {
+    const result = await this.firebaseAdmin.db().runTransaction(async transaction => {
       const [conversation, message] = await Promise.all([
         transaction.get(conversationRef),
         transaction.get(messageRef),
@@ -245,7 +258,12 @@ export class NookMessagingService {
           updatedAt: FieldValue.serverTimestamp(),
         });
       }
+      return {
+        participants: conversation.get('participantUids') as string[],
+        sequence: Number(message.get('sequence') || 0),
+      };
     });
+    await this.publishConversationEvent(conversationId, result.participants, 'message', result.sequence);
     return { edited: true };
   }
 
@@ -258,7 +276,7 @@ export class NookMessagingService {
     const conversationRef = this.firebaseAdmin.db()
       .collection('nookConversations').doc(conversationId);
     const messageRef = conversationRef.collection('messages').doc(messageId);
-    await this.firebaseAdmin.db().runTransaction(async transaction => {
+    const result = await this.firebaseAdmin.db().runTransaction(async transaction => {
       const conversation = await transaction.get(conversationRef);
       if (!conversation.exists) throw new BadRequestException('Conversation not found.');
       if (!(conversation.get('participantUids') as string[] | undefined)?.includes(user.uid)) {
@@ -277,7 +295,12 @@ export class NookMessagingService {
           previewDeletedForUids: FieldValue.arrayUnion(user.uid),
         });
       }
+      return {
+        participants: conversation.get('participantUids') as string[],
+        sequence: Number(message.get('sequence') || 0),
+      };
     });
+    await this.publishConversationEvent(conversationId, result.participants, 'message', result.sequence);
     return { deleted: true };
   }
 
@@ -290,7 +313,7 @@ export class NookMessagingService {
     const conversationRef = this.firebaseAdmin.db()
       .collection('nookConversations').doc(conversationId);
     const messageRef = conversationRef.collection('messages').doc(messageId);
-    await this.firebaseAdmin.db().runTransaction(async transaction => {
+    const result = await this.firebaseAdmin.db().runTransaction(async transaction => {
       const [conversation, message] = await Promise.all([
         transaction.get(conversationRef),
         transaction.get(messageRef),
@@ -332,7 +355,12 @@ export class NookMessagingService {
           updatedAt: FieldValue.serverTimestamp(),
         });
       }
+      return {
+        participants: conversation.get('participantUids') as string[],
+        sequence: Number(message.get('sequence') || 0),
+      };
     });
+    await this.publishConversationEvent(conversationId, result.participants, 'message', result.sequence);
     return { deleted: true };
   }
 
@@ -448,6 +476,7 @@ export class NookMessagingService {
       if (!Array.isArray(payload.data) || payload.data.length !== batch.length) {
         throw new Error('Expo Push API returned an invalid ticket response.');
       }
+
       const tickets = payload.data;
       await Promise.all(tickets.flatMap((ticket, ticketIndex) =>
         ticket.details?.error === 'DeviceNotRegistered'
@@ -458,6 +487,26 @@ export class NookMessagingService {
         this.logger.warn(`Expo Push API reported a delivery error for conversation ${conversationId}.`);
       }
     }
+  }
+
+  private async publishConversationEvent(
+    conversationId: string,
+    participantUids: string[],
+    type: 'message' | 'reaction' | 'delivery',
+    sequence: number,
+  ) {
+    const uniqueUids = [...new Set(participantUids)];
+    const results = await Promise.allSettled(uniqueUids.map(uid =>
+      this.firebaseAdmin.publishNookChatEvent(uid, conversationId, type, sequence),
+    ));
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        this.logger.error(
+          `Failed to publish Nook ${type} event for conversation ${conversationId} to participant ${uniqueUids[index]}.`,
+          result.reason,
+        );
+      }
+    });
   }
 
   private messageId(uid: string, requestId: string) {
