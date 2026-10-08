@@ -327,6 +327,7 @@ export class NookSocialService {
         _id: doc.id,
         _creationTime: this.timestampMs(comment.createdAt),
         text: String(comment.text || ''),
+        parentId: typeof comment.parentId === 'string' ? comment.parentId : undefined,
         author,
         isOwn: comment.uid === user.uid,
         isLiked: liked.exists,
@@ -335,22 +336,38 @@ export class NookSocialService {
     return this.page(items, page, pageSize);
   }
 
-  async addComment(user: AuthenticatedUser, postId: string, body: { text?: string; requestId?: string }) {
+  async addComment(user: AuthenticatedUser, postId: string, body: { text?: string; requestId?: string; parentId?: string }) {
     const text = this.requireText(body.text, 'Comment', 2000);
     const requestId = body.requestId?.trim();
     if (!requestId || requestId.length > 100) throw new BadRequestException('A valid request ID is required.');
     await this.requirePost(postId);
+    const parentId = body.parentId?.trim() || undefined;
+    if (parentId) {
+      const parent = await this.firebaseAdmin.db().collection(POSTS).doc(postId)
+        .collection('comments').doc(parentId).get();
+      if (!parent.exists) throw new NotFoundException('Reply target comment not found.');
+    }
     const id = createHash('sha256').update(`${user.uid}:${requestId}`).digest('hex');
     const ref = this.firebaseAdmin.db().collection(POSTS).doc(postId).collection('comments').doc(id);
     await this.firebaseAdmin.db().runTransaction(async transaction => {
       const existing = await transaction.get(ref);
       if (existing.exists) {
-        if (existing.get('uid') !== user.uid || existing.get('text') !== text) {
+        if (
+          existing.get('uid') !== user.uid ||
+          existing.get('text') !== text ||
+          (existing.get('parentId') || undefined) !== parentId
+        ) {
           throw new ConflictException('Retry does not match the original comment.');
         }
         return;
       }
-      transaction.create(ref, { uid: user.uid, text, requestId, createdAt: FieldValue.serverTimestamp() });
+      transaction.create(ref, {
+        uid: user.uid,
+        text,
+        requestId,
+        parentId,
+        createdAt: FieldValue.serverTimestamp(),
+      });
     });
     return { id };
   }
@@ -362,6 +379,19 @@ export class NookSocialService {
     if (snapshot.get('uid') !== user.uid) throw new ForbiddenException('You can only delete your own comment.');
     await this.deleteSubcollection(ref, 'likes');
     await ref.delete();
+    return { ok: true };
+  }
+
+  async editComment(user: AuthenticatedUser, postId: string, commentId: string, body: { text?: string }) {
+    const text = this.requireText(body.text, 'Comment', 2000);
+    const ref = this.firebaseAdmin.db().collection(POSTS).doc(postId)
+      .collection('comments').doc(commentId);
+    const snapshot = await ref.get();
+    if (!snapshot.exists) throw new NotFoundException('Comment not found.');
+    if (snapshot.get('uid') !== user.uid) {
+      throw new ForbiddenException('You can only edit your own comments.');
+    }
+    await ref.update({ text, updatedAt: FieldValue.serverTimestamp() });
     return { ok: true };
   }
 

@@ -140,8 +140,18 @@ export class NookSocialController {
   }
 
   @Post('posts/:id/comments')
-  addComment(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Body() body: { text?: string; requestId?: string }) {
+  addComment(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Body() body: { text?: string; requestId?: string; parentId?: string }) {
     return this.social.addComment(request.user, id, body);
+  }
+
+  @Patch('posts/:postId/comments/:commentId')
+  editComment(
+    @Req() request: AuthenticatedRequest,
+    @Param('postId') postId: string,
+    @Param('commentId') commentId: string,
+    @Body() body: { text?: string },
+  ) {
+    return this.social.editComment(request.user, postId, commentId, body);
   }
 
   @Delete('posts/:postId/comments/:commentId')
