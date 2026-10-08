@@ -5,7 +5,6 @@ export type ChefuAppId =
     | "admin"
     | "flow"
     | "quantum"
-    | "infinity"
     | "logix"
     | "logix-dash"
     | "merchant"
@@ -102,11 +101,6 @@ export const CHEFU_APPS: ChefuApp[] = [
         id: "quantum",
         name: "Quantum",
         origins: ["https://quantum.chefu.co.za"],
-    },
-    {
-        id: "infinity",
-        name: "Infinity",
-        origins: ["https://infinity.chefu.co.za"],
     },
     {
         id: "logix",
@@ -210,24 +204,10 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         scopes: ["openid", "profile", "email", "quantum:chat", "quantum:read"],
     },
     {
-        id: "infinity-mobile",
-        appId: "infinity",
-        name: "Infinity Mobile",
-        redirectUris: ["infinity://auth"],
-        scopes: ["openid", "profile", "email"],
-    },
-    {
         id: "nook-mobile",
         appId: "nook",
         name: "Nook Mobile",
         redirectUris: ["nook://sso-callback"],
-        scopes: ["openid", "profile", "email"],
-    },
-    {
-        id: "infinity-web",
-        appId: "infinity",
-        name: "Infinity Web",
-        redirectUris: ["https://infinity.chefu.co.za/auth/callback"],
         scopes: ["openid", "profile", "email"],
     },
     {

@@ -10,7 +10,6 @@ import { CoursesModule } from './modules/courses/courses.module';
 import { EmailModule } from './modules/email/email.module';
 import { FirebaseAdminModule } from './modules/firebase-admin/firebase-admin.module';
 import { FlowModule } from './modules/flow/flow.module';
-import { InfinityModule } from './modules/infinity/infinity.module';
 import { HealthController } from './modules/health/health.controller';
 import { LogixModule } from './modules/logix/logix.module';
 import { NookMessagingModule } from './modules/nook-messaging/nook-messaging.module';
@@ -38,7 +37,6 @@ const productModules = [
   AcademySdkModule,
   CoursesModule,
   FlowModule,
-  InfinityModule,
   LogixModule,
   NookMessagingModule,
   QuantumModule,
