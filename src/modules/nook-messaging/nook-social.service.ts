@@ -766,6 +766,36 @@ export class NookSocialService {
     });
   }
 
+  async listStoryViewers(user: AuthenticatedUser, id: string) {
+    const storyRef = this.firebaseAdmin.db().collection(STORIES).doc(id);
+    const story = await storyRef.get();
+    if (!story.exists) throw new NotFoundException('Story not found.');
+    if (story.get('uid') !== user.uid) {
+      throw new ForbiddenException('You can only view viewers of your own stories.');
+    }
+    const expiresAt = story.get('expiresAt') as Timestamp | undefined;
+    if (!expiresAt || expiresAt.toMillis() <= Date.now()) {
+      throw new NotFoundException('Story has expired.');
+    }
+
+    const viewerRows = await storyRef
+      .collection('views')
+      .orderBy('viewedAt', 'desc')
+      .limit(101)
+      .get();
+    const visibleRows = viewerRows.docs.slice(0, 100);
+    const items = await Promise.all(visibleRows.map(async viewerRow => {
+      const profile = await this.getProfileForUser(viewerRow.id, user.uid);
+      return profile
+        ? { ...profile, viewedAt: this.timestampMs(viewerRow.get('viewedAt')) }
+        : null;
+    }));
+    return {
+      items: items.filter((profile): profile is NonNullable<typeof profile> => profile !== null),
+      hasMore: viewerRows.size > visibleRows.length,
+    };
+  }
+
   async deletePost(user: AuthenticatedUser, id: string) {
     const ref = this.firebaseAdmin.db().collection(POSTS).doc(id);
     const snapshot = await ref.get();
