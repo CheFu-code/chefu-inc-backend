@@ -7,11 +7,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { FieldPath, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { CloudinaryStorageService } from '../../common/cloudinary-storage.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { ProfilePictureService } from '../auth/profile-picture.service';
+import { postSearchTokens } from './post-search';
 
 type ProfileDocument = {
   uid: string;
@@ -40,6 +41,7 @@ type PostDocument = {
   height: number;
   duration?: number;
   createdAt: Timestamp;
+  searchTokens?: string[];
 };
 
 type StoryDocument = {
@@ -141,6 +143,40 @@ export class NookSocialService {
     ), page, pageSize);
   }
 
+  async searchProfilesCursor(user: AuthenticatedUser, query: string, cursor: string | undefined, pageSize: number) {
+    const normalized = String(query || '').trim().toLowerCase().replace(/^@/, '');
+    if (normalized.length > 100) throw new BadRequestException('Search query must be 100 characters or fewer.');
+    const safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 20));
+    let profilesQuery: FirebaseFirestore.Query = this.firebaseAdmin.db().collection(SOCIAL)
+      .orderBy('normalizedUsername')
+      .orderBy(FieldPath.documentId());
+    if (normalized) {
+      profilesQuery = profilesQuery
+        .where('normalizedUsername', '>=', normalized)
+        .where('normalizedUsername', '<=', `${normalized}\uf8ff`);
+    }
+    if (cursor) {
+      const position = this.decodeProfileCursor(cursor);
+      profilesQuery = profilesQuery.startAfter(position.username, position.id);
+    }
+
+    const snapshot = await profilesQuery.limit(safeSize + 1).get();
+    const docs = snapshot.docs.slice(0, safeSize);
+    const items = await Promise.all(docs.map(doc =>
+      this.presentProfile(doc.id, doc.data() as ProfileDocument, user.uid),
+    ));
+    const last = docs.at(-1);
+    return {
+      items,
+      nextCursor: snapshot.docs.length > safeSize && last
+        ? Buffer.from(JSON.stringify({
+            username: String(last.get('normalizedUsername') || ''),
+            id: last.id,
+          })).toString('base64url')
+        : null,
+    };
+  }
+
   async setFollow(user: AuthenticatedUser, profileId: string, following: boolean) {
     if (profileId === user.uid) throw new BadRequestException('You cannot follow your own profile.');
     const target = await this.profileRef(profileId).get();
@@ -178,6 +214,45 @@ export class NookSocialService {
     });
     const postRows = await Promise.all(filtered.map(doc => this.presentPost(doc.id, doc.data() as PostDocument, user.uid)));
     return this.page(postRows, page, pageSize);
+  }
+
+  async searchExplorePosts(user: AuthenticatedUser, query: string, cursor: string | undefined, pageSize: number) {
+    const normalizedQuery = String(query || '').trim();
+    if (normalizedQuery.length > 100) throw new BadRequestException('Search query must be 100 characters or fewer.');
+    const tokens = postSearchTokens(normalizedQuery).slice(0, 5);
+    const safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 20));
+    if (normalizedQuery && !tokens.length) return { items: [], nextCursor: null };
+    let postsQuery: FirebaseFirestore.Query = this.firebaseAdmin.db().collection(POSTS);
+    if (tokens.length) postsQuery = postsQuery.where('searchTokens', 'array-contains-any', tokens);
+    postsQuery = postsQuery
+      .orderBy('createdAt', 'desc')
+      .orderBy(FieldPath.documentId(), 'desc');
+
+    if (cursor) {
+      const position = this.decodePostCursor(cursor);
+      postsQuery = postsQuery.startAfter(
+        new Timestamp(position.seconds, position.nanoseconds),
+        position.id,
+      );
+    }
+
+    const snapshot = await postsQuery.limit(safeSize + 1).get();
+    const docs = snapshot.docs.slice(0, safeSize);
+    const items = await Promise.all(docs.map(doc =>
+      this.presentPost(doc.id, doc.data() as PostDocument, user.uid),
+    ));
+    const last = docs.at(-1);
+    const hasMore = snapshot.docs.length > safeSize;
+    return {
+      items,
+      nextCursor: hasMore && last
+        ? Buffer.from(JSON.stringify({
+            seconds: (last.get('createdAt') as Timestamp).seconds,
+            nanoseconds: (last.get('createdAt') as Timestamp).nanoseconds,
+            id: last.id,
+          })).toString('base64url')
+        : null,
+    };
   }
 
   async listBookmarkedPosts(user: AuthenticatedUser, page: number, pageSize: number) {
@@ -440,6 +515,7 @@ export class NookSocialService {
         width: upload.width,
         height: upload.height,
         duration: upload.duration,
+        searchTokens: postSearchTokens(caption),
         createdAt: FieldValue.serverTimestamp(),
       });
       transaction.update(uploadRef, { status: 'published', publishedAt: FieldValue.serverTimestamp() });
@@ -918,6 +994,62 @@ export class NookSocialService {
     const safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 20));
     const start = safePage * safeSize;
     return { items: items.slice(start, start + safeSize), hasMore: start + safeSize < items.length };
+  }
+
+  private decodePostCursor(cursor: string) {
+    try {
+      if (cursor.length > 3000) throw new Error('Invalid cursor');
+      const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        !('seconds' in parsed) ||
+        !('nanoseconds' in parsed) ||
+        !('id' in parsed) ||
+        typeof parsed.seconds !== 'number' ||
+        !Number.isSafeInteger(parsed.seconds) ||
+        typeof parsed.nanoseconds !== 'number' ||
+        !Number.isInteger(parsed.nanoseconds) ||
+        parsed.nanoseconds < 0 ||
+        parsed.nanoseconds >= 1_000_000_000 ||
+        typeof parsed.id !== 'string' ||
+        !parsed.id ||
+        parsed.id.length > 1500
+      ) {
+        throw new Error('Invalid cursor');
+      }
+      return {
+        seconds: parsed.seconds,
+        nanoseconds: parsed.nanoseconds,
+        id: parsed.id,
+      };
+    } catch {
+      throw new BadRequestException('Invalid post cursor.');
+    }
+  }
+
+  private decodeProfileCursor(cursor: string) {
+    try {
+      if (cursor.length > 3000) throw new Error('Invalid cursor');
+      const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        !('username' in parsed) ||
+        !('id' in parsed) ||
+        typeof parsed.username !== 'string' ||
+        !parsed.username ||
+        parsed.username.length > 30 ||
+        typeof parsed.id !== 'string' ||
+        !parsed.id ||
+        parsed.id.length > 1500
+      ) {
+        throw new Error('Invalid cursor');
+      }
+      return { username: parsed.username, id: parsed.id };
+    } catch {
+      throw new BadRequestException('Invalid profile cursor.');
+    }
   }
 
   private normalizeUsername(value?: string) {

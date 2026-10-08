@@ -79,6 +79,24 @@ On the frontend host, set:
 
 - `NEXT_PUBLIC_API_BASE_URL=https://api.chefu.co.za`
 
+## Nook Explore Search
+
+Explore post search uses Firestore cursor pagination and indexed caption tokens;
+people search uses username-prefix queries and cursor pagination.
+Before shipping the matching Nook app version:
+
+1. Deploy the `nookSocialPosts` composite index from `firestore.indexes.json` and
+   wait until it is ready.
+2. Deploy the backend, which writes search tokens on newly published posts.
+3. Run `npm run backfill:nook-post-search` from a trusted environment configured
+   with production Firebase Admin credentials. This is a one-time migration for
+   existing posts; do not run it against an unintended Firebase project.
+4. Release the Nook app after the backfill completes.
+
+Post search matches caption words (including hashtag text), not arbitrary
+substrings. People search matches username prefixes. The post index stores up
+to 30 distinct tokens per post to bound index growth.
+
 ## Routes
 
 - `GET /health`

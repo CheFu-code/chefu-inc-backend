@@ -47,7 +47,12 @@ export class NookSocialController {
     @Query('q') query = '',
     @Query('page') page = '0',
     @Query('limit') limit = '20',
+    @Query('cursorMode') cursorMode = 'false',
+    @Query('cursor') cursor?: string,
   ) {
+    if (cursorMode === 'true') {
+      return this.social.searchProfilesCursor(request.user, query, cursor, Number(limit));
+    }
     return this.social.searchProfiles(request.user, query, Number(page), Number(limit));
   }
 
@@ -79,7 +84,13 @@ export class NookSocialController {
     @Query('profileId') profileId?: string,
     @Query('page') page = '0',
     @Query('limit') limit = '20',
+    @Query('cursorMode') cursorMode = 'false',
+    @Query('cursor') cursor?: string,
+    @Query('q') query = '',
   ) {
+    if (feed === 'explore' && cursorMode === 'true') {
+      return this.social.searchExplorePosts(request.user, query, cursor, Number(limit));
+    }
     return this.social.listPosts(request.user, feed, profileId, Number(page), Number(limit));
   }
 

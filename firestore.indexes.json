@@ -111,6 +111,14 @@
         { "fieldPath": "users", "arrayConfig": "CONTAINS" },
         { "fieldPath": "size", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "nookSocialPosts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "searchTokens", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
