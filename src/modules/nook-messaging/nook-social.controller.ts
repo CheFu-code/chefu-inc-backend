@@ -114,6 +114,15 @@ export class NookSocialController {
     return this.social.getPost(request.user, id);
   }
 
+  @Patch('posts/:id')
+  editPost(
+    @Req() request: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body() body: { caption?: string },
+  ) {
+    return this.social.editPost(request.user, id, body);
+  }
+
   @Post('posts/:id/like')
   likePost(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Body() body: { liked?: boolean }) {
     return this.social.setPostLike(request.user, id, body.liked === true);

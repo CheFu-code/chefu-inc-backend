@@ -386,6 +386,28 @@ export class NookSocialService {
     return snapshot.exists ? this.presentPost(snapshot.id, snapshot.data() as PostDocument, user.uid) : null;
   }
 
+  async editPost(user: AuthenticatedUser, id: string, body: { caption?: string }) {
+    if (typeof body.caption !== 'string') {
+      throw new BadRequestException('A caption is required.');
+    }
+    const caption = body.caption.trim();
+    if (caption.length > 2200) {
+      throw new BadRequestException('Caption must be 2,200 characters or fewer.');
+    }
+
+    const ref = this.firebaseAdmin.db().collection(POSTS).doc(id);
+    const snapshot = await ref.get();
+    if (!snapshot.exists) throw new NotFoundException('Post not found.');
+    if (snapshot.get('uid') !== user.uid) {
+      throw new ForbiddenException('You can only edit your own posts.');
+    }
+    if (snapshot.get('kind') === 'text' && !caption) {
+      throw new BadRequestException('Text posts cannot be empty.');
+    }
+    await ref.update({ caption, updatedAt: FieldValue.serverTimestamp() });
+    return { ok: true };
+  }
+
   async setPostLike(user: AuthenticatedUser, postId: string, liked: boolean) {
     const post = await this.requirePost(postId);
     const ref = this.firebaseAdmin.db().collection(POSTS).doc(postId).collection('likes').doc(user.uid);
