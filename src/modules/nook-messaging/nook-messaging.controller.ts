@@ -28,7 +28,7 @@ export class NookMessagingController {
   send(
     @Req() request: AuthenticatedRequest,
     @Param('conversationId') conversationId: string,
-    @Body() body: { text?: string; requestId?: string },
+    @Body() body: { text?: string; requestId?: string; replyToId?: string },
   ) {
     return this.messaging.send(request.user, conversationId, body);
   }

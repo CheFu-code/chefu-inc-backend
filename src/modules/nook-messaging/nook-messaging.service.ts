@@ -50,20 +50,31 @@ export class NookMessagingService {
   async send(
     user: AuthenticatedUser,
     conversationId: string,
-    body: { text?: string; requestId?: string },
+    body: { text?: string; requestId?: string; replyToId?: string },
   ) {
     const text = body.text?.trim() || '';
     const requestId = body.requestId?.trim() || '';
     if (!text || text.length > MAX_MESSAGE_LENGTH || !requestId || requestId.length > 100) {
       throw new BadRequestException('Write a message of 1–2,000 characters.');
     }
+    const replyToId = body.replyToId?.trim();
+    if (replyToId && (replyToId.length > 100 || replyToId.includes('/'))) {
+      throw new BadRequestException('Invalid replied-to message.');
+    }
 
     const conversationRef = this.firebaseAdmin.db().collection('nookConversations').doc(conversationId);
     const messageRef = conversationRef.collection('messages').doc(this.messageId(user.uid, requestId));
+    const messagesRef = conversationRef.collection('messages');
+    const replyToRef = replyToId
+      ? messagesRef.doc(
+        replyToId.length === 36 ? this.messageId(user.uid, replyToId) : replyToId,
+      )
+      : null;
     const result = await this.firebaseAdmin.db().runTransaction(async transaction => {
-      const [conversationSnapshot, existingSnapshot] = await Promise.all([
+      const [conversationSnapshot, existingSnapshot, replyToSnapshot] = await Promise.all([
         transaction.get(conversationRef),
         transaction.get(messageRef),
+        ...(replyToRef ? [transaction.get(replyToRef)] : []),
       ]);
       if (!conversationSnapshot.exists) throw new BadRequestException('Conversation not found.');
 
@@ -78,11 +89,19 @@ export class NookMessagingService {
       const recipientUid = conversation.participantUids.find(uid => uid !== user.uid);
       if (!recipientUid) throw new BadRequestException('Conversation recipient not found.');
       if (existingSnapshot.exists) {
-        const existing = existingSnapshot.data() as { text?: string };
-        if (existing.text !== text) throw new BadRequestException('Retry does not match the original message.');
+        const existing = existingSnapshot.data() as { text?: string; replyToId?: string };
+        if (existing.text !== text || existing.replyToId !== replyToId) {
+          throw new BadRequestException('Retry does not match the original message.');
+        }
         return { id: messageRef.id, sequence: existingSnapshot.get('sequence') as number, recipientUid, created: false };
       }
 
+      const replyToData = replyToSnapshot?.exists
+        ? replyToSnapshot.data() as { text?: string; senderUid?: string }
+        : null;
+      if (replyToRef && (!replyToData || !replyToData.senderUid)) {
+        throw new BadRequestException('The message you are replying to is unavailable.');
+      }
       const sequence = (conversation.latestSequence || 0) + 1;
       const unreadCount = Number(conversation.unreadCountBy?.[recipientUid] || 0);
       transaction.set(messageRef, {
@@ -90,6 +109,16 @@ export class NookMessagingService {
         senderEmail: user.email,
         text,
         requestId,
+        ...(replyToRef && replyToData
+          ? {
+            replyToId: replyToRef.id,
+            replyTo: {
+              messageId: replyToRef.id,
+              senderUid: replyToData.senderUid,
+              text: String(replyToData.text || '').slice(0, MAX_MESSAGE_LENGTH),
+            },
+          }
+          : {}),
         sequence,
         createdAt: FieldValue.serverTimestamp(),
       });

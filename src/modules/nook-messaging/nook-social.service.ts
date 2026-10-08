@@ -705,6 +705,14 @@ export class NookSocialService {
       _creationTime: this.timestampMs(doc.get('createdAt')),
       outgoing: doc.get('senderUid') === user.uid,
       requestId: doc.get('requestId'),
+      replyTo: doc.get('replyTo')
+        ? {
+          id: String((doc.get('replyTo') as { messageId?: string }).messageId || ''),
+          text: String((doc.get('replyTo') as { text?: string }).text || ''),
+          outgoing:
+            (doc.get('replyTo') as { senderUid?: string }).senderUid === user.uid,
+        }
+        : undefined,
     }));
     return { items, hasMore: rows.docs.length > pageSize };
   }
