@@ -638,6 +638,13 @@ export class NookSocialService {
     }));
   }
 
+  async createPresenceToken(user: AuthenticatedUser) {
+    const customToken = await this.firebaseAdmin
+      .auth()
+      .createCustomToken(user.uid, { nook: true });
+    return { customToken };
+  }
+
   async recordStoryView(user: AuthenticatedUser, id: string) {
     const storyRef = this.firebaseAdmin.db().collection(STORIES).doc(id);
     const viewerRef = storyRef.collection('views').doc(user.uid);
