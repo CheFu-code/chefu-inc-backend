@@ -144,17 +144,22 @@ export class NookSocialService {
     };
   }
 
-  async listBlockedUsers(user: AuthenticatedUser) {
+  async listBlockedUsers(user: AuthenticatedUser, page: number, pageSize: number) {
+    const safePage = Math.max(0, Number.isFinite(page) ? Math.floor(page) : 0);
+    const safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 20));
     const rows = await this.firebaseAdmin.db().collection(BLOCKS)
       .where('blockerUid', '==', user.uid)
+      .offset(safePage * safeSize)
+      .limit(safeSize + 1)
       .get();
-    const orderedRows = rows.docs.slice().sort((left, right) =>
-      this.timestampMs(right.get('createdAt')) - this.timestampMs(left.get('createdAt')),
-    );
-    const items = await Promise.all(orderedRows.map(row =>
+    const visibleRows = rows.docs.slice(0, safeSize);
+    const items = await Promise.all(visibleRows.map(row =>
       this.getProfileForUser(String(row.get('blockedUid')), user.uid),
     ));
-    return { items: items.filter((profile): profile is NonNullable<typeof profile> => profile !== null) };
+    return {
+      items: items.filter((profile): profile is NonNullable<typeof profile> => profile !== null),
+      hasMore: rows.docs.length > visibleRows.length,
+    };
   }
 
   async setBlocked(user: AuthenticatedUser, profileId: string, blocked: boolean) {

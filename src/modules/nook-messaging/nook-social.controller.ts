@@ -78,8 +78,12 @@ export class NookSocialController {
   }
 
   @Get('blocks')
-  blockedUsers(@Req() request: AuthenticatedRequest) {
-    return this.social.listBlockedUsers(request.user);
+  blockedUsers(
+    @Req() request: AuthenticatedRequest,
+    @Query('page') page = '0',
+    @Query('limit') limit = '20',
+  ) {
+    return this.social.listBlockedUsers(request.user, Number(page), Number(limit));
   }
 
   @Post('profiles/:id/block')
