@@ -97,6 +97,15 @@ Post search matches caption words (including hashtag text), not arbitrary
 substrings. People search matches username prefixes. The post index stores up
 to 30 distinct tokens per post to bound index growth.
 
+## Nook Message Notifications
+
+Nook stores Expo push tokens in Firestore and sends a push after a new message is
+committed. Configure Android FCM and iOS APNs credentials for the EAS project
+before expecting device delivery. The app requests notification permission on a
+physical device and registers/removes its token through authenticated Nook API
+routes. Foreground notification content is shown as an in-app banner; background
+notifications are displayed by the operating system.
+
 ## Routes
 
 - `GET /health`
