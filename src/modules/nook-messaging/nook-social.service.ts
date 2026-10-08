@@ -810,7 +810,9 @@ export class NookSocialService {
       return {
         _id: doc.id,
         text: deletedForMe || deletedForEveryone
-          ? 'This message was deleted.'
+          ? deletedForEveryone
+            ? 'This message was deleted for everyone.'
+            : 'This message was deleted for me.'
           : String(doc.get('text') || ''),
         sequence: Number(doc.get('sequence') || 0),
         _creationTime: createdAt,

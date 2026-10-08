@@ -229,7 +229,7 @@ export class NookMessagingService {
         throw new ForbiddenException('You can only edit your own messages.');
       }
       if (message.get('deletedForEveryone')) {
-        throw new BadRequestException('This message was deleted.');
+        throw new BadRequestException('This message was deleted for me.');
       }
       const updates: Record<string, unknown> = {
         text,
@@ -325,7 +325,7 @@ export class NookMessagingService {
       });
       if (Number(conversation.get('latestSequence') || 0) === Number(message.get('sequence') || 0)) {
         transaction.update(conversationRef, {
-          preview: 'This message was deleted.',
+          preview: 'This message was deleted for everyone.',
           previewDeletedForUids: FieldValue.arrayRemove(
             ...(conversation.get('participantUids') as string[]),
           ),
