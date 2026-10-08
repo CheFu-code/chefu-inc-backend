@@ -193,7 +193,7 @@ export class NookSocialController {
   }
 
   @Post('posts')
-  publishPost(@Req() request: AuthenticatedRequest, @Body() body: { uploadId?: string; caption?: string }) {
+  publishPost(@Req() request: AuthenticatedRequest, @Body() body: { uploadId?: string; caption?: string; requestId?: string }) {
     return this.social.publishPost(request.user, body);
   }
 

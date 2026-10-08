@@ -35,10 +35,10 @@ type PostDocument = {
   cloudinaryUrl?: string;
   cloudinaryPublicId?: string;
   cloudinaryResourceType?: 'image' | 'video' | 'raw';
-  kind: 'image' | 'video';
+  kind: 'image' | 'video' | 'text';
   caption: string;
-  width: number;
-  height: number;
+  width?: number;
+  height?: number;
   duration?: number;
   createdAt: Timestamp;
   searchTokens?: string[];
@@ -480,12 +480,40 @@ export class NookSocialService {
     return { ok: true };
   }
 
-  async publishPost(user: AuthenticatedUser, body: { uploadId?: string; caption?: string }) {
+  async publishPost(user: AuthenticatedUser, body: { uploadId?: string; caption?: string; requestId?: string }) {
     const profile = await this.profileRef(user.uid).get();
     if (!profile.exists) throw new BadRequestException('Create your profile first.');
     const caption = String(body.caption || '').trim();
     if (caption.length > 2200) throw new BadRequestException('Caption must be 2,200 characters or fewer.');
-    if (!body.uploadId) throw new BadRequestException('Upload session is required.');
+    if (!body.uploadId) {
+      const requestId = String(body.requestId || '').trim();
+      if (!caption || !requestId || requestId.length > 100) {
+        throw new BadRequestException('Write text for your post and try again.');
+      }
+      const postId = `text_${createHash('sha256').update(`${user.uid}:${requestId}`).digest('hex')}`;
+      const postRef = this.firebaseAdmin.db().collection(POSTS).doc(postId);
+      await this.firebaseAdmin.db().runTransaction(async transaction => {
+        const existingPost = await transaction.get(postRef);
+        if (existingPost.exists) {
+          if (
+            existingPost.get('uid') !== user.uid ||
+            existingPost.get('kind') !== 'text' ||
+            existingPost.get('caption') !== caption
+          ) {
+            throw new ConflictException('This post request has already been used.');
+          }
+          return;
+        }
+        transaction.create(postRef, {
+          uid: user.uid,
+          kind: 'text',
+          caption,
+          searchTokens: postSearchTokens(caption),
+          createdAt: FieldValue.serverTimestamp(),
+        });
+      });
+      return { id: postRef.id };
+    }
     const uploadRef = this.firebaseAdmin.db().collection('nookSocialUploads').doc(body.uploadId);
     const postRef = this.firebaseAdmin.db().collection(POSTS).doc(body.uploadId);
     await this.firebaseAdmin.db().runTransaction(async transaction => {
