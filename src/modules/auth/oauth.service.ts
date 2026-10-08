@@ -52,6 +52,7 @@ type RefreshTokenDocument = {
   dpopJkt?: string | null;
   email: string;
   expiresAt: number;
+  absoluteExpiresAt?: number;
   familyId: string;
   generation: number;
   name?: string;
@@ -178,6 +179,8 @@ type NodeJsonWebKey = JsonWebKey & {
 
 @Injectable()
 export class OAuthService {
+  private readonly nookRefreshTokenTtlMs = 15 * 24 * 60 * 60 * 1000;
+  private readonly nookMobileClientId = 'nook-mobile';
   private readonly logger = new Logger(OAuthService.name);
   private readonly issuer = this.cleanUrl(
     process.env.OAUTH_ISSUER ||
@@ -566,7 +569,8 @@ export class OAuthService {
       sub: codeDoc.uid,
       typ: 'id_token',
     });
-    const refreshToken = this.issueRefreshTokens
+    const refreshToken = this.issueRefreshTokens ||
+      client.id === this.nookMobileClientId
       ? await this.issueRefreshToken({
         appId: codeDoc.appId,
         clientId: client.id,
@@ -683,10 +687,6 @@ export class OAuthService {
     request: Request,
     dpop?: string,
   ) {
-    if (!this.issueRefreshTokens) {
-      throw new BadRequestException('Refresh tokens are not enabled.');
-    }
-
     if (!body.client_id || !body.refresh_token) {
       throw new BadRequestException('client_id and refresh_token are required.');
     }
@@ -705,6 +705,12 @@ export class OAuthService {
     const preflightRecord = preflightSnapshot.exists
       ? (preflightSnapshot.data() as RefreshTokenDocument)
       : null;
+    if (
+      !this.issueRefreshTokens &&
+      preflightRecord?.clientId !== this.nookMobileClientId
+    ) {
+      throw new BadRequestException('Refresh tokens are not enabled.');
+    }
 
     if (preflightRecord?.dpopJkt) {
       const proof = await this.verifyDpopProof({
@@ -757,6 +763,10 @@ export class OAuthService {
         throw new UnauthorizedException('Refresh token is no longer valid.');
       }
 
+      const absoluteExpiresAt =
+        current.clientId === this.nookMobileClientId
+          ? current.absoluteExpiresAt ?? now + this.nookRefreshTokenTtlMs
+          : current.absoluteExpiresAt;
       transaction.update(refreshRef, {
         usedAt: now,
         updatedAt: FieldValue.serverTimestamp(),
@@ -764,7 +774,8 @@ export class OAuthService {
       transaction.set(this.refreshTokens().doc(nextHash), {
         ...current,
         createdAt: FieldValue.serverTimestamp(),
-        expiresAt: now + this.refreshTokenTtlMs,
+        ...(absoluteExpiresAt ? { absoluteExpiresAt } : {}),
+        expiresAt: absoluteExpiresAt ?? now + this.refreshTokenTtlMs,
         generation: current.generation + 1,
         parentTokenHash: refreshTokenHash,
         revokedAt: null,
@@ -1366,6 +1377,11 @@ export class OAuthService {
   }) {
     const rawToken = this.randomToken(48);
     const tokenHash = this.hash(rawToken);
+    const now = Date.now();
+    const absoluteExpiresAt =
+      clientId === this.nookMobileClientId
+        ? now + this.nookRefreshTokenTtlMs
+        : undefined;
 
     await this.refreshTokens().doc(tokenHash).set({
       appId,
@@ -1373,7 +1389,8 @@ export class OAuthService {
       createdAt: FieldValue.serverTimestamp(),
       dpopJkt: dpopJkt || null,
       email,
-      expiresAt: Date.now() + this.refreshTokenTtlMs,
+      expiresAt: absoluteExpiresAt ?? now + this.refreshTokenTtlMs,
+      ...(absoluteExpiresAt ? { absoluteExpiresAt } : {}),
       familyId: this.randomToken(16),
       generation: 0,
       name,
