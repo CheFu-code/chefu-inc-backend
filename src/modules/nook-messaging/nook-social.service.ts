@@ -561,13 +561,22 @@ export class NookSocialService {
       const data = doc.data();
       const otherUid = (data.participantUids as string[]).find(uid => uid !== user.uid) || user.uid;
       const lastRead = Number((data.lastReadBy as Record<string, number> | undefined)?.[user.uid] || 0);
-      const unread = Number(data.latestSequence || 0) > lastRead && data.lastSenderUid !== user.uid;
+      const latestSequence = Number(data.latestSequence || 0);
+      const storedUnreadCount = (data.unreadCountBy as Record<string, number> | undefined)?.[user.uid];
+      const hasStoredUnreadCount = Number.isFinite(storedUnreadCount);
+      const unreadCount = hasStoredUnreadCount
+        ? Math.max(0, Number(storedUnreadCount))
+        : latestSequence > lastRead && data.lastSenderUid !== user.uid
+          ? 1
+          : 0;
       return {
         _id: doc.id,
         other: await this.getProfileForUser(otherUid, user.uid),
         preview: String(data.preview || ''),
         lastMessageAt: this.timestampMs(data.lastMessageAt),
-        unread,
+        unread: unreadCount > 0,
+        unreadCount,
+        unreadCountExact: hasStoredUnreadCount,
       };
     }));
     const filtered = items.filter(item => !unreadOnly || item.unread)
@@ -591,6 +600,7 @@ export class NookSocialService {
         participantUids,
         latestSequence: 0,
         lastReadBy: { [user.uid]: 0, [profileId]: 0 },
+        unreadCountBy: { [user.uid]: 0, [profileId]: 0 },
         preview: '',
         lastMessageAt: Timestamp.now(),
         createdAt: FieldValue.serverTimestamp(),
@@ -623,11 +633,21 @@ export class NookSocialService {
   }
 
   async markRead(user: AuthenticatedUser, id: string, sequence: number) {
-    const conversation = await this.requireConversation(user.uid, id);
-    const lastReadBy = (conversation.get('lastReadBy') || {}) as Record<string, number>;
-    await conversation.ref.update({
-      [`lastReadBy.${user.uid}`]: Math.max(Number(lastReadBy[user.uid] || 0), sequence),
-      updatedAt: FieldValue.serverTimestamp(),
+    const conversationRef = this.firebaseAdmin.db().collection('nookConversations').doc(id);
+    await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const conversation = await transaction.get(conversationRef);
+      if (!conversation.exists) throw new NotFoundException('Conversation not found.');
+      if (!(conversation.get('participantUids') as string[] | undefined)?.includes(user.uid)) {
+        throw new ForbiddenException('Not authorized to access this conversation.');
+      }
+      const latestSequence = Number(conversation.get('latestSequence') || 0);
+      const lastReadBy = (conversation.get('lastReadBy') || {}) as Record<string, number>;
+      const updates: Record<string, unknown> = {
+        [`lastReadBy.${user.uid}`]: Math.max(Number(lastReadBy[user.uid] || 0), sequence),
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      if (sequence >= latestSequence) updates[`unreadCountBy.${user.uid}`] = 0;
+      transaction.update(conversationRef, updates);
     });
     return { ok: true };
   }

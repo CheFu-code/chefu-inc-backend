@@ -33,6 +33,7 @@ export class NookMessagingService {
       const conversation = conversationSnapshot.data() as {
         participantUids?: string[];
         latestSequence?: number;
+        unreadCountBy?: Record<string, number>;
       };
       if (!conversation.participantUids?.includes(user.uid)) {
         throw new ForbiddenException('Not authorized to access this conversation.');
@@ -44,6 +45,9 @@ export class NookMessagingService {
       }
 
       const sequence = (conversation.latestSequence || 0) + 1;
+      const recipientUid = conversation.participantUids.find(uid => uid !== user.uid);
+      if (!recipientUid) throw new BadRequestException('Conversation recipient not found.');
+      const unreadCount = Number(conversation.unreadCountBy?.[recipientUid] || 0);
       transaction.set(messageRef, {
         senderUid: user.uid,
         senderEmail: user.email,
@@ -56,6 +60,7 @@ export class NookMessagingService {
         latestSequence: sequence,
         preview: text.slice(0, 200),
         lastSenderUid: user.uid,
+        [`unreadCountBy.${recipientUid}`]: unreadCount + 1,
         lastMessageAt: Timestamp.now(),
         updatedAt: FieldValue.serverTimestamp(),
       });
