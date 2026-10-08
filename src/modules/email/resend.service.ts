@@ -383,6 +383,7 @@ export class ResendService {
             admin: "Chefu Admin",
             flow: "Flow Mail",
             quantum: "Quantum",
+            nook: "Nook",
         };
 
         return labels[normalized] || "Chefu Technologies";
