@@ -232,6 +232,18 @@ export class NookSocialController {
     return this.social.startConversation(request.user, String(body.profileId || ''));
   }
 
+  @Post('conversations/:id/request')
+  respondToConversationRequest(
+    @Req() request: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body() body: { decision?: 'accepted' | 'declined' },
+  ) {
+    if (body.decision !== 'accepted' && body.decision !== 'declined') {
+      throw new BadRequestException('Choose whether to accept or decline the message request.');
+    }
+    return this.social.respondToConversationRequest(request.user, id, body.decision);
+  }
+
   @Get('conversations/:id')
   getConversation(@Req() request: AuthenticatedRequest, @Param('id') id: string) {
     return this.social.getConversation(request.user, id);

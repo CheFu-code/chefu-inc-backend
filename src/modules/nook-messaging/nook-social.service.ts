@@ -706,7 +706,9 @@ export class NookSocialService {
       return {
         _id: doc.id,
         other: await this.getProfileForUser(otherUid, user.uid),
-        preview: String(data.preview || ''),
+        preview: ((data.previewDeletedForUids as string[] | undefined) || []).includes(user.uid)
+          ? 'Message deleted for you.'
+          : String(data.preview || ''),
         previewIsOwn: data.lastSenderUid === user.uid,
         lastMessageAt: this.timestampMs(data.lastMessageAt),
         unread: unreadCount > 0,
@@ -736,6 +738,9 @@ export class NookSocialService {
         latestSequence: 0,
         lastReadBy: { [user.uid]: 0, [profileId]: 0 },
         unreadCountBy: { [user.uid]: 0, [profileId]: 0 },
+        requestStatus: 'pending',
+        requesterUid: user.uid,
+        requestMessageCount: 0,
         preview: '',
         lastMessageAt: Timestamp.now(),
         createdAt: FieldValue.serverTimestamp(),
@@ -749,33 +754,94 @@ export class NookSocialService {
     const snapshot = await this.requireConversation(user.uid, id);
     const data = snapshot.data()!;
     const otherUid = (data.participantUids as string[]).find(uid => uid !== user.uid) || user.uid;
-    return { _id: snapshot.id, other: await this.getProfileForUser(otherUid, user.uid) };
+    const requestStatus = data.requestStatus;
+    return {
+      _id: snapshot.id,
+      other: await this.getProfileForUser(otherUid, user.uid),
+      messageRequest:
+        requestStatus === 'pending' || requestStatus === 'accepted' || requestStatus === 'declined'
+          ? {
+            status: requestStatus,
+            isRequester: data.requesterUid === user.uid,
+            sentCount: Number(data.requestMessageCount || 0),
+          }
+          : null,
+    };
+  }
+
+  async respondToConversationRequest(
+    user: AuthenticatedUser,
+    id: string,
+    decision: 'accepted' | 'declined',
+  ) {
+    const ref = this.firebaseAdmin.db().collection('nookConversations').doc(id);
+    await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const conversation = await transaction.get(ref);
+      if (!conversation.exists) throw new NotFoundException('Conversation not found.');
+      const participants = conversation.get('participantUids') as string[] | undefined;
+      if (!participants?.includes(user.uid)) {
+        throw new ForbiddenException('Not authorized to access this conversation.');
+      }
+      if (conversation.get('requestStatus') !== 'pending') {
+        throw new ConflictException('This message request is no longer pending.');
+      }
+      if (conversation.get('requesterUid') === user.uid) {
+        throw new ForbiddenException('You cannot respond to your own message request.');
+      }
+      transaction.update(ref, {
+        requestStatus: decision,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+    return { status: decision };
   }
 
   async listMessages(user: AuthenticatedUser, id: string, page: number, pageSize: number) {
     const conversation = await this.requireConversation(user.uid, id);
     const rows = await conversation.ref.collection('messages').orderBy('sequence', 'desc').offset(page * pageSize).limit(pageSize + 1).get();
     const docs = rows.docs.slice(0, pageSize);
-    const items = docs.map(doc => ({
-      _id: doc.id,
-      text: String(doc.get('text') || ''),
-      sequence: Number(doc.get('sequence') || 0),
-      _creationTime: this.timestampMs(doc.get('createdAt')),
-      outgoing: doc.get('senderUid') === user.uid,
-      requestId: doc.get('requestId'),
-      reactions: this.summarizeMessageReactions(
-        (doc.get('reactionsBy') as Record<string, string> | undefined) || {},
-        user.uid,
-      ),
-      replyTo: doc.get('replyTo')
-        ? {
-          id: String((doc.get('replyTo') as { messageId?: string }).messageId || ''),
-          text: String((doc.get('replyTo') as { text?: string }).text || ''),
-          outgoing:
-            (doc.get('replyTo') as { senderUid?: string }).senderUid === user.uid,
-        }
-        : undefined,
-    }));
+    const now = Date.now();
+    const items = docs.map(doc => {
+      const deletedForMe =
+        ((doc.get('deletedForUids') as string[] | undefined) || []).includes(user.uid);
+      const deletedForEveryone = Boolean(doc.get('deletedForEveryone'));
+      const createdAt = this.timestampMs(doc.get('createdAt'));
+      const outgoing = doc.get('senderUid') === user.uid;
+      return {
+        _id: doc.id,
+        text: deletedForMe || deletedForEveryone
+          ? 'This message was deleted.'
+          : String(doc.get('text') || ''),
+        sequence: Number(doc.get('sequence') || 0),
+        _creationTime: createdAt,
+        outgoing,
+        edited: Boolean(doc.get('editedAt')),
+        canDeleteForEveryone:
+          outgoing &&
+          !deletedForMe &&
+          !deletedForEveryone &&
+          createdAt > 0 &&
+          createdAt <= now &&
+          now - createdAt <= 2 * 24 * 60 * 60 * 1000 + 12 * 60 * 60 * 1000,
+        deletedForMe,
+        deletedForEveryone,
+        requestId: doc.get('requestId'),
+        reactions: deletedForMe || deletedForEveryone
+          ? []
+          : this.summarizeMessageReactions(
+            (doc.get('reactionsBy') as Record<string, string> | undefined) || {},
+            user.uid,
+          ),
+        replyTo: doc.get('replyTo')
+          ? {
+            id: String((doc.get('replyTo') as { messageId?: string }).messageId || ''),
+            text: String((doc.get('replyTo') as { text?: string }).text || ''),
+            outgoing:
+              (doc.get('replyTo') as { senderUid?: string }).senderUid === user.uid,
+          }
+          : undefined,
+      };
+    });
     return { items, hasMore: rows.docs.length > pageSize };
   }
 

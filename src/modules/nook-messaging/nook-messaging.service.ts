@@ -5,6 +5,7 @@ import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 
 const MAX_MESSAGE_LENGTH = 2000;
+const DELETE_FOR_EVERYONE_WINDOW_MS = 2 * 24 * 60 * 60 * 1000 + 12 * 60 * 60 * 1000;
 const MESSAGE_REACTIONS = new Set(['👍', '❤️', '😂', '😮', '😢', '🙏']);
 
 @Injectable()
@@ -83,6 +84,9 @@ export class NookMessagingService {
         participantUids?: string[];
         latestSequence?: number;
         unreadCountBy?: Record<string, number>;
+        requestStatus?: string;
+        requesterUid?: string;
+        requestMessageCount?: number;
       };
       if (!conversation.participantUids?.includes(user.uid)) {
         throw new ForbiddenException('Not authorized to access this conversation.');
@@ -95,6 +99,16 @@ export class NookMessagingService {
           throw new BadRequestException('Retry does not match the original message.');
         }
         return { id: messageRef.id, sequence: existingSnapshot.get('sequence') as number, recipientUid, created: false };
+      }
+      if (conversation.requestStatus === 'pending') {
+        if (user.uid !== conversation.requesterUid) {
+          throw new ForbiddenException('This message request must be accepted before you can reply.');
+        }
+        if (Number(conversation.requestMessageCount || 0) >= 3) {
+          throw new ForbiddenException('You have reached the three-message limit for this request.');
+        }
+      } else if (conversation.requestStatus === 'declined') {
+        throw new ForbiddenException('This message request was declined.');
       }
 
       const replyToData = replyToSnapshot?.exists
@@ -130,6 +144,10 @@ export class NookMessagingService {
         [`unreadCountBy.${recipientUid}`]: unreadCount + 1,
         lastMessageAt: Timestamp.now(),
         updatedAt: FieldValue.serverTimestamp(),
+        previewDeletedForUids: FieldValue.arrayRemove(...conversation.participantUids),
+        ...(conversation.requestStatus === 'pending'
+          ? { requestMessageCount: Number(conversation.requestMessageCount || 0) + 1 }
+          : {}),
       });
       return { id: messageRef.id, sequence, recipientUid, created: true };
     });
@@ -183,6 +201,141 @@ export class NookMessagingService {
     });
   }
 
+  async editMessage(
+    user: AuthenticatedUser,
+    conversationId: string,
+    messageId: string,
+    body: { text?: string },
+  ) {
+    const text = body.text?.trim() || '';
+    if (!text || text.length > MAX_MESSAGE_LENGTH) {
+      throw new BadRequestException('Write a message of 1–2,000 characters.');
+    }
+    this.validateMessageId(messageId);
+    const conversationRef = this.firebaseAdmin.db()
+      .collection('nookConversations').doc(conversationId);
+    const messageRef = conversationRef.collection('messages').doc(messageId);
+    await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const [conversation, message] = await Promise.all([
+        transaction.get(conversationRef),
+        transaction.get(messageRef),
+      ]);
+      if (!conversation.exists) throw new BadRequestException('Conversation not found.');
+      if (!(conversation.get('participantUids') as string[] | undefined)?.includes(user.uid)) {
+        throw new ForbiddenException('Not authorized to access this conversation.');
+      }
+      if (!message.exists) throw new BadRequestException('Message not found.');
+      if (message.get('senderUid') !== user.uid) {
+        throw new ForbiddenException('You can only edit your own messages.');
+      }
+      if (message.get('deletedForEveryone')) {
+        throw new BadRequestException('This message was deleted.');
+      }
+      const updates: Record<string, unknown> = {
+        text,
+        editedAt: FieldValue.serverTimestamp(),
+      };
+      if (Number(conversation.get('latestSequence') || 0) === Number(message.get('sequence') || 0)) {
+        updates.preview = text.slice(0, 200);
+      }
+      transaction.update(messageRef, updates);
+      if ('preview' in updates) {
+        transaction.update(conversationRef, {
+          preview: updates.preview,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+    });
+    return { edited: true };
+  }
+
+  async deleteMessageForMe(
+    user: AuthenticatedUser,
+    conversationId: string,
+    messageId: string,
+  ) {
+    this.validateMessageId(messageId);
+    const conversationRef = this.firebaseAdmin.db()
+      .collection('nookConversations').doc(conversationId);
+    const messageRef = conversationRef.collection('messages').doc(messageId);
+    await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const conversation = await transaction.get(conversationRef);
+      if (!conversation.exists) throw new BadRequestException('Conversation not found.');
+      if (!(conversation.get('participantUids') as string[] | undefined)?.includes(user.uid)) {
+        throw new ForbiddenException('Not authorized to access this conversation.');
+      }
+      const message = await transaction.get(messageRef);
+      if (!message.exists) throw new BadRequestException('Message not found.');
+      transaction.update(messageRef, {
+        deletedForUids: FieldValue.arrayUnion(user.uid),
+      });
+      if (
+        Number(conversation.get('latestSequence') || 0) ===
+        Number(message.get('sequence') || 0)
+      ) {
+        transaction.update(conversationRef, {
+          previewDeletedForUids: FieldValue.arrayUnion(user.uid),
+        });
+      }
+    });
+    return { deleted: true };
+  }
+
+  async deleteMessageForEveryone(
+    user: AuthenticatedUser,
+    conversationId: string,
+    messageId: string,
+  ) {
+    this.validateMessageId(messageId);
+    const conversationRef = this.firebaseAdmin.db()
+      .collection('nookConversations').doc(conversationId);
+    const messageRef = conversationRef.collection('messages').doc(messageId);
+    await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const [conversation, message] = await Promise.all([
+        transaction.get(conversationRef),
+        transaction.get(messageRef),
+      ]);
+      if (!conversation.exists) throw new BadRequestException('Conversation not found.');
+      if (!(conversation.get('participantUids') as string[] | undefined)?.includes(user.uid)) {
+        throw new ForbiddenException('Not authorized to access this conversation.');
+      }
+      if (!message.exists) throw new BadRequestException('Message not found.');
+      if (message.get('senderUid') !== user.uid) {
+        throw new ForbiddenException('You can only delete your own messages for everyone.');
+      }
+      if (message.get('deletedForEveryone')) {
+        throw new BadRequestException('This message was already deleted.');
+      }
+      const createdAt = message.get('createdAt');
+      const createdAtMs = createdAt instanceof Timestamp ? createdAt.toMillis() : 0;
+      if (
+        !createdAtMs ||
+        createdAtMs > Date.now() ||
+        Date.now() - createdAtMs > DELETE_FOR_EVERYONE_WINDOW_MS
+      ) {
+        throw new ForbiddenException('The time limit to delete this message for everyone has passed.');
+      }
+      transaction.update(messageRef, {
+        text: '',
+        replyTo: FieldValue.delete(),
+        replyToId: FieldValue.delete(),
+        reactionsBy: {},
+        deletedForEveryone: true,
+        deletedAt: FieldValue.serverTimestamp(),
+      });
+      if (Number(conversation.get('latestSequence') || 0) === Number(message.get('sequence') || 0)) {
+        transaction.update(conversationRef, {
+          preview: 'This message was deleted.',
+          previewDeletedForUids: FieldValue.arrayRemove(
+            ...(conversation.get('participantUids') as string[]),
+          ),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+    });
+    return { deleted: true };
+  }
+
   async getReactions(
     user: AuthenticatedUser,
     conversationId: string,
@@ -226,6 +379,12 @@ export class NookMessagingService {
       }),
     );
     return profiles;
+  }
+
+  private validateMessageId(messageId: string) {
+    if (!messageId || messageId.length > 200 || messageId.includes('/')) {
+      throw new BadRequestException('Invalid message.');
+    }
   }
 
   summarizeReactions(
