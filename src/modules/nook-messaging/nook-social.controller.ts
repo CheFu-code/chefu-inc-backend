@@ -88,6 +88,12 @@ export class NookSocialController {
     @Query('cursor') cursor?: string,
     @Query('q') query = '',
   ) {
+    if (feed === 'home' && cursorMode === 'true') {
+      return this.social.listHomeFeedCursor(request.user, cursor, Number(limit));
+    }
+    if (feed === 'profile' && cursorMode === 'true' && profileId) {
+      return this.social.listProfilePostsCursor(request.user, profileId, cursor, Number(limit));
+    }
     if (feed === 'explore' && cursorMode === 'true') {
       return this.social.searchExplorePosts(request.user, query, cursor, Number(limit));
     }

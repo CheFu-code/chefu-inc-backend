@@ -61,6 +61,7 @@ const STORIES = 'nookSocialStories';
 const FOLLOWS = 'nookSocialFollows';
 const BOOKMARKS = 'nookSocialBookmarks';
 const MAX_PAGE_SIZE = 50;
+const HOME_FEED_UIDS_PER_QUERY = 30;
 const USERNAME_PATTERN = /^[a-z0-9._]{3,30}$/;
 
 @Injectable()
@@ -195,8 +196,14 @@ export class NookSocialService {
     const uidField = kind === 'followers' ? 'followerUid' : 'followedUid';
     const rows = await this.firebaseAdmin.db().collection(FOLLOWS).where(field, '==', profileId).limit(500).get();
     rows.docs.sort((left, right) => this.timestampMs(right.get('createdAt')) - this.timestampMs(left.get('createdAt')));
-    const profiles = await Promise.all(rows.docs.map(row => this.getProfileForUser(String(row.get(uidField)), user.uid)));
-    return this.page(profiles.filter(Boolean), page, pageSize);
+    const safePage = Math.max(0, Number.isFinite(page) ? Math.floor(page) : 0);
+    const safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 20));
+    const start = safePage * safeSize;
+    const selected = rows.docs.slice(start, start + safeSize + 1);
+    const profiles = await Promise.all(selected.slice(0, safeSize).map(row =>
+      this.getProfileForUser(String(row.get(uidField)), user.uid),
+    ));
+    return { items: profiles.filter(Boolean), hasMore: selected.length > safeSize };
   }
 
   async listPosts(user: AuthenticatedUser, feed: 'home' | 'explore' | 'profile', profileId: string | undefined, page: number, pageSize: number) {
@@ -212,7 +219,9 @@ export class NookSocialService {
       if (allowed) return allowed.has(data.uid);
       return true;
     });
-    const postRows = await Promise.all(filtered.map(doc => this.presentPost(doc.id, doc.data() as PostDocument, user.uid)));
+    const postRows = await Promise.all(filtered.map(doc =>
+      this.presentPost(doc.id, doc.data() as PostDocument, user.uid),
+    ));
     return this.page(postRows, page, pageSize);
   }
 
@@ -238,14 +247,96 @@ export class NookSocialService {
 
     const snapshot = await postsQuery.limit(safeSize + 1).get();
     const docs = snapshot.docs.slice(0, safeSize);
-    const items = await Promise.all(docs.map(doc =>
-      this.presentPost(doc.id, doc.data() as PostDocument, user.uid),
-    ));
+    const items = await this.presentPosts(docs, user.uid);
     const last = docs.at(-1);
     const hasMore = snapshot.docs.length > safeSize;
     return {
       items,
       nextCursor: hasMore && last
+        ? Buffer.from(JSON.stringify({
+            seconds: (last.get('createdAt') as Timestamp).seconds,
+            nanoseconds: (last.get('createdAt') as Timestamp).nanoseconds,
+            id: last.id,
+          })).toString('base64url')
+        : null,
+    };
+  }
+
+  async listHomeFeedCursor(user: AuthenticatedUser, cursor: string | undefined, pageSize: number) {
+    const safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 20));
+    const follows = await this.firebaseAdmin.db().collection(FOLLOWS)
+      .where('followerUid', '==', user.uid)
+      .limit(500)
+      .get();
+    const followedUids = [...new Set([
+      user.uid,
+      ...follows.docs
+        .map(doc => String(doc.get('followedUid') || ''))
+        .filter(Boolean),
+    ])];
+    const position = cursor ? this.decodePostCursor(cursor) : undefined;
+    const chunks: string[][] = [];
+    for (let start = 0; start < followedUids.length; start += HOME_FEED_UIDS_PER_QUERY) {
+      chunks.push(followedUids.slice(start, start + HOME_FEED_UIDS_PER_QUERY));
+    }
+
+    const snapshots = await Promise.all(chunks.map(async uids => {
+      let postsQuery: FirebaseFirestore.Query = this.firebaseAdmin.db().collection(POSTS)
+        .where('uid', 'in', uids)
+        .orderBy('createdAt', 'desc')
+        .orderBy(FieldPath.documentId(), 'desc');
+      if (position) {
+        postsQuery = postsQuery.startAfter(
+          new Timestamp(position.seconds, position.nanoseconds),
+          position.id,
+        );
+      }
+      return postsQuery.limit(safeSize + 1).get();
+    }));
+    const candidates = snapshots.flatMap(snapshot => snapshot.docs)
+      .sort((left, right) => {
+        const leftCreatedAt = left.get('createdAt') as Timestamp;
+        const rightCreatedAt = right.get('createdAt') as Timestamp;
+        return rightCreatedAt.seconds - leftCreatedAt.seconds ||
+          rightCreatedAt.nanoseconds - leftCreatedAt.nanoseconds ||
+          right.id.localeCompare(left.id);
+      });
+    const docs = candidates.slice(0, safeSize);
+    const items = await this.presentPosts(docs, user.uid);
+    const last = docs.at(-1);
+    return {
+      items,
+      nextCursor: candidates.length > safeSize && last
+        ? Buffer.from(JSON.stringify({
+            seconds: (last.get('createdAt') as Timestamp).seconds,
+            nanoseconds: (last.get('createdAt') as Timestamp).nanoseconds,
+            id: last.id,
+          })).toString('base64url')
+        : null,
+    };
+  }
+
+  async listProfilePostsCursor(user: AuthenticatedUser, profileId: string, cursor: string | undefined, pageSize: number) {
+    const safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 20));
+    let postsQuery: FirebaseFirestore.Query = this.firebaseAdmin.db().collection(POSTS)
+      .where('uid', '==', profileId)
+      .orderBy('createdAt', 'desc')
+      .orderBy(FieldPath.documentId(), 'desc');
+    if (cursor) {
+      const position = this.decodePostCursor(cursor);
+      postsQuery = postsQuery.startAfter(
+        new Timestamp(position.seconds, position.nanoseconds),
+        position.id,
+      );
+    }
+
+    const snapshot = await postsQuery.limit(safeSize + 1).get();
+    const docs = snapshot.docs.slice(0, safeSize);
+    const items = await this.presentPosts(docs, user.uid);
+    const last = docs.at(-1);
+    return {
+      items,
+      nextCursor: snapshot.docs.length > safeSize && last
         ? Buffer.from(JSON.stringify({
             seconds: (last.get('createdAt') as Timestamp).seconds,
             nanoseconds: (last.get('createdAt') as Timestamp).nanoseconds,
@@ -317,9 +408,15 @@ export class NookSocialService {
 
   async comments(user: AuthenticatedUser, postId: string, order: 'asc' | 'desc', page: number, pageSize: number) {
     await this.requirePost(postId);
+    const safePage = Math.max(0, Number.isFinite(page) ? Math.floor(page) : 0);
+    const safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 20));
     const rows = await this.firebaseAdmin.db().collection(POSTS).doc(postId).collection('comments')
-      .orderBy('createdAt', order).limit(1000).get();
-    const items = await Promise.all(rows.docs.map(async doc => {
+      .orderBy('createdAt', order)
+      .offset(safePage * safeSize)
+      .limit(safeSize + 1)
+      .get();
+    const docs = rows.docs.slice(0, safeSize);
+    const items = await Promise.all(docs.map(async doc => {
       const comment = doc.data();
       const author = await this.getProfileForUser(String(comment.uid), user.uid);
       const liked = await doc.ref.collection('likes').doc(user.uid).get();
@@ -333,7 +430,7 @@ export class NookSocialService {
         isLiked: liked.exists,
       };
     }));
-    return this.page(items, page, pageSize);
+    return { items, hasMore: rows.docs.length > safeSize };
   }
 
   async addComment(user: AuthenticatedUser, postId: string, body: { text?: string; requestId?: string; parentId?: string }) {
@@ -725,7 +822,7 @@ export class NookSocialService {
   async listConversations(user: AuthenticatedUser, unreadOnly: boolean, page: number, pageSize: number) {
     const rows = await this.firebaseAdmin.db().collection('nookConversations')
       .where('participantUids', 'array-contains', user.uid).limit(500).get();
-    const items = await Promise.all(rows.docs.map(async doc => {
+    const conversations = rows.docs.map(doc => {
       const data = doc.data();
       const otherUid = (data.participantUids as string[]).find(uid => uid !== user.uid) || user.uid;
       const lastRead = Number((data.lastReadBy as Record<string, number> | undefined)?.[user.uid] || 0);
@@ -739,7 +836,7 @@ export class NookSocialService {
           : 0;
       return {
         _id: doc.id,
-        other: await this.getProfileForUser(otherUid, user.uid),
+        otherUid,
         preview: ((data.previewDeletedForUids as string[] | undefined) || []).includes(user.uid)
           ? 'Message deleted for you.'
           : String(data.preview || ''),
@@ -749,10 +846,15 @@ export class NookSocialService {
         unreadCount,
         unreadCountExact: hasStoredUnreadCount,
       };
-    }));
-    const filtered = items.filter(item => !unreadOnly || item.unread)
+    });
+    const filtered = conversations.filter(item => !unreadOnly || item.unread)
       .sort((left, right) => right.lastMessageAt - left.lastMessageAt);
-    return this.page(filtered, page, pageSize);
+    const paged = this.page(filtered, page, pageSize);
+    const items = await Promise.all(paged.items.map(async ({ otherUid, ...conversation }) => ({
+      ...conversation,
+      other: await this.getProfileForUser(otherUid, user.uid),
+    })));
+    return { items, hasMore: paged.hasMore };
   }
 
   async startConversation(user: AuthenticatedUser, profileId: string) {
@@ -1105,6 +1207,47 @@ export class NookSocialService {
       height: data.height,
       duration: data.duration,
     };
+  }
+
+  private async presentPosts(docs: FirebaseFirestore.QueryDocumentSnapshot[], viewerUid: string) {
+    if (!docs.length) return [];
+    const db = this.firebaseAdmin.db();
+    const viewerRefs = docs.flatMap(doc => [
+      doc.ref.collection('likes').doc(viewerUid),
+      db.collection(BOOKMARKS).doc(`${viewerUid}_${doc.id}`),
+    ]);
+    const authorUids = [...new Set(docs.map(doc => String(doc.get('uid') || '')).filter(Boolean))];
+    const [viewerSnapshots, authors, counts] = await Promise.all([
+      db.getAll(...viewerRefs),
+      Promise.all(authorUids.map(async uid => [
+        uid,
+        await this.getProfileForUser(uid, viewerUid),
+      ] as const)),
+      Promise.all(docs.map(async doc => Promise.all([
+        doc.ref.collection('likes').count().get(),
+        doc.ref.collection('comments').count().get(),
+      ]))),
+    ]);
+    const authorByUid = new Map(authors);
+    return docs.map((doc, index) => {
+      const data = doc.data() as PostDocument;
+      const [likes, comments] = counts[index];
+      return {
+        _id: doc.id,
+        _creationTime: this.timestampMs(data.createdAt),
+        caption: data.caption,
+        author: authorByUid.get(data.uid) ?? null,
+        isOwn: data.uid === viewerUid,
+        isLiked: viewerSnapshots[index * 2].exists,
+        isBookmarked: viewerSnapshots[index * 2 + 1].exists,
+        likesCount: likes.data().count,
+        commentsCount: comments.data().count,
+        kind: data.kind,
+        width: data.width,
+        height: data.height,
+        duration: data.duration,
+      };
+    });
   }
 
   private async requirePost(id: string) {
