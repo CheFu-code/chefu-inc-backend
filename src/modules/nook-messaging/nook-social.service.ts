@@ -630,9 +630,36 @@ export class NookSocialService {
         _creationTime: this.timestampMs(data.createdAt),
         expiresAt: this.timestampMs(data.expiresAt),
         caption: data.caption,
+        ...(data.uid === user.uid
+          ? { viewerCount: Number(doc.get('viewerCount') || 0) }
+          : {}),
         author: await this.getProfileForUser(data.uid, user.uid),
       };
     }));
+  }
+
+  async recordStoryView(user: AuthenticatedUser, id: string) {
+    const storyRef = this.firebaseAdmin.db().collection(STORIES).doc(id);
+    const viewerRef = storyRef.collection('views').doc(user.uid);
+    return this.firebaseAdmin.db().runTransaction(async transaction => {
+      const story = await transaction.get(storyRef);
+      if (!story.exists) throw new NotFoundException('Story not found.');
+      const expiresAt = story.get('expiresAt') as Timestamp | undefined;
+      if (!expiresAt || expiresAt.toMillis() <= Date.now()) {
+        throw new NotFoundException('Story has expired.');
+      }
+      if (story.get('uid') === user.uid) {
+        return { viewed: false, viewerCount: Number(story.get('viewerCount') || 0) };
+      }
+
+      const existingView = await transaction.get(viewerRef);
+      const viewerCount = Number(story.get('viewerCount') || 0);
+      if (existingView.exists) return { viewed: false, viewerCount };
+
+      transaction.create(viewerRef, { viewedAt: FieldValue.serverTimestamp() });
+      transaction.update(storyRef, { viewerCount: FieldValue.increment(1) });
+      return { viewed: true, viewerCount: viewerCount + 1 };
+    });
   }
 
   async deletePost(user: AuthenticatedUser, id: string) {

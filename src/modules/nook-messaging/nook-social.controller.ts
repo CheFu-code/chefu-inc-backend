@@ -174,6 +174,11 @@ export class NookSocialController {
     return this.social.listStories(request.user);
   }
 
+  @Post('stories/:id/view')
+  viewStory(@Req() request: AuthenticatedRequest, @Param('id') id: string) {
+    return this.social.recordStoryView(request.user, id);
+  }
+
   @Delete('stories/:id')
   deleteStory(@Req() request: AuthenticatedRequest, @Param('id') id: string) {
     return this.social.deleteStory(request.user, id);
