@@ -5,6 +5,7 @@ import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 
 const MAX_MESSAGE_LENGTH = 2000;
+const MESSAGE_REACTIONS = new Set(['👍', '❤️', '😂', '😮', '😢', '🙏']);
 
 @Injectable()
 export class NookMessagingService {
@@ -139,6 +140,62 @@ export class NookMessagingService {
     }
 
     return { id: result.id, sequence: result.sequence, saved: true };
+  }
+
+  async setReaction(
+    user: AuthenticatedUser,
+    conversationId: string,
+    messageId: string,
+    body: { emoji?: string | null },
+  ) {
+    const emoji = body.emoji ?? null;
+    if (emoji !== null && (typeof emoji !== 'string' || !MESSAGE_REACTIONS.has(emoji))) {
+      throw new BadRequestException('Choose a supported message reaction.');
+    }
+    if (!messageId || messageId.length > 200 || messageId.includes('/')) {
+      throw new BadRequestException('Invalid message.');
+    }
+
+    const conversationRef = this.firebaseAdmin.db()
+      .collection('nookConversations').doc(conversationId);
+    const messageRef = conversationRef.collection('messages').doc(messageId);
+    return this.firebaseAdmin.db().runTransaction(async transaction => {
+      const conversationSnapshot = await transaction.get(conversationRef);
+      if (!conversationSnapshot.exists) {
+        throw new BadRequestException('Conversation not found.');
+      }
+      const participants = conversationSnapshot.get('participantUids') as string[] | undefined;
+      if (!participants?.includes(user.uid)) {
+        throw new ForbiddenException('Not authorized to access this conversation.');
+      }
+      const messageSnapshot = await transaction.get(messageRef);
+      if (!messageSnapshot.exists) {
+        throw new BadRequestException('Message not found.');
+      }
+
+      const reactionsBy = {
+        ...((messageSnapshot.get('reactionsBy') as Record<string, string> | undefined) || {}),
+      };
+      if (emoji) reactionsBy[user.uid] = emoji;
+      else delete reactionsBy[user.uid];
+      transaction.update(messageRef, { reactionsBy });
+      return this.summarizeReactions(reactionsBy, user.uid);
+    });
+  }
+
+  summarizeReactions(
+    reactionsBy: Record<string, string>,
+    userId: string,
+  ) {
+    const counts = new Map<string, number>();
+    for (const value of Object.values(reactionsBy)) {
+      if (MESSAGE_REACTIONS.has(value)) counts.set(value, (counts.get(value) || 0) + 1);
+    }
+    return [...counts.entries()].map(([emoji, count]) => ({
+      emoji,
+      count,
+      reacted: reactionsBy[userId] === emoji,
+    }));
   }
 
   private async notifyRecipient(

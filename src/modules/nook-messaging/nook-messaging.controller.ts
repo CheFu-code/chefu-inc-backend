@@ -32,4 +32,19 @@ export class NookMessagingController {
   ) {
     return this.messaging.send(request.user, conversationId, body);
   }
+
+  @Post(':conversationId/messages/:messageId/reaction')
+  setReaction(
+    @Req() request: AuthenticatedRequest,
+    @Param('conversationId') conversationId: string,
+    @Param('messageId') messageId: string,
+    @Body() body: { emoji?: string | null },
+  ) {
+    return this.messaging.setReaction(
+      request.user,
+      conversationId,
+      messageId,
+      body,
+    );
+  }
 }

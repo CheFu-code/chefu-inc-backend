@@ -705,6 +705,10 @@ export class NookSocialService {
       _creationTime: this.timestampMs(doc.get('createdAt')),
       outgoing: doc.get('senderUid') === user.uid,
       requestId: doc.get('requestId'),
+      reactions: this.summarizeMessageReactions(
+        (doc.get('reactionsBy') as Record<string, string> | undefined) || {},
+        user.uid,
+      ),
       replyTo: doc.get('replyTo')
         ? {
           id: String((doc.get('replyTo') as { messageId?: string }).messageId || ''),
@@ -715,6 +719,21 @@ export class NookSocialService {
         : undefined,
     }));
     return { items, hasMore: rows.docs.length > pageSize };
+  }
+
+  private summarizeMessageReactions(
+    reactionsBy: Record<string, string>,
+    userId: string,
+  ) {
+    const counts = new Map<string, number>();
+    for (const emoji of Object.values(reactionsBy)) {
+      counts.set(emoji, (counts.get(emoji) || 0) + 1);
+    }
+    return [...counts.entries()].map(([emoji, count]) => ({
+      emoji,
+      count,
+      reacted: reactionsBy[userId] === emoji,
+    }));
   }
 
   async markRead(user: AuthenticatedUser, id: string, sequence: number) {
