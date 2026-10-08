@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { AuthGuard } from '../auth/auth.guard';
@@ -46,5 +46,14 @@ export class NookMessagingController {
       messageId,
       body,
     );
+  }
+
+  @Get(':conversationId/messages/:messageId/reactions')
+  getReactions(
+    @Req() request: AuthenticatedRequest,
+    @Param('conversationId') conversationId: string,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.messaging.getReactions(request.user, conversationId, messageId);
   }
 }

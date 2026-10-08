@@ -183,6 +183,51 @@ export class NookMessagingService {
     });
   }
 
+  async getReactions(
+    user: AuthenticatedUser,
+    conversationId: string,
+    messageId: string,
+  ) {
+    if (!messageId || messageId.length > 200 || messageId.includes('/')) {
+      throw new BadRequestException('Invalid message.');
+    }
+    const conversationRef = this.firebaseAdmin.db()
+      .collection('nookConversations').doc(conversationId);
+    const [conversation, message] = await Promise.all([
+      conversationRef.get(),
+      conversationRef.collection('messages').doc(messageId).get(),
+    ]);
+    if (!conversation.exists) throw new BadRequestException('Conversation not found.');
+    const participants = conversation.get('participantUids') as string[] | undefined;
+    if (!participants?.includes(user.uid)) {
+      throw new ForbiddenException('Not authorized to access this conversation.');
+    }
+    if (!message.exists) throw new BadRequestException('Message not found.');
+    const reactionsBy =
+      (message.get('reactionsBy') as Record<string, string> | undefined) || {};
+    const rows = Object.entries(reactionsBy).filter(([, emoji]) =>
+      MESSAGE_REACTIONS.has(emoji),
+    );
+    const profiles = await Promise.all(
+      rows.map(async ([uid, emoji]) => {
+        const profile = await this.firebaseAdmin.db()
+          .collection('nookSocialProfiles').doc(uid).get();
+        return {
+          user: {
+            _id: uid,
+            username: String(profile.get('username') || 'nook member'),
+            name: String(profile.get('name') || profile.get('username') || 'Nook member'),
+            hasAvatar: Boolean(profile.get('avatarPath')),
+            avatarVersion: Number(profile.get('avatarVersion') || 0),
+          },
+          emoji,
+          isOwn: uid === user.uid,
+        };
+      }),
+    );
+    return profiles;
+  }
+
   summarizeReactions(
     reactionsBy: Record<string, string>,
     userId: string,
