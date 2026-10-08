@@ -14,7 +14,7 @@
     "start": "node dist/main.js",
     "start:prod": "node dist/main.js",
     "migrate:flow-html": "tsx --env-file=.env scripts/migrate-flow-html.ts",
-    "backfill:nook-post-search": "tsx --env-file=.env scripts/backfill-nook-post-search.ts",
+    "backfill:nook-post-search": "tsx --env-file-if-exists=.env scripts/backfill-nook-post-search.ts",
     "test:flow": "node --import tsx --test src/modules/flow/flow-email-template.test.ts",
     "verify:flow-security": "node scripts/verify-flow-security.mjs",
     "lint": "eslint \"src/**/*.ts\"",

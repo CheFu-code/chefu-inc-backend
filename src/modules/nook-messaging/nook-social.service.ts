@@ -649,6 +649,7 @@ export class NookSocialService {
         _id: doc.id,
         other: await this.getProfileForUser(otherUid, user.uid),
         preview: String(data.preview || ''),
+        previewIsOwn: data.lastSenderUid === user.uid,
         lastMessageAt: this.timestampMs(data.lastMessageAt),
         unread: unreadCount > 0,
         unreadCount,
