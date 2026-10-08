@@ -77,6 +77,21 @@ export class NookSocialController {
     return this.social.setFollow(request.user, id, body.following === true);
   }
 
+  @Get('blocks')
+  blockedUsers(@Req() request: AuthenticatedRequest) {
+    return this.social.listBlockedUsers(request.user);
+  }
+
+  @Post('profiles/:id/block')
+  blockProfile(@Req() request: AuthenticatedRequest, @Param('id') id: string) {
+    return this.social.setBlocked(request.user, id, true);
+  }
+
+  @Delete('profiles/:id/block')
+  unblockProfile(@Req() request: AuthenticatedRequest, @Param('id') id: string) {
+    return this.social.setBlocked(request.user, id, false);
+  }
+
   @Get('posts')
   listPosts(
     @Req() request: AuthenticatedRequest,

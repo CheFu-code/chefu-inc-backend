@@ -93,6 +93,13 @@ export class NookMessagingService {
       }
       const recipientUid = conversation.participantUids.find(uid => uid !== user.uid);
       if (!recipientUid) throw new BadRequestException('Conversation recipient not found.');
+      const [outgoingBlock, incomingBlock] = await Promise.all([
+        transaction.get(this.blockRef(user.uid, recipientUid)),
+        transaction.get(this.blockRef(recipientUid, user.uid)),
+      ]);
+      if (outgoingBlock.exists || incomingBlock.exists) {
+        throw new ForbiddenException('Messaging is unavailable for this conversation.');
+      }
       if (existingSnapshot.exists) {
         const existing = existingSnapshot.data() as { text?: string; replyToId?: string };
         if (existing.text !== text || existing.replyToId !== replyToId) {
@@ -168,6 +175,7 @@ export class NookMessagingService {
     messageId: string,
     body: { emoji?: string | null },
   ) {
+    await this.assertConversationUnblocked(user.uid, conversationId);
     const emoji = body.emoji ?? null;
     if (emoji !== null && (typeof emoji !== 'string' || !MESSAGE_REACTIONS.has(emoji))) {
       throw new BadRequestException('Choose a supported message reaction.');
@@ -220,6 +228,7 @@ export class NookMessagingService {
     messageId: string,
     body: { text?: string },
   ) {
+    await this.assertConversationUnblocked(user.uid, conversationId);
     const text = body.text?.trim() || '';
     if (!text || text.length > MAX_MESSAGE_LENGTH) {
       throw new BadRequestException('Write a message of 1–2,000 characters.');
@@ -272,6 +281,7 @@ export class NookMessagingService {
     conversationId: string,
     messageId: string,
   ) {
+    await this.assertConversationUnblocked(user.uid, conversationId);
     this.validateMessageId(messageId);
     const conversationRef = this.firebaseAdmin.db()
       .collection('nookConversations').doc(conversationId);
@@ -309,6 +319,7 @@ export class NookMessagingService {
     conversationId: string,
     messageId: string,
   ) {
+    await this.assertConversationUnblocked(user.uid, conversationId);
     this.validateMessageId(messageId);
     const conversationRef = this.firebaseAdmin.db()
       .collection('nookConversations').doc(conversationId);
@@ -369,6 +380,7 @@ export class NookMessagingService {
     conversationId: string,
     messageId: string,
   ) {
+    await this.assertConversationUnblocked(user.uid, conversationId);
     if (!messageId || messageId.length > 200 || messageId.includes('/')) {
       throw new BadRequestException('Invalid message.');
     }
@@ -511,5 +523,30 @@ export class NookMessagingService {
 
   private messageId(uid: string, requestId: string) {
     return createHash('sha256').update(`${uid}:${requestId}`).digest('hex');
+  }
+
+  private async assertConversationUnblocked(uid: string, conversationId: string) {
+    const conversation = await this.firebaseAdmin.db()
+      .collection('nookConversations').doc(conversationId).get();
+    const participants = conversation.get('participantUids') as string[] | undefined;
+    if (!conversation.exists || !participants?.includes(uid)) {
+      throw new ForbiddenException('Not authorized to access this conversation.');
+    }
+    const otherUid = participants.find(participantUid => participantUid !== uid);
+    if (!otherUid) return;
+    const [outgoing, incoming] = await Promise.all([
+      this.blockRef(uid, otherUid).get(),
+      this.blockRef(otherUid, uid).get(),
+    ]);
+    if (outgoing.exists || incoming.exists) {
+      throw new ForbiddenException('Messaging is unavailable for this conversation.');
+    }
+  }
+
+  private blockRef(blockerUid: string, blockedUid: string) {
+    const id = createHash('sha256')
+      .update(JSON.stringify([blockerUid, blockedUid]))
+      .digest('hex');
+    return this.firebaseAdmin.db().collection('nookSocialBlocks').doc(id);
   }
 }

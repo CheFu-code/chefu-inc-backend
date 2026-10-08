@@ -60,6 +60,7 @@ const POSTS = 'nookSocialPosts';
 const STORIES = 'nookSocialStories';
 const FOLLOWS = 'nookSocialFollows';
 const BOOKMARKS = 'nookSocialBookmarks';
+const BLOCKS = 'nookSocialBlocks';
 const MAX_PAGE_SIZE = 50;
 const HOME_FEED_UIDS_PER_QUERY = 30;
 const USERNAME_PATTERN = /^[a-z0-9._]{3,30}$/;
@@ -131,16 +132,77 @@ export class NookSocialService {
 
   async getProfile(user: AuthenticatedUser, id: string) {
     const profile = await this.getProfileForUser(id, user.uid);
-    return profile;
+    if (!profile) return null;
+    const [blockedByMe, blockingMe] = await Promise.all([
+      this.blockRef(user.uid, id).get(),
+      this.blockRef(id, user.uid).get(),
+    ]);
+    return {
+      ...profile,
+      isBlockedByMe: blockedByMe.exists,
+      isBlockingMe: blockingMe.exists,
+    };
+  }
+
+  async listBlockedUsers(user: AuthenticatedUser) {
+    const rows = await this.firebaseAdmin.db().collection(BLOCKS)
+      .where('blockerUid', '==', user.uid)
+      .get();
+    const orderedRows = rows.docs.slice().sort((left, right) =>
+      this.timestampMs(right.get('createdAt')) - this.timestampMs(left.get('createdAt')),
+    );
+    const items = await Promise.all(orderedRows.map(row =>
+      this.getProfileForUser(String(row.get('blockedUid')), user.uid),
+    ));
+    return { items: items.filter((profile): profile is NonNullable<typeof profile> => profile !== null) };
+  }
+
+  async setBlocked(user: AuthenticatedUser, profileId: string, blocked: boolean) {
+    if (!profileId || profileId.length > 200 || profileId.includes('/')) {
+      throw new BadRequestException('Invalid profile.');
+    }
+    if (profileId === user.uid) throw new BadRequestException('You cannot block yourself.');
+    const db = this.firebaseAdmin.db();
+    const targetRef = this.profileRef(profileId);
+    const blockRef = this.blockRef(user.uid, profileId);
+    const outgoingFollowRef = this.followRef(user.uid, profileId);
+    const incomingFollowRef = this.followRef(profileId, user.uid);
+    await db.runTransaction(async transaction => {
+      const [target, existingBlock] = await Promise.all([
+        transaction.get(targetRef),
+        transaction.get(blockRef),
+      ]);
+      if (!target.exists) throw new NotFoundException('Profile not found.');
+      if (blocked) {
+        const [outgoingFollow, incomingFollow] = await Promise.all([
+          transaction.get(outgoingFollowRef),
+          transaction.get(incomingFollowRef),
+        ]);
+        if (!existingBlock.exists) {
+          transaction.create(blockRef, {
+            blockerUid: user.uid,
+            blockedUid: profileId,
+            createdAt: FieldValue.serverTimestamp(),
+          });
+        }
+        if (outgoingFollow.exists) transaction.delete(outgoingFollowRef);
+        if (incomingFollow.exists) transaction.delete(incomingFollowRef);
+      } else if (existingBlock.exists) {
+        transaction.delete(blockRef);
+      }
+    });
+    return { blocked };
   }
 
   async searchProfiles(user: AuthenticatedUser, query: string, page: number, pageSize: number) {
     const normalized = query.trim().toLowerCase().replace(/^@/, '');
     const snapshot = await this.firebaseAdmin.db().collection(SOCIAL).orderBy('normalizedUsername').limit(500).get();
+    const blockedUids = await this.blockedUids(user.uid);
     const profiles = await Promise.all(snapshot.docs
       .map(doc => this.presentProfile(doc.id, doc.data() as ProfileDocument, user.uid)));
     return this.page(profiles.filter(profile =>
-      !normalized || profile.username.includes(normalized) || profile.name.toLowerCase().includes(normalized),
+      !blockedUids.has(profile._id) &&
+      (!normalized || profile.username.includes(normalized) || profile.name.toLowerCase().includes(normalized)),
     ), page, pageSize);
   }
 
@@ -161,11 +223,15 @@ export class NookSocialService {
       profilesQuery = profilesQuery.startAfter(position.username, position.id);
     }
 
-    const snapshot = await profilesQuery.limit(safeSize + 1).get();
+    const [snapshot, blockedUids] = await Promise.all([
+      profilesQuery.limit(safeSize + 1).get(),
+      this.blockedUids(user.uid),
+    ]);
     const docs = snapshot.docs.slice(0, safeSize);
-    const items = await Promise.all(docs.map(doc =>
+    const profiles = await Promise.all(docs.map(doc =>
       this.presentProfile(doc.id, doc.data() as ProfileDocument, user.uid),
     ));
+    const items = profiles.filter(profile => !blockedUids.has(profile._id));
     const last = docs.at(-1);
     return {
       items,
@@ -183,11 +249,24 @@ export class NookSocialService {
     const target = await this.profileRef(profileId).get();
     if (!target.exists) throw new NotFoundException('Profile not found.');
     const ref = this.followRef(user.uid, profileId);
-    if (following) {
-      await ref.set({ followerUid: user.uid, followedUid: profileId, createdAt: FieldValue.serverTimestamp() }, { merge: true });
-    } else {
-      await ref.delete();
-    }
+    await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const [outgoingBlock, incomingBlock] = await Promise.all([
+        transaction.get(this.blockRef(user.uid, profileId)),
+        transaction.get(this.blockRef(profileId, user.uid)),
+      ]);
+      if (following && (outgoingBlock.exists || incomingBlock.exists)) {
+        throw new ForbiddenException('You cannot follow this profile.');
+      }
+      if (following) {
+        transaction.set(ref, {
+          followerUid: user.uid,
+          followedUid: profileId,
+          createdAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+      } else {
+        transaction.delete(ref);
+      }
+    });
     return { following };
   }
 
@@ -195,11 +274,13 @@ export class NookSocialService {
     const field = kind === 'followers' ? 'followedUid' : 'followerUid';
     const uidField = kind === 'followers' ? 'followerUid' : 'followedUid';
     const rows = await this.firebaseAdmin.db().collection(FOLLOWS).where(field, '==', profileId).limit(500).get();
+    const blockedUids = await this.blockedUids(user.uid);
     rows.docs.sort((left, right) => this.timestampMs(right.get('createdAt')) - this.timestampMs(left.get('createdAt')));
     const safePage = Math.max(0, Number.isFinite(page) ? Math.floor(page) : 0);
     const safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 20));
     const start = safePage * safeSize;
-    const selected = rows.docs.slice(start, start + safeSize + 1);
+    const selected = rows.docs.filter(row => !blockedUids.has(String(row.get(uidField))))
+      .slice(start, start + safeSize + 1);
     const profiles = await Promise.all(selected.slice(0, safeSize).map(row =>
       this.getProfileForUser(String(row.get(uidField)), user.uid),
     ));
@@ -211,10 +292,12 @@ export class NookSocialService {
       ? await this.firebaseAdmin.db().collection(FOLLOWS).where('followerUid', '==', user.uid).limit(500).get()
       : null;
     const allowed = follows ? new Set([user.uid, ...follows.docs.map(doc => String(doc.get('followedUid')))]) : null;
+    const blockedUids = await this.blockedUids(user.uid);
     const query = this.firebaseAdmin.db().collection(POSTS).orderBy('createdAt', 'desc').limit(1000);
     const snapshot = await query.get();
     const filtered = snapshot.docs.filter(doc => {
       const data = doc.data() as PostDocument;
+      if (blockedUids.has(data.uid)) return false;
       if (feed === 'profile') return data.uid === profileId;
       if (allowed) return allowed.has(data.uid);
       return true;
@@ -245,11 +328,17 @@ export class NookSocialService {
       );
     }
 
-    const snapshot = await postsQuery.limit(safeSize + 1).get();
-    const docs = snapshot.docs.slice(0, safeSize);
+    const [snapshot, blockedUids] = await Promise.all([
+      postsQuery.limit(Math.min(100, safeSize * 3)).get(),
+      this.blockedUids(user.uid),
+    ]);
+    const filteredDocs = snapshot.docs.filter(doc =>
+      !blockedUids.has(String(doc.get('uid') || '')),
+    );
+    const docs = filteredDocs.slice(0, safeSize);
     const items = await this.presentPosts(docs, user.uid);
     const last = docs.at(-1);
-    const hasMore = snapshot.docs.length > safeSize;
+    const hasMore = filteredDocs.length > safeSize || snapshot.docs.length === Math.min(100, safeSize * 3);
     return {
       items,
       nextCursor: hasMore && last
@@ -268,11 +357,12 @@ export class NookSocialService {
       .where('followerUid', '==', user.uid)
       .limit(500)
       .get();
+    const blockedUids = await this.blockedUids(user.uid);
     const followedUids = [...new Set([
       user.uid,
       ...follows.docs
         .map(doc => String(doc.get('followedUid') || ''))
-        .filter(Boolean),
+        .filter(uid => Boolean(uid) && !blockedUids.has(uid)),
     ])];
     const position = cursor ? this.decodePostCursor(cursor) : undefined;
     const chunks: string[][] = [];
@@ -330,6 +420,7 @@ export class NookSocialService {
       );
     }
 
+    if (await this.isBlockedPair(user.uid, profileId)) return { items: [], nextCursor: null };
     const snapshot = await postsQuery.limit(safeSize + 1).get();
     const docs = snapshot.docs.slice(0, safeSize);
     const items = await this.presentPosts(docs, user.uid);
@@ -355,6 +446,7 @@ export class NookSocialService {
       .where('uid', '==', user.uid)
       .limit(1000)
       .get();
+    const blockedUids = await this.blockedUids(user.uid);
     const ordered = bookmarks.docs
       .slice()
       .sort((left, right) => this.timestampMs(right.get('createdAt')) - this.timestampMs(left.get('createdAt')));
@@ -368,7 +460,7 @@ export class NookSocialService {
         const postId = String(bookmark.get('postId') || '');
         if (!postId) return null;
         const post = await this.firebaseAdmin.db().collection(POSTS).doc(postId).get();
-        return post.exists
+        return post.exists && !blockedUids.has(String(post.get('uid') || ''))
           ? { id: post.id, data: post.data() as PostDocument }
           : null;
       }));
@@ -383,6 +475,12 @@ export class NookSocialService {
 
   async getPost(user: AuthenticatedUser, id: string) {
     const snapshot = await this.firebaseAdmin.db().collection(POSTS).doc(id).get();
+    if (
+      snapshot.exists &&
+      await this.isBlockedPair(user.uid, String(snapshot.get('uid') || ''))
+    ) {
+      throw new NotFoundException('Post not found.');
+    }
     return snapshot.exists ? this.presentPost(snapshot.id, snapshot.data() as PostDocument, user.uid) : null;
   }
 
@@ -409,7 +507,7 @@ export class NookSocialService {
   }
 
   async setPostLike(user: AuthenticatedUser, postId: string, liked: boolean) {
-    const post = await this.requirePost(postId);
+    const post = await this.requirePost(user.uid, postId);
     const ref = this.firebaseAdmin.db().collection(POSTS).doc(postId).collection('likes').doc(user.uid);
     if (liked) await ref.set({ uid: user.uid, createdAt: FieldValue.serverTimestamp() }, { merge: true });
     else await ref.delete();
@@ -417,7 +515,7 @@ export class NookSocialService {
   }
 
   async setBookmark(user: AuthenticatedUser, postId: string, saved: boolean) {
-    await this.requirePost(postId);
+    await this.requirePost(user.uid, postId);
     const ref = this.firebaseAdmin.db().collection(BOOKMARKS).doc(`${user.uid}_${postId}`);
     if (saved) await ref.set({ uid: user.uid, postId, createdAt: FieldValue.serverTimestamp() }, { merge: true });
     else await ref.delete();
@@ -429,15 +527,17 @@ export class NookSocialService {
   }
 
   async comments(user: AuthenticatedUser, postId: string, order: 'asc' | 'desc', page: number, pageSize: number) {
-    await this.requirePost(postId);
+    await this.requirePost(user.uid, postId);
     const safePage = Math.max(0, Number.isFinite(page) ? Math.floor(page) : 0);
     const safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 20));
+    const blockedUids = await this.blockedUids(user.uid);
     const rows = await this.firebaseAdmin.db().collection(POSTS).doc(postId).collection('comments')
       .orderBy('createdAt', order)
       .offset(safePage * safeSize)
       .limit(safeSize + 1)
       .get();
-    const docs = rows.docs.slice(0, safeSize);
+    const docs = rows.docs.slice(0, safeSize)
+      .filter(doc => !blockedUids.has(String(doc.get('uid') || '')));
     const items = await Promise.all(docs.map(async doc => {
       const comment = doc.data();
       const author = await this.getProfileForUser(String(comment.uid), user.uid);
@@ -459,7 +559,7 @@ export class NookSocialService {
     const text = this.requireText(body.text, 'Comment', 2000);
     const requestId = body.requestId?.trim();
     if (!requestId || requestId.length > 100) throw new BadRequestException('A valid request ID is required.');
-    await this.requirePost(postId);
+    await this.requirePost(user.uid, postId);
     const parentId = body.parentId?.trim() || undefined;
     if (parentId) {
       const parent = await this.firebaseAdmin.db().collection(POSTS).doc(postId)
@@ -740,9 +840,10 @@ export class NookSocialService {
   }
 
   async listStories(user: AuthenticatedUser) {
+    const blockedUids = await this.blockedUids(user.uid);
     const rows = await this.firebaseAdmin.db().collection(STORIES)
       .where('expiresAt', '>', Timestamp.now()).orderBy('expiresAt').limit(500).get();
-    return Promise.all(rows.docs.map(async doc => {
+    return Promise.all(rows.docs.filter(doc => !blockedUids.has(String(doc.get('uid') || ''))).map(async doc => {
       const data = doc.data() as StoryDocument;
       return {
         _id: doc.id,
@@ -777,6 +878,9 @@ export class NookSocialService {
       if (story.get('uid') === user.uid) {
         return { viewed: false, viewerCount: Number(story.get('viewerCount') || 0) };
       }
+      if (await this.isBlockedPair(user.uid, String(story.get('uid') || ''))) {
+        throw new NotFoundException('Story not found.');
+      }
 
       const existingView = await transaction.get(viewerRef);
       const viewerCount = Number(story.get('viewerCount') || 0);
@@ -805,7 +909,8 @@ export class NookSocialService {
       .orderBy('viewedAt', 'desc')
       .limit(101)
       .get();
-    const visibleRows = viewerRows.docs.slice(0, 100);
+    const blockedUids = await this.blockedUids(user.uid);
+    const visibleRows = viewerRows.docs.filter(row => !blockedUids.has(row.id)).slice(0, 100);
     const items = await Promise.all(visibleRows.map(async viewerRow => {
       const profile = await this.getProfileForUser(viewerRow.id, user.uid);
       return profile
@@ -851,11 +956,18 @@ export class NookSocialService {
       throw new NotFoundException('Media not found.');
     } else if (kind === 'post') {
       const post = await this.firebaseAdmin.db().collection(POSTS).doc(id).get();
+      if (!post.exists || await this.isBlockedPair(user.uid, String(post.get('uid') || ''))) {
+        throw new NotFoundException('Media not found.');
+      }
       path = post.get('uploadPath');
       cloudinaryUrl = post.get('cloudinaryUrl');
     } else if (kind === 'story') {
       const story = await this.firebaseAdmin.db().collection(STORIES).doc(id).get();
-      if (story.exists && story.get('expiresAt').toMillis() > Date.now()) {
+      if (
+        story.exists &&
+        story.get('expiresAt').toMillis() > Date.now() &&
+        !await this.isBlockedPair(user.uid, String(story.get('uid') || ''))
+      ) {
         path = story.get('uploadPath');
         cloudinaryUrl = story.get('cloudinaryUrl');
       }
@@ -874,6 +986,7 @@ export class NookSocialService {
   async listConversations(user: AuthenticatedUser, unreadOnly: boolean, page: number, pageSize: number) {
     const rows = await this.firebaseAdmin.db().collection('nookConversations')
       .where('participantUids', 'array-contains', user.uid).limit(500).get();
+    const blockedUids = await this.blockedUids(user.uid);
     const conversations = rows.docs.map(doc => {
       const data = doc.data();
       const otherUid = (data.participantUids as string[]).find(uid => uid !== user.uid) || user.uid;
@@ -899,7 +1012,9 @@ export class NookSocialService {
         unreadCountExact: hasStoredUnreadCount,
       };
     });
-    const filtered = conversations.filter(item => !unreadOnly || item.unread)
+    const filtered = conversations.filter(item =>
+      !blockedUids.has(item.otherUid) && (!unreadOnly || item.unread),
+    )
       .sort((left, right) => right.lastMessageAt - left.lastMessageAt);
     const paged = this.page(filtered, page, pageSize);
     const items = await Promise.all(paged.items.map(async ({ otherUid, ...conversation }) => ({
@@ -913,6 +1028,9 @@ export class NookSocialService {
     if (profileId === user.uid) throw new BadRequestException('You cannot message yourself.');
     const other = await this.profileRef(profileId).get();
     if (!other.exists) throw new NotFoundException('Profile not found.');
+    if (await this.isBlockedPair(user.uid, profileId)) {
+      throw new ForbiddenException('You cannot message this profile.');
+    }
     const participantUids = [user.uid, profileId].sort();
     const existing = await this.firebaseAdmin.db().collection('nookConversations')
       .where('participantUids', '==', participantUids).limit(1).get();
@@ -962,6 +1080,7 @@ export class NookSocialService {
     id: string,
     decision: 'accepted' | 'declined',
   ) {
+    await this.requireConversation(user.uid, id);
     const ref = this.firebaseAdmin.db().collection('nookConversations').doc(id);
     const participantUids = await this.firebaseAdmin.db().runTransaction(async transaction => {
       const conversation = await transaction.get(ref);
@@ -1356,9 +1475,13 @@ export class NookSocialService {
     });
   }
 
-  private async requirePost(id: string) {
+  private async requirePost(uid: string, id: string) {
     const snapshot = await this.firebaseAdmin.db().collection(POSTS).doc(id).get();
     if (!snapshot.exists) throw new NotFoundException('Post not found.');
+    const authorUid = String(snapshot.get('uid') || '');
+    if (await this.isBlockedPair(uid, authorUid)) {
+      throw new NotFoundException('Post not found.');
+    }
     return snapshot;
   }
 
@@ -1368,6 +1491,10 @@ export class NookSocialService {
     if (!snapshot.exists) throw new NotFoundException('Conversation not found.');
     if (!(snapshot.get('participantUids') as string[] | undefined)?.includes(uid)) {
       throw new ForbiddenException('Not authorized to access this conversation.');
+    }
+    const otherUid = (snapshot.get('participantUids') as string[]).find(value => value !== uid);
+    if (otherUid && await this.isBlockedPair(uid, otherUid)) {
+      throw new NotFoundException('Conversation not found.');
     }
     return snapshot;
   }
@@ -1416,6 +1543,35 @@ export class NookSocialService {
 
   private profileRef(uid: string) {
     return this.firebaseAdmin.db().collection(SOCIAL).doc(uid);
+  }
+
+  private blockRef(blockerUid: string, blockedUid: string) {
+    const id = createHash('sha256')
+      .update(JSON.stringify([blockerUid, blockedUid]))
+      .digest('hex');
+    return this.firebaseAdmin.db().collection(BLOCKS).doc(id);
+  }
+
+  private async isBlockedPair(leftUid: string, rightUid: string) {
+    if (!leftUid || !rightUid || leftUid === rightUid) return false;
+    const [leftBlocksRight, rightBlocksLeft] = await Promise.all([
+      this.blockRef(leftUid, rightUid).get(),
+      this.blockRef(rightUid, leftUid).get(),
+    ]);
+    return leftBlocksRight.exists || rightBlocksLeft.exists;
+  }
+
+  private async blockedUids(uid: string) {
+    const [outgoing, incoming] = await Promise.all([
+      this.firebaseAdmin.db().collection(BLOCKS)
+        .where('blockerUid', '==', uid).get(),
+      this.firebaseAdmin.db().collection(BLOCKS)
+        .where('blockedUid', '==', uid).get(),
+    ]);
+    return new Set([
+      ...outgoing.docs.map(row => String(row.get('blockedUid') || '')),
+      ...incoming.docs.map(row => String(row.get('blockerUid') || '')),
+    ].filter(Boolean));
   }
 
   private usernameRef(username: string) {
