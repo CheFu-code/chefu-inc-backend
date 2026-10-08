@@ -83,6 +83,15 @@ export class NookSocialController {
     return this.social.listPosts(request.user, feed, profileId, Number(page), Number(limit));
   }
 
+  @Get('posts/saved')
+  savedPosts(
+    @Req() request: AuthenticatedRequest,
+    @Query('page') page = '0',
+    @Query('limit') limit = '20',
+  ) {
+    return this.social.listBookmarkedPosts(request.user, Number(page), Number(limit));
+  }
+
   @Get('posts/:id')
   getPost(@Req() request: AuthenticatedRequest, @Param('id') id: string) {
     return this.social.getPost(request.user, id);

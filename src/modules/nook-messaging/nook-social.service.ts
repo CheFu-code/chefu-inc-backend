@@ -180,6 +180,41 @@ export class NookSocialService {
     return this.page(postRows, page, pageSize);
   }
 
+  async listBookmarkedPosts(user: AuthenticatedUser, page: number, pageSize: number) {
+    const safePage = Math.max(0, Number.isFinite(page) ? Math.floor(page) : 0);
+    const safeSize = Math.min(MAX_PAGE_SIZE, Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 20));
+    const start = safePage * safeSize;
+    const end = start + safeSize;
+    const bookmarks = await this.firebaseAdmin.db().collection(BOOKMARKS)
+      .where('uid', '==', user.uid)
+      .limit(1000)
+      .get();
+    const ordered = bookmarks.docs
+      .slice()
+      .sort((left, right) => this.timestampMs(right.get('createdAt')) - this.timestampMs(left.get('createdAt')));
+    const savedPosts: Array<{ id: string; data: PostDocument }> = [];
+    let cursor = 0;
+
+    while (cursor < ordered.length && savedPosts.length <= end) {
+      const batch = ordered.slice(cursor, cursor + Math.min(50, end + 1 - savedPosts.length));
+      cursor += batch.length;
+      const posts = await Promise.all(batch.map(async bookmark => {
+        const postId = String(bookmark.get('postId') || '');
+        if (!postId) return null;
+        const post = await this.firebaseAdmin.db().collection(POSTS).doc(postId).get();
+        return post.exists
+          ? { id: post.id, data: post.data() as PostDocument }
+          : null;
+      }));
+      savedPosts.push(...posts.filter((post): post is { id: string; data: PostDocument } => post !== null));
+    }
+
+    const items = await Promise.all(savedPosts.slice(start, end).map(post =>
+      this.presentPost(post.id, post.data, user.uid),
+    ));
+    return { items, hasMore: savedPosts.length > end || cursor < ordered.length };
+  }
+
   async getPost(user: AuthenticatedUser, id: string) {
     const snapshot = await this.firebaseAdmin.db().collection(POSTS).doc(id).get();
     return snapshot.exists ? this.presentPost(snapshot.id, snapshot.data() as PostDocument, user.uid) : null;
