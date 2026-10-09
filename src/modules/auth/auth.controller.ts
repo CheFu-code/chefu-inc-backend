@@ -851,26 +851,62 @@ export class AuthController {
     const ref = this.firebaseAdmin.db()
       .collection('email_verification_challenges')
       .doc(createHash('sha256').update(email).digest('hex'));
+    const sendLimitRef = this.firebaseAdmin.db()
+      .collection('email_verification_send_limits')
+      .doc(createHash('sha256').update(email).digest('hex'));
     const now = Date.now();
 
-    await this.firebaseAdmin.db().runTransaction(async transaction => {
-      const existing = await transaction.get(ref);
+    const sendResult = await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const [existing, sendLimit] = await Promise.all([
+        transaction.get(ref),
+        transaction.get(sendLimitRef),
+      ]);
       const data = existing.data() as {
-        lastSentAt?: Timestamp | Date;
         status?: string;
         creationClaimExpiresAt?: Timestamp | Date;
       } | undefined;
-      const lastSentAt = data?.lastSentAt instanceof Date
-        ? data.lastSentAt.getTime()
-        : data?.lastSentAt?.toMillis() ?? 0;
       const claimExpiresAt = data?.creationClaimExpiresAt instanceof Date
         ? data.creationClaimExpiresAt.getTime()
         : data?.creationClaimExpiresAt?.toMillis() ?? 0;
       if (data?.status === 'creating' && claimExpiresAt > now) {
         throw new ConflictException('Registration is already being completed.');
       }
-      if (now - lastSentAt < 60_000) {
-        throw new BadRequestException('Please wait before requesting another verification code.');
+
+      const limitData = sendLimit.data() as { sentAtMs?: number[] } | undefined;
+      const recentSends = (Array.isArray(limitData?.sentAtMs) ? limitData.sentAtMs : [])
+        .filter(sentAt => Number.isFinite(sentAt) && sentAt > now - 24 * 60 * 60_000)
+        .sort((left, right) => left - right);
+      if (recentSends.length >= 4) {
+        const retryAfterSeconds = Math.max(
+          1,
+          Math.ceil((recentSends[0] + 24 * 60 * 60_000 - now) / 1000),
+        );
+        throw new HttpException(
+          {
+            statusCode: 429,
+            message: 'Daily verification email limit reached. Please try again later.',
+            retryAfterSeconds,
+            resendsRemaining: 0,
+          },
+          429,
+        );
+      }
+
+      const cooldownBySendCountMs = [0, 60_000, 150_000, 300_000];
+      const requiredCooldownMs = cooldownBySendCountMs[recentSends.length];
+      const retryAfterMs = recentSends.length
+        ? recentSends[recentSends.length - 1] + requiredCooldownMs - now
+        : 0;
+      if (retryAfterMs > 0) {
+        throw new HttpException(
+          {
+            statusCode: 429,
+            message: 'Please wait before requesting another verification code.',
+            retryAfterSeconds: Math.ceil(retryAfterMs / 1000),
+            resendsRemaining: Math.max(0, 3 - Math.max(0, recentSends.length - 1)),
+          },
+          429,
+        );
       }
 
       transaction.set(ref, {
@@ -883,6 +919,19 @@ export class AuthController {
         attempts: 0,
         status: 'pending',
       });
+      const updatedSends = [...recentSends, now];
+      transaction.set(sendLimitRef, {
+        sentAtMs: updatedSends,
+        expiresAt: Timestamp.fromMillis(now + 24 * 60 * 60_000),
+      });
+      const cooldownSeconds =
+        cooldownBySendCountMs[updatedSends.length] === undefined
+          ? 0
+          : cooldownBySendCountMs[updatedSends.length] / 1000;
+      return {
+        cooldownSeconds,
+        resendsRemaining: Math.max(0, 3 - Math.max(0, updatedSends.length - 1)),
+      };
     });
 
     try {
@@ -901,7 +950,11 @@ export class AuthController {
       throw error;
     }
 
-    return { success: true, message: 'Verification code sent to your email.' };
+    return {
+      success: true,
+      message: 'Verification code sent to your email.',
+      ...sendResult,
+    };
   }
 
   @Post('email-verification/verify')
@@ -966,7 +1019,7 @@ export class AuthController {
         transaction.delete(ref);
         return 'expired' as const;
       }
-      if (Number(data.attempts || 0) >= 5) {
+      if (Number(data.attempts || 0) >= 3) {
         transaction.delete(ref);
         return 'locked' as const;
       }
@@ -977,9 +1030,9 @@ export class AuthController {
         !timingSafeEqual(expectedHash, submittedHash)
       ) {
         const attempts = Number(data.attempts || 0) + 1;
-        if (attempts >= 5) transaction.delete(ref);
+        if (attempts >= 3) transaction.delete(ref);
         else transaction.update(ref, { attempts });
-        return 'invalid' as const;
+        return { result: 'invalid' as const, attemptsRemaining: Math.max(0, 3 - attempts) };
       }
 
       transaction.update(ref, {
@@ -987,7 +1040,7 @@ export class AuthController {
         creationClaimHash: claimHash,
         creationClaimExpiresAt: Timestamp.fromMillis(now + 2 * 60_000),
       });
-      return 'claimed' as const;
+      return { result: 'claimed' as const, attemptsRemaining: 3 };
     });
 
     if (claimResult === 'missing') {
@@ -997,15 +1050,28 @@ export class AuthController {
       throw new BadRequestException('Verification code has expired.');
     }
     if (claimResult === 'locked') {
-      throw new BadRequestException('Too many incorrect codes. Request a new code.');
-    }
-    if (claimResult === 'invalid') {
-      throw new BadRequestException('Invalid verification code.');
+      throw new HttpException(
+        {
+          statusCode: 400,
+          message: 'Too many incorrect codes. Request a new code.',
+          attemptsRemaining: 0,
+        },
+        400,
+      );
     }
     if (claimResult === 'in-progress') {
       throw new ConflictException('Registration is already being completed.');
     }
-
+    if (claimResult.result === 'invalid') {
+      throw new HttpException(
+        {
+          statusCode: 400,
+          message: 'Incorrect verification code.',
+          attemptsRemaining: claimResult.attemptsRemaining,
+        },
+        400,
+      );
+    }
     let createdUid: string;
     try {
       const firebaseAuth = this.firebaseAdmin.auth();
@@ -1538,7 +1604,7 @@ export class AuthController {
 
     if (isFlowRequest) return 'flow';
 
-    return resolvedAppId || 'academy';
+    return resolvedAppId || 'root';
   }
 
   private getClearCookieOptionsList() {
@@ -2046,6 +2112,17 @@ export class AuthController {
         ? existingUser.lastName
         : nameParts.slice(1).join(' ');
     const now = FieldValue.serverTimestamp();
+    let createdAt = existingUser?.createdAt;
+    if (!createdAt) {
+      const authUser = await this.firebaseAdmin.auth().getUser(decodedToken.uid);
+      const creationTimeMs = Date.parse(authUser.metadata.creationTime);
+      if (!Number.isFinite(creationTimeMs)) {
+        throw new InternalServerErrorException(
+          'Unable to determine the account creation date.',
+        );
+      }
+      createdAt = Timestamp.fromMillis(creationTimeMs);
+    }
     const detectedCountry = this.getDetectedCountry(request);
     const firebaseProfilePicture =
       this.normalizeFirebaseProfilePicture(decodedToken);
@@ -2054,7 +2131,7 @@ export class AuthController {
 
     await userRef.set(
       {
-        ...(!userSnapshot.exists ? { createdAt: now } : {}),
+        createdAt,
         uid: decodedToken.uid,
         email,
         fullname: name,

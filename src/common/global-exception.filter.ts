@@ -53,9 +53,22 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       this.logger.warn(logPayload);
     }
 
+    const details =
+      typeof payload === 'object' && payload
+        ? Object.fromEntries(
+            ['attemptsRemaining', 'retryAfterSeconds', 'resendsRemaining']
+              .filter(key => key in payload)
+              .map(key => [
+                key,
+                (payload as Record<string, unknown>)[key],
+              ]),
+          )
+        : {};
+
     response.status(status).json({
       error: message,
       requestId: getRequestId(request),
+      ...details,
     });
   }
 }
