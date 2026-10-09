@@ -13,6 +13,7 @@ import {
   Inject,
   InternalServerErrorException,
   Logger,
+  Param,
   Patch,
   Post,
   Query,
@@ -26,6 +27,7 @@ import { Request, Response } from 'express';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import {
   createHash,
+  createHmac,
   randomBytes,
   randomInt,
   timingSafeEqual,
@@ -72,6 +74,12 @@ import {
 } from './device-auth';
 import { FirebaseDecodedToken, ProfileUpdateBody,AcademyProfileUpdate,ProfilePictureUpdate,SignInAlertDecision } from './auth-controller.types';
 
+const TRUSTED_DEVICE_COOKIE_NAME = 'chefu_trusted_device';
+const TRUSTED_DEVICE_CHALLENGE_COOKIE_NAME = 'chefu_trusted_device_challenge';
+const TRUSTED_DEVICE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const TRUSTED_DEVICE_CHALLENGE_TTL_MS = 10 * 60 * 1000;
+const TRUSTED_DEVICE_CODE_MAX_ATTEMPTS = 5;
+
 function decodeJwtPayload(token: string) {
   const [, payload] = token.split('.');
   if (!payload) return null;
@@ -88,6 +96,7 @@ function decodeJwtPayload(token: string) {
       chefu_auth_provider?: string;
       firebase?: {
         sign_in_provider?: string;
+        sign_in_second_factor?: string;
       };
     };
   } catch {
@@ -301,7 +310,7 @@ export class AuthController {
   @Post('session/password')
   @HttpCode(200)
   async createPasswordSession(
-    @Body() body: { email?: string; password?: string },
+    @Body() body: { email?: string; password?: string; trustDevice?: boolean },
     @Headers(CHEFU_APP_HEADER) chefuApp: string | undefined,
     @Headers(FLOW_SESSION_HEADER) flowSession: string | undefined,
     @Req() request: Request,
@@ -314,6 +323,7 @@ export class AuthController {
       flowSession,
       request,
       response,
+      body.trustDevice === true,
     );
   }
 
@@ -326,6 +336,7 @@ export class AuthController {
       mfaPendingCredential?: string;
       mfaEnrollmentId?: string;
       verificationCode?: string;
+      trustDevice?: boolean;
     },
     @Headers(CHEFU_APP_HEADER) chefuApp: string | undefined,
     @Headers(FLOW_SESSION_HEADER) flowSession: string | undefined,
@@ -376,6 +387,7 @@ export class AuthController {
       flowSession,
       request,
       response,
+      body.trustDevice === true,
     );
   }
 
@@ -394,6 +406,7 @@ export class AuthController {
     body: {
       challengeId?: string;
       response?: AuthenticationResponseJSON;
+      trustDevice?: boolean;
     },
     @Headers(CHEFU_APP_HEADER) chefuApp: string | undefined,
     @Req() request: Request,
@@ -410,6 +423,7 @@ export class AuthController {
       undefined,
       request,
       response,
+      body.trustDevice === true,
     );
   }
 
@@ -440,6 +454,231 @@ export class AuthController {
       email: request.user?.email,
       uid: request.user?.uid,
     });
+  }
+
+  @Get('trusted-devices')
+  @UseGuards(AuthGuard)
+  async listTrustedDevices(
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
+    const uid = request.user?.uid;
+    if (!uid) throw new UnauthorizedException('Authentication required.');
+    const snapshot = await this.firebaseAdmin.db()
+      .collection('auth_trusted_devices')
+      .where('uid', '==', uid)
+      .get();
+    const now = Date.now();
+    return {
+      devices: snapshot.docs
+        .map(document => ({ id: document.id, data: document.data() }))
+        .filter(device =>
+          !device.data.revokedAt &&
+          this.timestampToMillis(device.data.expiresAt) > now,
+        )
+        .sort(
+          (left, right) =>
+            this.timestampToMillis(right.data.lastSeenAt) -
+            this.timestampToMillis(left.data.lastSeenAt),
+        )
+        .map(device => ({
+          id: device.id,
+          deviceName: this.trustedDeviceName(
+            typeof device.data.userAgent === 'string' ? device.data.userAgent : '',
+          ),
+          createdAt: this.timestampToMillis(device.data.createdAt),
+          lastSeenAt: this.timestampToMillis(device.data.lastSeenAt),
+          expiresAt: this.timestampToMillis(device.data.expiresAt),
+          isCurrent: request.cookies?.[TRUSTED_DEVICE_COOKIE_NAME]
+            ? createHash('sha256')
+                .update(request.cookies[TRUSTED_DEVICE_COOKIE_NAME])
+                .digest('hex') === device.id
+            : false,
+        })),
+    };
+  }
+
+  @Delete('trusted-devices')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async revokeTrustedDevices(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Res({ passthrough: true }) response: Response,
+    @Body() body: { deviceId?: string; all?: boolean },
+  ) {
+    const uid = request.user?.uid;
+    if (!uid) throw new UnauthorizedException('Authentication required.');
+    const collection = this.firebaseAdmin.db().collection('auth_trusted_devices');
+    const snapshot = await collection.where('uid', '==', uid).get();
+    const selected = body.all
+      ? snapshot.docs
+      : snapshot.docs.filter(document => document.id === body.deviceId);
+    if (!body.all && (!body.deviceId || selected.length !== 1)) {
+      throw new BadRequestException('Trusted device was not found.');
+    }
+    if (!selected.length) return { revoked: 0 };
+
+    const batch = this.firebaseAdmin.db().batch();
+    const now = Timestamp.now();
+    for (const document of selected) {
+      batch.update(document.ref, {
+        revokedAt: now,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+    await batch.commit();
+
+    const currentToken = request.cookies?.[TRUSTED_DEVICE_COOKIE_NAME];
+    const currentDeviceId =
+      typeof currentToken === 'string'
+        ? createHash('sha256').update(currentToken).digest('hex')
+        : '';
+    if (body.all || selected.some(document => document.id === currentDeviceId)) {
+      for (const options of this.getClearCookieOptionsList()) {
+        response.clearCookie(TRUSTED_DEVICE_COOKIE_NAME, options);
+      }
+    }
+    return { revoked: selected.length };
+  }
+
+  @Post('trusted-devices/email-challenge')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async sendTrustedDeviceVerificationCode(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const user = request.user;
+    if (!user?.uid || !user.email) throw new UnauthorizedException('Authentication required.');
+    const authUser = await this.firebaseAdmin.auth().getUser(user.uid);
+    if (!authUser.emailVerified) {
+      throw new ForbiddenException('Verify your email before trusting a device.');
+    }
+    if ((authUser.multiFactor?.enrolledFactors.length || 0) > 0) {
+      throw new ForbiddenException('Use your authenticator app to trust a device.');
+    }
+    await this.enforceAuthRateLimit(
+      user.email,
+      this.getClientIp(request) || 'unknown',
+      3,
+    );
+    await this.issueTrustedDeviceEmailChallenge({
+      uid: user.uid,
+      email: user.email,
+      userName: authUser.displayName || '',
+      request,
+      response,
+    });
+    return { sent: true, expiresInSeconds: TRUSTED_DEVICE_CHALLENGE_TTL_MS / 1000 };
+  }
+
+  @Post('trusted-devices/email-verify')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async verifyTrustedDeviceEmailCode(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Res({ passthrough: true }) response: Response,
+    @Body() body: { code?: string },
+  ) {
+    const uid = request.user?.uid;
+    const code = String(body.code || '').trim();
+    const challengeToken = request.cookies?.[TRUSTED_DEVICE_CHALLENGE_COOKIE_NAME];
+    if (!uid || typeof challengeToken !== 'string' || challengeToken.length < 32) {
+      throw new UnauthorizedException('Request a new trusted-device code and try again.');
+    }
+    if (!/^\d{6}$/.test(code)) {
+      throw new BadRequestException('Enter the 6-digit email code.');
+    }
+    const challengeRef = this.firebaseAdmin.db()
+      .collection('auth_trusted_device_challenges')
+      .doc(uid);
+    const codeHash = this.trustedDeviceCodeHash(uid, code);
+    const challengeTokenHash = createHash('sha256')
+      .update(challengeToken)
+      .digest('hex');
+    const accepted = await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const snapshot = await transaction.get(challengeRef);
+      const challenge = snapshot.data() as {
+        uid?: string;
+        challengeTokenHash?: string;
+        codeHash?: string;
+        attempts?: number;
+        expiresAt?: Timestamp;
+      } | undefined;
+      if (
+        !snapshot.exists ||
+        challenge?.uid !== uid ||
+        challenge.challengeTokenHash !== challengeTokenHash ||
+        this.timestampToMillis(challenge.expiresAt) <= Date.now() ||
+        Number(challenge.attempts || 0) >= TRUSTED_DEVICE_CODE_MAX_ATTEMPTS
+      ) {
+        throw new BadRequestException('This code expired. Request a new one.');
+      }
+      const expected = Buffer.from(challenge.codeHash || '');
+      const supplied = Buffer.from(codeHash);
+      const matches =
+        expected.length === supplied.length && timingSafeEqual(expected, supplied);
+      if (!matches) {
+        transaction.update(challengeRef, {
+          attempts: FieldValue.increment(1),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        return false;
+      }
+      transaction.delete(challengeRef);
+      return true;
+    });
+    if (!accepted) {
+      throw new UnauthorizedException('The email code is incorrect.');
+    }
+
+    const authUser = await this.firebaseAdmin.auth().getUser(uid);
+    if (!authUser.emailVerified) {
+      throw new ForbiddenException('Verify your email before trusting a device.');
+    }
+    if ((authUser.multiFactor?.enrolledFactors.length || 0) > 0) {
+      throw new ForbiddenException('Use your authenticator app to trust a device.');
+    }
+    await this.rememberTrustedAuthDevice({
+      uid,
+      request,
+      response,
+      source: 'explicit_choice',
+    });
+    for (const options of this.getClearCookieOptionsList()) {
+      response.clearCookie(TRUSTED_DEVICE_CHALLENGE_COOKIE_NAME, options);
+    }
+    return { trusted: true };
+  }
+
+  @Post('trusted-devices/email-resend')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async resendTrustedDeviceVerificationCode(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const user = request.user;
+    const challengeToken = request.cookies?.[TRUSTED_DEVICE_CHALLENGE_COOKIE_NAME];
+    if (!user?.uid || !user.email || typeof challengeToken !== 'string') {
+      throw new UnauthorizedException('Request a trusted-device code first.');
+    }
+    await this.enforceAuthRateLimit(
+      user.email,
+      this.getClientIp(request) || 'unknown',
+      3,
+    );
+    const authUser = await this.firebaseAdmin.auth().getUser(user.uid);
+    if ((authUser.multiFactor?.enrolledFactors.length || 0) > 0) {
+      throw new ForbiddenException('Use your authenticator app to trust a device.');
+    }
+    await this.issueTrustedDeviceEmailChallenge({
+      uid: user.uid,
+      email: user.email,
+      userName: authUser.displayName || '',
+      request,
+      response,
+    });
+    return { sent: true, expiresInSeconds: TRUSTED_DEVICE_CHALLENGE_TTL_MS / 1000 };
   }
 
   @Post('security/reauthenticate')
@@ -1692,6 +1931,8 @@ export class AuthController {
       flowSession,
       request,
       response,
+      true,
+      true,
     );
 
     try {
@@ -1772,6 +2013,8 @@ export class AuthController {
     @Headers(FLOW_SESSION_HEADER) flowSession: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
+    trustDevice = false,
+    signupSession = false,
   ) {
     const idToken = authorization?.startsWith('Bearer ')
       ? authorization.slice('Bearer '.length)
@@ -1882,9 +2125,43 @@ export class AuthController {
     }
 
     await this.ensureUserProfile(decodedToken, sessionAppId, request);
-    const isSignupSession = decodedToken.email
+    const signupAlertSuppressed = decodedToken.email
       ? await this.consumeSignupSignInAlertSuppression(decodedToken.email)
       : false;
+    const isSignupSession = signupSession || signupAlertSuppressed;
+    const wasTrustedDevice = await this.isTrustedAuthDevice(decodedToken.uid, request);
+    let trustDeviceVerificationRequired = false;
+    let trustDeviceRequiresAuthenticator = false;
+    if (
+      decodedToken.email &&
+      (isSignupSession || (trustDevice && !wasTrustedDevice))
+    ) {
+      const authUser = await this.firebaseAdmin.auth().getUser(decodedToken.uid);
+      const mfaEnabled = (authUser.multiFactor?.enrolledFactors.length || 0) > 0;
+      if (
+        !signupSession &&
+        mfaEnabled &&
+        tokenPayload?.firebase?.sign_in_second_factor !== 'totp'
+      ) {
+        trustDeviceRequiresAuthenticator = true;
+      } else if (!signupSession && !mfaEnabled) {
+        await this.issueTrustedDeviceEmailChallenge({
+          uid: decodedToken.uid,
+          email: decodedToken.email,
+          userName: authUser.displayName || decodedToken.name || '',
+          request,
+          response,
+        });
+        trustDeviceVerificationRequired = true;
+      } else {
+        await this.rememberTrustedAuthDevice({
+          uid: decodedToken.uid,
+          request,
+          response,
+          source: isSignupSession ? 'signup' : 'explicit_choice',
+        });
+      }
+    }
     const userProfile = await this.getUserProfile(decodedToken.email);
     const meta = this.buildSessionMeta({
       email: decodedToken.email || '',
@@ -1922,6 +2199,7 @@ export class AuthController {
     if (
       decodedToken.email &&
       !isSignupSession &&
+      !wasTrustedDevice &&
       signInProvider &&
       userProfile.securityEmailsEnabled
     ) {
@@ -1935,7 +2213,12 @@ export class AuthController {
       });
     }
 
-    return { ok: true, app: sessionAppId };
+    return {
+      ok: true,
+      app: sessionAppId,
+      trustDeviceVerificationRequired,
+      trustDeviceRequiresAuthenticator,
+    };
   }
 
   @Post('mfa/backup-code/session')
@@ -2144,6 +2427,7 @@ export class AuthController {
     for (const options of this.getClearCookieOptionsList()) {
       response.clearCookie(SESSION_COOKIE_NAME, options);
       response.clearCookie(SESSION_META_COOKIE_NAME, options);
+      response.clearCookie(TRUSTED_DEVICE_CHALLENGE_COOKIE_NAME, options);
       response.cookie(SESSION_COOKIE_NAME, '', {
         ...options,
         expires: new Date(0),
@@ -2155,6 +2439,194 @@ export class AuthController {
         maxAge: 0,
       });
     }
+  }
+
+  private async isTrustedAuthDevice(uid: string, request: Request) {
+    const token = request.cookies?.[TRUSTED_DEVICE_COOKIE_NAME];
+    if (typeof token !== 'string' || token.length < 32) return false;
+
+    const ref = this.firebaseAdmin.db()
+      .collection('auth_trusted_devices')
+      .doc(createHash('sha256').update(token).digest('hex'));
+    return this.firebaseAdmin.db().runTransaction(async transaction => {
+      const snapshot = await transaction.get(ref);
+      const device = snapshot.data() as {
+        uid?: string;
+        expiresAt?: Timestamp;
+        revokedAt?: Timestamp | null;
+      } | undefined;
+      if (
+        !snapshot.exists ||
+        device?.uid !== uid ||
+        device.revokedAt ||
+        this.timestampToMillis(device.expiresAt) <= Date.now()
+      ) {
+        return false;
+      }
+
+      transaction.update(ref, {
+        lastSeenAt: FieldValue.serverTimestamp(),
+        lastSeenAtMs: Date.now(),
+      });
+      return true;
+    });
+  }
+
+  private trustedDeviceName(userAgent: string) {
+    if (!userAgent) return 'Unknown device';
+    const browser = /Edg\//.test(userAgent)
+      ? 'Microsoft Edge'
+      : /Firefox\//.test(userAgent)
+        ? 'Firefox'
+        : /Chrome\//.test(userAgent)
+          ? 'Chrome'
+          : /Safari\//.test(userAgent)
+            ? 'Safari'
+            : 'Browser';
+    const platform = /iPhone|iPad/.test(userAgent)
+      ? 'iPhone or iPad'
+      : /Android/.test(userAgent)
+        ? 'Android device'
+        : /Windows/.test(userAgent)
+          ? 'Windows'
+          : /Macintosh|Mac OS/.test(userAgent)
+            ? 'Mac'
+            : /Linux/.test(userAgent)
+              ? 'Linux'
+              : 'device';
+    return `${browser} on ${platform}`;
+  }
+
+  private async issueTrustedDeviceEmailChallenge({
+    uid,
+    email,
+    userName,
+    request,
+    response,
+  }: {
+    uid: string;
+    email: string;
+    userName: string;
+    request: Request;
+    response: Response;
+  }) {
+    const code = String(randomInt(100000, 1000000));
+    const challengeToken = randomBytes(32).toString('base64url');
+    const expiresAt = Timestamp.fromMillis(Date.now() + TRUSTED_DEVICE_CHALLENGE_TTL_MS);
+    await this.firebaseAdmin.db()
+      .collection('auth_trusted_device_challenges')
+      .doc(uid)
+      .set({
+        uid,
+        codeHash: this.trustedDeviceCodeHash(uid, code),
+        challengeTokenHash: createHash('sha256').update(challengeToken).digest('hex'),
+        attempts: 0,
+        expiresAt,
+        emailHash: hashForAudit(email),
+        userAgentHash: this.hashValue(request.headers['user-agent'] || 'unknown'),
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    await this.resendService.sendEmailVerification({
+      email,
+      userName,
+      code,
+      expiresIn: '10 minutes',
+      appName: 'Chefu Technologies',
+    });
+    response.cookie(TRUSTED_DEVICE_CHALLENGE_COOKIE_NAME, challengeToken, {
+      ...this.getCookieOptions(),
+      maxAge: TRUSTED_DEVICE_CHALLENGE_TTL_MS,
+    });
+  }
+
+  private trustedDeviceCodeHash(uid: string, code: string) {
+    const secret =
+      process.env.AUTH_SESSION_SECRET ||
+      process.env.SESSION_COOKIE_SECRET ||
+      process.env.FIREBASE_SERVICE_ACCOUNT;
+    if (!secret) {
+      throw new InternalServerErrorException(
+        'Trusted-device verification is not configured.',
+      );
+    }
+    return createHmac('sha256', secret).update(`${uid}:${code}`).digest('hex');
+  }
+
+  private async rememberTrustedAuthDevice({
+    uid,
+    request,
+    response,
+    source,
+  }: {
+    uid: string;
+    request: Request;
+    response: Response;
+    source: 'signup' | 'explicit_choice';
+  }) {
+    const db = this.firebaseAdmin.db();
+    const collection = db.collection('auth_trusted_devices');
+    const suppliedToken = request.cookies?.[TRUSTED_DEVICE_COOKIE_NAME];
+    let token = randomBytes(32).toString('base64url');
+    let ref = collection.doc(createHash('sha256').update(token).digest('hex'));
+    let createdAt: unknown;
+    let alreadyTrusted = false;
+    if (typeof suppliedToken === 'string' && suppliedToken.length >= 32) {
+      const suppliedRef = collection.doc(
+        createHash('sha256').update(suppliedToken).digest('hex'),
+      );
+      const snapshot = await suppliedRef.get();
+      if (snapshot.exists && snapshot.data()?.uid === uid) {
+        token = suppliedToken;
+        ref = suppliedRef;
+        createdAt = snapshot.data()?.createdAt;
+        alreadyTrusted = true;
+      }
+    }
+    if (!alreadyTrusted) {
+      const existingDevices = await collection.where('uid', '==', uid).get();
+      const nowMs = Date.now();
+      const activeDocs = existingDevices.docs.filter(document => {
+        const device = document.data();
+        return !device.revokedAt && this.timestampToMillis(device.expiresAt) > nowMs;
+      });
+      const inactiveDocs = existingDevices.docs.filter(document => {
+        const device = document.data();
+        return Boolean(device.revokedAt) || this.timestampToMillis(device.expiresAt) <= nowMs;
+      });
+      for (let offset = 0; offset < inactiveDocs.length; offset += 400) {
+        const cleanup = db.batch();
+        for (const document of inactiveDocs.slice(offset, offset + 400)) {
+          cleanup.delete(document.ref);
+        }
+        await cleanup.commit();
+      }
+      const activeCount = activeDocs.length;
+      if (activeCount >= 20) {
+        throw new BadRequestException(
+          'You have reached the 20 trusted-device limit. Remove a device before trusting another.',
+        );
+      }
+    }
+
+    const now = Date.now();
+    await ref.set(
+      {
+        uid,
+        createdAt: createdAt || Timestamp.now(),
+        expiresAt: Timestamp.fromMillis(now + TRUSTED_DEVICE_TTL_MS),
+        lastSeenAt: FieldValue.serverTimestamp(),
+        lastSeenAtMs: now,
+        userAgentHash: this.hashValue(request.headers['user-agent'] || 'unknown'),
+        userAgent: String(request.headers['user-agent'] || 'Unknown device').slice(0, 300),
+        source,
+        revokedAt: null,
+      },
+      { merge: true },
+    );
+    response.cookie(TRUSTED_DEVICE_COOKIE_NAME, token, {
+      ...this.getCookieOptions(),
+      maxAge: TRUSTED_DEVICE_TTL_MS,
+    });
   }
 
   private getCookieOptions() {
