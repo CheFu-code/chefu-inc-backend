@@ -2,6 +2,7 @@ import {
   BadGatewayException,
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   ForbiddenException,
@@ -22,7 +23,12 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import { createHash, randomBytes, randomInt } from 'node:crypto';
+import {
+  createHash,
+  randomBytes,
+  randomInt,
+  timingSafeEqual,
+} from 'node:crypto';
 import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { AppsService } from '../apps/apps.service';
@@ -794,50 +800,89 @@ export class AuthController {
   @Post('email-verification/send')
   @HttpCode(200)
   async sendEmailVerificationCode(
-    @Headers('authorization') authorization: string | undefined,
-    @Body() body: { appName?: string },
+    @Body() body: { email?: string; userName?: string },
+    @Req() request: Request,
   ) {
-    const idToken = this.readBearerToken(authorization);
-    const decodedToken = await this.firebaseAdmin.auth().verifyIdToken(idToken, true);
-    const user = await this.firebaseAdmin.auth().getUser(decodedToken.uid);
-
-    if (!user.email) {
-      throw new BadRequestException('An email address is required for verification.');
+    const email = String(body.email || '').trim().toLowerCase();
+    if (
+      email.length > 254 ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+    ) {
+      throw new BadRequestException('Enter a valid email address.');
     }
-    if (user.emailVerified) {
-      return { success: true, verified: true, message: 'Email is already verified.' };
-    }
+    await this.enforceAuthRateLimit(email, request.ip || 'unknown');
 
-    const ref = this.firebaseAdmin.db()
-      .collection('email_verification_challenges')
-      .doc(decodedToken.uid);
-    const existing = await ref.get();
-    if (existing.exists) {
-      const data = existing.data() as { lastSentAt?: Timestamp };
-      if (Date.now() - (data.lastSentAt?.toMillis() ?? 0) < 60_000) {
-        throw new BadRequestException('Please wait before requesting another verification code.');
+    try {
+      const existingUser = await this.firebaseAdmin.auth().getUserByEmail(email);
+      if (existingUser.emailVerified) {
+        throw new ConflictException('This email is already registered. Try logging in.');
+      }
+    } catch (error) {
+      if (error instanceof ConflictException) throw error;
+      if (
+        typeof error !== 'object' ||
+        error === null ||
+        !('code' in error) ||
+        error.code !== 'auth/user-not-found'
+      ) {
+        throw error;
       }
     }
 
     const code = String(randomInt(100000, 1000000));
-    await this.resendService.sendEmailVerification({
-      email: user.email,
-      userName: user.displayName || undefined,
-      code,
-      expiresIn: '10 minutes',
-      appName: body.appName,
+    const codeHash = createHash('sha256').update(code).digest('hex');
+    const ref = this.firebaseAdmin.db()
+      .collection('email_verification_challenges')
+      .doc(createHash('sha256').update(email).digest('hex'));
+    const now = Date.now();
+
+    await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const existing = await transaction.get(ref);
+      const data = existing.data() as {
+        lastSentAt?: Timestamp | Date;
+        status?: string;
+        creationClaimExpiresAt?: Timestamp | Date;
+      } | undefined;
+      const lastSentAt = data?.lastSentAt instanceof Date
+        ? data.lastSentAt.getTime()
+        : data?.lastSentAt?.toMillis() ?? 0;
+      const claimExpiresAt = data?.creationClaimExpiresAt instanceof Date
+        ? data.creationClaimExpiresAt.getTime()
+        : data?.creationClaimExpiresAt?.toMillis() ?? 0;
+      if (data?.status === 'creating' && claimExpiresAt > now) {
+        throw new ConflictException('Registration is already being completed.');
+      }
+      if (now - lastSentAt < 60_000) {
+        throw new BadRequestException('Please wait before requesting another verification code.');
+      }
+
+      transaction.set(ref, {
+        email,
+        userName: String(body.userName || '').trim().slice(0, 120) || null,
+        appName: 'CheFu Account',
+        codeHash,
+        expiresAt: Timestamp.fromMillis(now + 10 * 60_000),
+        lastSentAt: Timestamp.fromMillis(now),
+        attempts: 0,
+        status: 'pending',
+      });
     });
-    await this.recordAccountSecurityActivity(
-      decodedToken.uid,
-      user.email,
-      'verification_email_sent',
-    );
-    await ref.set({
-      codeHash: createHash('sha256').update(code).digest('hex'),
-      expiresAt: new Date(Date.now() + 10 * 60_000),
-      lastSentAt: new Date(),
-      attempts: 0,
-    });
+
+    try {
+      await this.resendService.sendEmailVerification({
+        email,
+        userName: String(body.userName || '').trim().slice(0, 120) || undefined,
+        code,
+        expiresIn: '10 minutes',
+        appName: 'CheFu Account',
+      });
+    } catch (error) {
+      await this.firebaseAdmin.db().runTransaction(async transaction => {
+        const current = await transaction.get(ref);
+        if (current.get('codeHash') === codeHash) transaction.delete(ref);
+      });
+      throw error;
+    }
 
     return { success: true, message: 'Verification code sent to your email.' };
   }
@@ -845,52 +890,188 @@ export class AuthController {
   @Post('email-verification/verify')
   @HttpCode(200)
   async verifyEmailVerificationCode(
-    @Headers('authorization') authorization: string | undefined,
-    @Body() body: { code?: string },
+    @Body() body: {
+      email?: string;
+      code?: string;
+      password?: string;
+      displayName?: string;
+    },
+    @Req() request: Request,
   ) {
-    const idToken = this.readBearerToken(authorization);
-    const decodedToken = await this.firebaseAdmin.auth().verifyIdToken(idToken, true);
+    const email = String(body.email || '').trim().toLowerCase();
     const code = body.code?.trim() || '';
+    const password = typeof body.password === 'string' ? body.password : '';
+    const displayName = String(body.displayName || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+      throw new BadRequestException('Enter a valid email address.');
+    }
     if (!/^\d{6}$/.test(code)) {
       throw new BadRequestException('Enter the 6-digit verification code.');
     }
+    if (password.length < 6 || password.length > 128) {
+      throw new BadRequestException('Password must be between 6 and 128 characters.');
+    }
+    if (!displayName || displayName.length > 120) {
+      throw new BadRequestException('Enter a name up to 120 characters.');
+    }
+    await this.enforceAuthRateLimit(email, request.ip || 'unknown');
 
     const ref = this.firebaseAdmin.db()
       .collection('email_verification_challenges')
-      .doc(decodedToken.uid);
-    const snapshot = await ref.get();
-    if (!snapshot.exists) {
+      .doc(createHash('sha256').update(email).digest('hex'));
+    const claim = randomBytes(32).toString('hex');
+    const claimHash = createHash('sha256').update(claim).digest('hex');
+    const now = Date.now();
+    const claimResult = await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists) return 'missing' as const;
+
+      const data = snapshot.data() as {
+        codeHash?: string;
+        expiresAt?: Timestamp | Date;
+        attempts?: number;
+        status?: string;
+        creationClaimExpiresAt?: Timestamp | Date;
+      };
+      const expiresAt = data.expiresAt instanceof Date
+        ? data.expiresAt.getTime()
+        : data.expiresAt?.toMillis() ?? 0;
+      const claimExpiresAt = data.creationClaimExpiresAt instanceof Date
+        ? data.creationClaimExpiresAt.getTime()
+        : data.creationClaimExpiresAt?.toMillis() ?? 0;
+      if (data.status === 'creating' && claimExpiresAt > now) {
+        return 'in-progress' as const;
+      }
+      if (expiresAt <= now) {
+        transaction.delete(ref);
+        return 'expired' as const;
+      }
+      if (Number(data.attempts || 0) >= 5) {
+        transaction.delete(ref);
+        return 'locked' as const;
+      }
+      const submittedHash = createHash('sha256').update(code).digest();
+      const expectedHash = Buffer.from(data.codeHash || '', 'hex');
+      if (
+        expectedHash.length !== submittedHash.length ||
+        !timingSafeEqual(expectedHash, submittedHash)
+      ) {
+        const attempts = Number(data.attempts || 0) + 1;
+        if (attempts >= 5) transaction.delete(ref);
+        else transaction.update(ref, { attempts });
+        return 'invalid' as const;
+      }
+
+      transaction.update(ref, {
+        status: 'creating',
+        creationClaimHash: claimHash,
+        creationClaimExpiresAt: Timestamp.fromMillis(now + 2 * 60_000),
+      });
+      return 'claimed' as const;
+    });
+
+    if (claimResult === 'missing') {
       throw new BadRequestException('No active verification code found.');
     }
-    const data = snapshot.data() as {
-      codeHash?: string;
-      expiresAt?: Timestamp | Date;
-      attempts?: number;
-    };
-    const expiresAt = data.expiresAt instanceof Date
-      ? data.expiresAt.getTime()
-      : data.expiresAt?.toDate().getTime() ?? 0;
-    if (expiresAt < Date.now()) {
-      await ref.delete();
+    if (claimResult === 'expired') {
       throw new BadRequestException('Verification code has expired.');
     }
-    if (createHash('sha256').update(code).digest('hex') !== data.codeHash) {
-      const attempts = (data.attempts || 0) + 1;
-      if (attempts >= 5) await ref.delete();
-      else await ref.update({ attempts });
+    if (claimResult === 'locked') {
+      throw new BadRequestException('Too many incorrect codes. Request a new code.');
+    }
+    if (claimResult === 'invalid') {
       throw new BadRequestException('Invalid verification code.');
     }
+    if (claimResult === 'in-progress') {
+      throw new ConflictException('Registration is already being completed.');
+    }
 
-    await this.firebaseAdmin.auth().updateUser(decodedToken.uid, { emailVerified: true });
-    await ref.delete();
-    if (decodedToken.email) {
-      await this.recordAccountSecurityActivity(
-        decodedToken.uid,
-        decodedToken.email,
-        'email_verified',
+    let createdUid: string;
+    try {
+      const firebaseAuth = this.firebaseAdmin.auth();
+      let createdUser;
+      try {
+        const existingUser = await firebaseAuth.getUserByEmail(email);
+        if (existingUser.emailVerified) {
+          throw new ConflictException('This email is already registered. Try logging in.');
+        }
+        createdUser = await firebaseAuth.updateUser(existingUser.uid, {
+          password,
+          displayName,
+          emailVerified: true,
+          disabled: false,
+        });
+      } catch (error) {
+        const errorCode =
+          typeof error === 'object' && error !== null && 'code' in error
+            ? String(error.code)
+            : '';
+        if (errorCode !== 'auth/user-not-found') throw error;
+        createdUser = await firebaseAuth.createUser({
+          email,
+          password,
+          displayName,
+          emailVerified: true,
+          disabled: false,
+        });
+      }
+      createdUid = createdUser.uid;
+    } catch (error) {
+      const codeValue =
+        typeof error === 'object' && error !== null && 'code' in error
+          ? String(error.code)
+          : '';
+      try {
+        await this.firebaseAdmin.db().runTransaction(async transaction => {
+          const current = await transaction.get(ref);
+          if (current.get('creationClaimHash') !== claimHash) return;
+          if (codeValue === 'auth/email-already-exists') {
+            transaction.delete(ref);
+            return;
+          }
+          transaction.update(ref, {
+            status: 'pending',
+            creationClaimHash: FieldValue.delete(),
+            creationClaimExpiresAt: FieldValue.delete(),
+          });
+        });
+      } catch (releaseError) {
+        this.logger.error(
+          JSON.stringify({
+            event: 'registration_challenge_release_failed',
+            emailHash: hashForAudit(email),
+            reason: releaseError instanceof Error ? releaseError.message : 'unknown',
+          }),
+        );
+      }
+      if (codeValue === 'auth/email-already-exists') {
+        throw new ConflictException('This email is already registered. Try logging in.');
+      }
+      throw error;
+    }
+
+    try {
+      await this.firebaseAdmin.db().runTransaction(async transaction => {
+        const current = await transaction.get(ref);
+        if (current.get('creationClaimHash') === claimHash) {
+          transaction.delete(ref);
+        }
+      });
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'registration_challenge_cleanup_failed',
+          emailHash: hashForAudit(email),
+          reason: error instanceof Error ? error.message : 'unknown',
+        }),
       );
     }
-    return { success: true, verified: true, message: 'Email verified successfully.' };
+    await this.recordAccountSecurityActivity(
+      createdUid,
+      email,
+      'email_verified',
+    );
+    return { success: true, verified: true, message: 'Email verified and account created.' };
   }
 
   private async recordAccountSecurityActivity(
