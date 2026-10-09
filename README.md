@@ -57,6 +57,7 @@ adding a new CHEFU app.
 Set these on the backend host:
 
 - `FRONTEND_ORIGIN=https://chefu.co.za`
+- `TRUSTED_PROXY_IPS=<comma-separated IPs/CIDRs of the immediate trusted reverse proxies>` only when the API is behind a proxy; omitted by default, so forwarded IP/protocol headers are not trusted
 - `AUTH_COOKIE_DOMAIN=.chefu.co.za`
 - `AUTH_SESSION_SECRET=<long random secret>`
 - `CHEFU_ACCOUNT_URL=https://chefu.co.za`
@@ -74,6 +75,13 @@ Set these on the backend host:
 - `SIGNIN_ALERT_TEMPLATE_ID` if using a saved Resend template for sign-in alerts
 - `PASSWORD_CHANGED_TEMPLATE_ID` for the saved Resend template used for password-change alerts (default: `password-reset-notification`)
 - `PASSKEY_ADDED_TEMPLATE_ID` if using a saved Resend template for passkey-added alerts (default: `new-passkey-added`)
+
+`TRUSTED_PROXY_IPS` accepts explicit IP addresses or CIDR ranges only; do not
+set it to `*`, a hop count, or an address range that includes untrusted clients.
+Client IP and forwarded HTTPS detection use Express's proxy-aware request
+properties, so forwarded headers are ignored unless their sending proxy is
+listed. The API retains raw request bytes only for `POST /flow/inbound`, where
+they are needed to verify Resend webhook signatures.
 
 On the frontend host, set:
 

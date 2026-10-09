@@ -12,6 +12,7 @@ import {
     UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
+import { getClientIp } from '../../common/security-audit';
 import {
     type AuthenticationResponseJSON,
     type RegistrationResponseJSON,
@@ -150,11 +151,6 @@ export class PasskeyController {
     }
 
     private getClientIp(request: Request) {
-        const forwardedFor = request.headers['x-forwarded-for'];
-        const firstForwardedIp = Array.isArray(forwardedFor)
-            ? forwardedFor[0]
-            : forwardedFor?.split(',')[0];
-
-        return firstForwardedIp?.trim() || request.ip || undefined;
+        return getClientIp(request);
     }
 }

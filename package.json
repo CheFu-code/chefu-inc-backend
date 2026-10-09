@@ -16,6 +16,7 @@
     "migrate:flow-html": "tsx --env-file=.env scripts/migrate-flow-html.ts",
     "backfill:nook-post-search": "tsx --env-file-if-exists=.env scripts/backfill-nook-post-search.ts",
     "test:flow": "node --import tsx --test src/modules/flow/flow-email-template.test.ts",
+    "test:security": "node --import tsx --test src/common/csrf-protection.spec.ts src/common/http-security.spec.ts src/common/proxy-trust.spec.ts src/modules/auth/device-auth.spec.ts",
     "verify:flow-security": "node scripts/verify-flow-security.mjs",
     "lint": "eslint \"src/**/*.ts\"",
     "smoke": "node scripts/smoke-routes.mjs",

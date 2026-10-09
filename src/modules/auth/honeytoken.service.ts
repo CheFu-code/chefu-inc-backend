@@ -1,6 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { Request } from 'express';
 
+import { getClientIp } from '../../common/security-audit';
 import { SecurityEventsService } from './security-events.service';
 
 @Injectable()
@@ -65,8 +66,7 @@ export class HoneytokenService {
     }
 
     private getIp(request: Request) {
-        const forwardedFor = this.headerValue(request.headers['x-forwarded-for']);
-        return forwardedFor.split(',')[0]?.trim() || request.ip || request.socket.remoteAddress || 'unknown';
+        return getClientIp(request) || 'unknown';
     }
 
     private headerValue(value: string | string[] | undefined) {

@@ -144,9 +144,16 @@ async function cmdLogin(args, jsonOutput) {
   const poll = async () => {
     const status = await client.request('/auth/device/status', {
       method: 'POST',
-      body: JSON.stringify({ deviceCode: challenge.deviceCode }),
+      body: JSON.stringify({
+        deviceCode: challenge.deviceCode,
+        pollSecret: challenge.pollSecret,
+      }),
       headers: { 'Content-Type': 'application/json' },
     });
+
+    if (status.status === 'claimed') {
+      throw new Error('The device login credential was already claimed. Please run chefu login again.');
+    }
 
     if (status.status === 'approved' && status.token) {
       const session = {

@@ -12,6 +12,7 @@ import {
 import { Request } from 'express';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { AuthGuard } from '../auth/auth.guard';
+import { getClientIp } from '../../common/security-audit';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
   MfaSecurityEmailAction,
@@ -252,10 +253,7 @@ export class EmailController {
   }
 
   private getClientIp(request: Request) {
-    const forwardedFor = request.headers['x-forwarded-for'];
-    if (Array.isArray(forwardedFor)) return forwardedFor[0];
-    if (forwardedFor) return forwardedFor.split(',')[0]?.trim();
-    return request.ip;
+    return getClientIp(request);
   }
 
   private normalizeMfaAction(action?: string): MfaSecurityEmailAction {

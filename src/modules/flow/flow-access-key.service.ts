@@ -13,6 +13,7 @@ import {
   randomBytes,
   timingSafeEqual,
 } from 'node:crypto';
+import { getClientIp } from '../../common/security-audit';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 
@@ -400,17 +401,7 @@ export class FlowAccessKeyService {
   }
 
   private requestIp(request: Request) {
-    const forwardedFor = request.headers['x-forwarded-for'];
-
-    if (Array.isArray(forwardedFor)) {
-      return forwardedFor[0] || request.ip || null;
-    }
-
-    if (forwardedFor) {
-      return forwardedFor.split(',')[0]?.trim() || request.ip || null;
-    }
-
-    return request.ip || null;
+    return getClientIp(request) || null;
   }
 
   private parseOptionalFutureDate(value?: string) {
@@ -513,8 +504,7 @@ export class FlowAccessKeyService {
   private isSecureCookie(request: Request) {
     return (
       process.env.NODE_ENV === 'production' ||
-      request.protocol === 'https' ||
-      request.headers['x-forwarded-proto'] === 'https'
+      request.secure
     );
   }
 
