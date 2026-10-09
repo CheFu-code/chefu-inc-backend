@@ -129,6 +129,7 @@ export class QuantumService {
     const normalized = this.normalizeConversation({
       ...conversation,
       id: conversationId || conversation.id,
+      timestamp: new Date().toISOString(),
     });
 
     const db = this.firebaseAdmin.db();

@@ -309,10 +309,11 @@ export class NookSocialService {
       if (allowed) return allowed.has(data.uid);
       return true;
     });
-    const postRows = await Promise.all(filtered.map(doc =>
+    const paged = this.page(filtered, page, pageSize);
+    const postRows = await Promise.all(paged.items.map(doc =>
       this.presentPost(doc.id, doc.data() as PostDocument, user.uid),
     ));
-    return this.page(postRows, page, pageSize);
+    return { ...paged, items: postRows };
   }
 
   async searchExplorePosts(user: AuthenticatedUser, query: string, cursor: string | undefined, pageSize: number) {
