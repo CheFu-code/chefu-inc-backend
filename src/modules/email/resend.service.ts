@@ -1,4 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { createHash } from "node:crypto";
 import { assertResendConfigured } from "../../common/env";
 
 export interface SignInNotificationData {
@@ -140,6 +141,7 @@ export class ResendService {
             JSON.stringify({
                 event: "sign_in_notification_sent",
                 email: data.email,
+                ...this.getDeliveryDiagnostics(apiKey),
             }),
         );
     }
@@ -257,23 +259,47 @@ export class ResendService {
                 templateId: this.emailVerificationTemplateId,
                 senderDomain: this.getEmailDomain(this.notificationFromAddress),
                 apiKeyConfigured: Boolean(apiKey),
-                apiKeyLength: apiKey.length,
-                apiKeyHasResendPrefix: apiKey.startsWith("re_"),
                 apiKeyHasBearerPrefix: /^Bearer\s/i.test(apiKey),
                 apiKeyHasWrappingQuotes:
                     (apiKey.startsWith('"') && apiKey.endsWith('"')) ||
                     (apiKey.startsWith("'") && apiKey.endsWith("'")),
                 apiKeyHasControlCharacters: /[\r\n\t]/.test(rawApiKey),
                 apiKeyWasTrimmed: rawApiKey !== rawApiKey.trim(),
-                flyApp: process.env.FLY_APP_NAME || null,
-                flyMachine: process.env.FLY_MACHINE_ID || null,
-                flyRegion: process.env.FLY_REGION || null,
+                ...this.getDeliveryDiagnostics(apiKey),
             };
             this.logger.error(JSON.stringify(diagnostic));
             throw new Error(
                 `Resend request failed: ${response.status} ${JSON.stringify(providerError)}`,
             );
         }
+
+        this.logger.log(
+            JSON.stringify({
+                event: "email_verification_resend_sent",
+                statusCode: response.status,
+                resendRequestId:
+                    response.headers.get("x-resend-id") ||
+                    response.headers.get("x-request-id") ||
+                    null,
+                templateId: this.emailVerificationTemplateId,
+                senderDomain: this.getEmailDomain(this.notificationFromAddress),
+                ...this.getDeliveryDiagnostics(apiKey),
+            }),
+        );
+    }
+
+    private getDeliveryDiagnostics(apiKey: string) {
+        return {
+            apiKeyFingerprint: createHash("sha256")
+                .update(apiKey)
+                .digest("hex")
+                .slice(0, 16),
+            apiKeyLength: apiKey.length,
+            apiKeyHasResendPrefix: apiKey.startsWith("re_"),
+            flyApp: process.env.FLY_APP_NAME || null,
+            flyMachine: process.env.FLY_MACHINE_ID || null,
+            flyRegion: process.env.FLY_REGION || null,
+        };
     }
 
     private getEmailDomain(address: string): string | null {
