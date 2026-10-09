@@ -1005,6 +1005,8 @@ export class AuthController {
         attempts?: number;
         status?: string;
         creationClaimExpiresAt?: Timestamp | Date;
+        appName?: string;
+        userName?: string;
       };
       const expiresAt = data.expiresAt instanceof Date
         ? data.expiresAt.getTime()
@@ -1040,7 +1042,12 @@ export class AuthController {
         creationClaimHash: claimHash,
         creationClaimExpiresAt: Timestamp.fromMillis(now + 2 * 60_000),
       });
-      return { result: 'claimed' as const, attemptsRemaining: 3 };
+      return {
+        result: 'claimed' as const,
+        attemptsRemaining: 3,
+        appName: data.appName || 'Chefu Technologies',
+        userName: data.userName || displayName,
+      };
     });
 
     if (claimResult === 'missing') {
@@ -1134,6 +1141,43 @@ export class AuthController {
         throw new ConflictException('This email is already registered. Try logging in.');
       }
       throw error;
+    }
+
+    const signupAlertSuppressionExpiresAt = Timestamp.fromMillis(
+      Date.now() + 5 * 60_000,
+    );
+    try {
+      await this.firebaseAdmin.db()
+        .collection('users')
+        .doc(email)
+        .set(
+          { signupSignInAlertSuppressionExpiresAt: signupAlertSuppressionExpiresAt },
+          { merge: true },
+        );
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'signup_sign_in_alert_suppression_write_failed',
+          emailHash: hashForAudit(email),
+          reason: error instanceof Error ? error.message : 'unknown',
+        }),
+      );
+    }
+
+    try {
+      await this.resendService.sendSignupWelcomeEmail({
+        email,
+        userName: claimResult.userName,
+        appName: claimResult.appName,
+      });
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'signup_welcome_email_failed',
+          emailHash: hashForAudit(email),
+          reason: error instanceof Error ? error.message : 'unknown',
+        }),
+      );
     }
 
     try {
@@ -1303,6 +1347,9 @@ export class AuthController {
     }
 
     await this.ensureUserProfile(decodedToken, sessionAppId, request);
+    const isSignupSession = decodedToken.email
+      ? await this.consumeSignupSignInAlertSuppression(decodedToken.email)
+      : false;
     const userProfile = await this.getUserProfile(decodedToken.email);
     const meta = this.buildSessionMeta({
       email: decodedToken.email || '',
@@ -1336,6 +1383,7 @@ export class AuthController {
 
     if (
       decodedToken.email &&
+      !isSignupSession &&
       tokenPayload?.firebase?.sign_in_provider &&
       userProfile.securityEmailsEnabled
     ) {
@@ -2077,6 +2125,28 @@ export class AuthController {
     if (!/^[A-Z]{2}$/.test(code)) return null;
 
     return code;
+  }
+
+  private async consumeSignupSignInAlertSuppression(email: string) {
+    const userRef = this.firebaseAdmin.db()
+      .collection('users')
+      .doc(email.trim().toLowerCase());
+
+    return this.firebaseAdmin.db().runTransaction(async transaction => {
+      const snapshot = await transaction.get(userRef);
+      const expiresAt = snapshot.get('signupSignInAlertSuppressionExpiresAt');
+      if (!expiresAt) return false;
+
+      const expiresAtMs = expiresAt instanceof Date
+        ? expiresAt.getTime()
+        : expiresAt instanceof Timestamp
+          ? expiresAt.toMillis()
+          : 0;
+      transaction.update(userRef, {
+        signupSignInAlertSuppressionExpiresAt: FieldValue.delete(),
+      });
+      return expiresAtMs > Date.now();
+    });
   }
 
   private async ensureUserProfile(

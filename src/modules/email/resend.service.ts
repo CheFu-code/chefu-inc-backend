@@ -52,29 +52,27 @@ export interface EmailVerificationData {
     appName?: string;
 }
 
+export interface SignupWelcomeData {
+    email: string;
+    userName?: string;
+    appName?: string;
+}
+
 @Injectable()
 export class ResendService {
     private readonly logger = new Logger(ResendService.name);
     private readonly RESEND_API_URL = "https://api.resend.com/emails";
-
-    private readonly passkeyAddedTemplateId =
-        process.env.PASSKEY_ADDED_TEMPLATE_ID ||
-        process.env.NEW_PASSKEY_ADDED_TEMPLATE_ID ||
-        "new-passkey-added";
-    private readonly signInTemplateId =
-        process.env.SIGNIN_ALERT_TEMPLATE_ID || "signin-alert";
-    private readonly passwordChangedTemplateId =
-        process.env.PASSWORD_CHANGED_TEMPLATE_ID || "password-reset-notification";
+    private readonly passkeyAddedTemplateId = "new-passkey-added"
+    private readonly signInTemplateId = "sign-in-alert"
+    private readonly passwordChangedTemplateId = "password-reset-notification"
     private readonly apiKeyCompromisedTemplateId =
         process.env.API_KEY_COMPROMISED_TEMPLATE_ID || "api-key-compromised";
-    private readonly emailVerificationTemplateId =
-        process.env.EMAIL_VERIFICATION_TEMPLATE_ID || "email-verification";
+    private readonly emailVerificationTemplateId = "email-verification"
+    private readonly signupEmailTemplateId = "welcome-email-1"
 
     private readonly fromAddress =
         this.normalizeFromAddress(
-            process.env.SIGNIN_ALERT_FROM ||
-                process.env.SECURITY_EMAIL_FROM ||
-                "Security <security@chefu.co.za>",
+            "Security <security@chefu.co.za>",
         );
     private readonly supportUrl = "https://chefu.co.za/support";
     private readonly securityUrl =
@@ -82,8 +80,8 @@ export class ResendService {
     private readonly notificationFromAddress =
         this.normalizeFromAddress(
             process.env.NOTIFICATION_EMAIL_FROM ||
-                process.env.SECURITY_EMAIL_FROM ||
-                this.fromAddress,
+            process.env.SECURITY_EMAIL_FROM ||
+            this.fromAddress,
         );
     private readonly securityFromByApp = this.parseSenderMap(
         process.env.SECURITY_EMAIL_FROM_BY_APP,
@@ -292,6 +290,55 @@ export class ResendService {
                     this.formatVerificationSender(appName),
                 ),
                 ...this.getDeliveryDiagnostics(apiKey),
+            }),
+        );
+    }
+
+    async sendSignupWelcomeEmail(data: SignupWelcomeData): Promise<void> {
+        const apiKey = this.getApiKey();
+        const appName = data.appName || "Chefu Technologies";
+        const userName = data.userName || data.email.split("@")[0] || "there";
+        const loginUrl = "https://myaccount.chefu.co.za/login";
+        const supportEmail = process.env.SUPPORT_EMAIL || "support@chefu.co.za";
+        const year = new Date().getUTCFullYear().toString();
+        const response = await fetch(this.RESEND_API_URL, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                from: this.formatVerificationSender(appName),
+                to: [data.email],
+                subject: `Welcome to ${appName}`,
+                template: {
+                    id: this.signupEmailTemplateId,
+                    variables: {
+                        USER_NAME: userName,
+                        APP_NAME: appName,
+                        LOGIN_URL: loginUrl,
+                        SUPPORT_EMAIL: supportEmail,
+                        YEAR: year,
+                        userName,
+                        appName,
+                        loginUrl,
+                        supportEmail,
+                        year,
+                    },
+                },
+            }),
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`Resend request failed: ${response.status} ${error}`);
+        }
+
+        this.logger.log(
+            JSON.stringify({
+                event: "signup_welcome_email_sent",
+                email: data.email,
+                templateId: this.signupEmailTemplateId,
             }),
         );
     }
