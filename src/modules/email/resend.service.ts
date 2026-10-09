@@ -71,16 +71,20 @@ export class ResendService {
         process.env.EMAIL_VERIFICATION_TEMPLATE_ID || "email-verification";
 
     private readonly fromAddress =
-        process.env.SIGNIN_ALERT_FROM ||
-        process.env.SECURITY_EMAIL_FROM ||
-        "Security <security@chefu.co.za>";
+        this.normalizeFromAddress(
+            process.env.SIGNIN_ALERT_FROM ||
+                process.env.SECURITY_EMAIL_FROM ||
+                "Security <security@chefu.co.za>",
+        );
     private readonly supportUrl = "https://chefu.co.za/support";
     private readonly securityUrl =
         "https://myaccount.chefu.co.za/account?section=security";
     private readonly notificationFromAddress =
-        process.env.NOTIFICATION_EMAIL_FROM ||
-        process.env.SECURITY_EMAIL_FROM ||
-        this.fromAddress;
+        this.normalizeFromAddress(
+            process.env.NOTIFICATION_EMAIL_FROM ||
+                process.env.SECURITY_EMAIL_FROM ||
+                this.fromAddress,
+        );
     private readonly securityFromByApp = this.parseSenderMap(
         process.env.SECURITY_EMAIL_FROM_BY_APP,
     );
@@ -498,7 +502,8 @@ export class ResendService {
             return Object.entries(parsed).reduce<Record<string, string>>(
                 (acc, [key, value]) => {
                     if (typeof value === "string" && value.trim()) {
-                        acc[key.trim().toLowerCase()] = value.trim();
+                        acc[key.trim().toLowerCase()] =
+                            this.normalizeFromAddress(value);
                     }
                     return acc;
                 },
@@ -510,6 +515,16 @@ export class ResendService {
             );
             return {};
         }
+    }
+
+    private normalizeFromAddress(value: string) {
+        const trimmed = value.trim().replace(/\\"/g, '"');
+        const isDoubleQuoted = trimmed.startsWith('"') && trimmed.endsWith('"');
+        const isSingleQuoted = trimmed.startsWith("'") && trimmed.endsWith("'");
+
+        return isDoubleQuoted || isSingleQuoted
+            ? trimmed.slice(1, -1).trim()
+            : trimmed;
     }
 
     private normalizeAppId(appId?: string) {
