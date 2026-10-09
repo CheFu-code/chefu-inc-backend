@@ -54,7 +54,6 @@ export interface EmailVerificationData {
 @Injectable()
 export class ResendService {
     private readonly logger = new Logger(ResendService.name);
-    private readonly RESEND_API_KEY = process.env.RESEND_API_KEY;
     private readonly RESEND_API_URL = "https://api.resend.com/emails";
 
     private readonly passkeyAddedTemplateId =
@@ -201,6 +200,7 @@ export class ResendService {
     }
 
     async sendEmailVerification(data: EmailVerificationData): Promise<void> {
+        const rawApiKey = process.env.RESEND_API_KEY || "";
         const apiKey = this.getApiKey();
         const appName = data.appName || "Chefu Technologies";
         const userName = data.userName || data.email.split("@")[0] || "there";
@@ -231,9 +231,55 @@ export class ResendService {
         });
 
         if (!response.ok) {
-            const error = await response.text();
-            throw new Error(`Resend request failed: ${response.status} ${error}`);
+            const responseBody = await response.text();
+            let providerError: Record<string, unknown> = {};
+            try {
+                const parsed = JSON.parse(responseBody) as Record<string, unknown>;
+                providerError = {
+                    ...(typeof parsed.message === "string" ? { message: parsed.message } : {}),
+                    ...(typeof parsed.name === "string" ? { name: parsed.name } : {}),
+                    ...(typeof parsed.statusCode === "number"
+                        ? { statusCode: parsed.statusCode }
+                        : {}),
+                };
+            } catch {
+                providerError = { message: "Resend returned a non-JSON error response." };
+            }
+
+            const diagnostic = {
+                event: "email_verification_resend_failed",
+                statusCode: response.status,
+                providerError,
+                resendRequestId:
+                    response.headers.get("x-resend-id") ||
+                    response.headers.get("x-request-id") ||
+                    null,
+                templateId: this.emailVerificationTemplateId,
+                senderDomain: this.getEmailDomain(this.notificationFromAddress),
+                apiKeyConfigured: Boolean(apiKey),
+                apiKeyLength: apiKey.length,
+                apiKeyHasResendPrefix: apiKey.startsWith("re_"),
+                apiKeyHasBearerPrefix: /^Bearer\s/i.test(apiKey),
+                apiKeyHasWrappingQuotes:
+                    (apiKey.startsWith('"') && apiKey.endsWith('"')) ||
+                    (apiKey.startsWith("'") && apiKey.endsWith("'")),
+                apiKeyHasControlCharacters: /[\r\n\t]/.test(rawApiKey),
+                apiKeyWasTrimmed: rawApiKey !== rawApiKey.trim(),
+                flyApp: process.env.FLY_APP_NAME || null,
+                flyMachine: process.env.FLY_MACHINE_ID || null,
+                flyRegion: process.env.FLY_REGION || null,
+            };
+            this.logger.error(JSON.stringify(diagnostic));
+            throw new Error(
+                `Resend request failed: ${response.status} ${JSON.stringify(providerError)}`,
+            );
         }
+    }
+
+    private getEmailDomain(address: string): string | null {
+        const email = address.match(/<([^>]+)>/)?.[1] || address;
+        const atIndex = email.lastIndexOf("@");
+        return atIndex >= 0 ? email.slice(atIndex + 1).toLowerCase() : null;
     }
 
     private getPasskeyAddedPayload(data: PasskeyAddedNotificationData) {
