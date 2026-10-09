@@ -18,6 +18,7 @@ import {
   Query,
   Req,
   Res,
+  ServiceUnavailableException,
   UseGuards,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -29,6 +30,7 @@ import {
   randomInt,
   timingSafeEqual,
 } from 'node:crypto';
+import isEmail from 'validator/lib/isEmail';
 import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { AppsService } from '../apps/apps.service';
@@ -804,10 +806,7 @@ export class AuthController {
     @Req() request: Request,
   ) {
     const email = String(body.email || '').trim().toLowerCase();
-    if (
-      email.length > 254 ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-    ) {
+    if (email.length > 254 || !isEmail(email)) {
       throw new BadRequestException('Enter a valid email address.');
     }
     await this.enforceAuthRateLimit(email, request.ip || 'unknown');
@@ -902,7 +901,7 @@ export class AuthController {
     const code = body.code?.trim() || '';
     const password = typeof body.password === 'string' ? body.password : '';
     const displayName = String(body.displayName || '').trim();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+    if (email.length > 254 || !isEmail(email)) {
       throw new BadRequestException('Enter a valid email address.');
     }
     if (!/^\d{6}$/.test(code)) {
@@ -1307,25 +1306,45 @@ export class AuthController {
   ) {
     const revokeGlobally =
       globalLogout === 'true' || globalLogout === '1' || globalLogout === 'yes';
-    const revocation = revokeGlobally
-      ? await this.revokeCurrentSession(request)
-      : { revoked: false, uidHash: null, emailHash: null };
+    let revocation = { revoked: false, uidHash: null as string | null, emailHash: null as string | null };
+    let revocationError: unknown;
 
-    await this.recordSignedOutActivity(
-      request,
-      revokeGlobally ? 'sessions_revoked' : 'signed_out',
-    );
-    this.clearSessionCookies(response);
-    this.logger.log(
-      JSON.stringify({
-        event: 'auth_session_cleared',
-        global: revokeGlobally,
-        revoked: revocation.revoked,
-        uidHash: revocation.uidHash,
-        emailHash: revocation.emailHash,
-        ...auditRequestContext(request),
-      }),
-    );
+    try {
+      if (revokeGlobally) {
+        revocation = await this.revokeCurrentSession(request);
+      }
+    } catch (error) {
+      revocationError = error;
+      this.logger.error(
+        JSON.stringify({
+          event: 'auth_global_logout_failed',
+          reason: error instanceof Error ? error.message : 'unknown',
+          ...auditRequestContext(request),
+        }),
+      );
+    } finally {
+      await this.recordSignedOutActivity(
+        request,
+        revokeGlobally ? 'sessions_revoked' : 'signed_out',
+      );
+      this.clearSessionCookies(response);
+      this.logger.log(
+        JSON.stringify({
+          event: 'auth_session_cleared',
+          global: revokeGlobally,
+          revoked: revocation.revoked,
+          uidHash: revocation.uidHash,
+          emailHash: revocation.emailHash,
+          ...auditRequestContext(request),
+        }),
+      );
+    }
+
+    if (revokeGlobally && (revocationError || !revocation.revoked)) {
+      throw new ServiceUnavailableException(
+        'This browser session was cleared, but global sign-out could not be confirmed. Please try again.',
+      );
+    }
 
     return { ok: true, revoked: revocation.revoked };
   }
@@ -1402,39 +1421,32 @@ export class AuthController {
     const sessionCookie = request.cookies?.[SESSION_COOKIE_NAME];
 
     if (!sessionCookie) {
-      return { revoked: false, uidHash: null, emailHash: null };
-    }
-
-    try {
-      const decoded = await this.firebaseAdmin
-        .auth()
-        .verifySessionCookie(sessionCookie, false);
-
-      await this.firebaseAdmin.auth().revokeRefreshTokens(decoded.uid);
-      await this.recordSessionRevocation(decoded.email, decoded.uid);
-      await this.securityEvents.publishSubjectRevocation({
-        actor: decoded.uid,
-        email: decoded.email,
-        reason: 'global_logout',
-        uid: decoded.uid,
-      });
-
-      return {
-        revoked: true,
-        uidHash: hashForAudit(decoded.uid),
-        emailHash: hashForAudit(decoded.email),
-      };
-    } catch (error) {
-      this.logger.warn(
-        JSON.stringify({
-          event: 'auth_session_revoke_failed',
-          reason: error instanceof Error ? error.message : 'unknown',
-          ...auditRequestContext(request),
-        }),
+      throw new UnauthorizedException(
+        'No shared session was available to revoke. Sign in again and retry to sign-out.',
       );
-
-      return { revoked: false, uidHash: null, emailHash: null };
     }
+
+    const decoded = await this.firebaseAdmin
+      .auth()
+      .verifySessionCookie(sessionCookie, false);
+    if (!decoded.uid) {
+      throw new UnauthorizedException('The shared session could not be verified.');
+    }
+
+    await this.firebaseAdmin.auth().revokeRefreshTokens(decoded.uid);
+    await this.recordSessionRevocation(decoded.email, decoded.uid);
+    await this.securityEvents.publishSubjectRevocation({
+      actor: decoded.uid,
+      email: decoded.email,
+      reason: 'global_logout',
+      uid: decoded.uid,
+    });
+
+    return {
+      revoked: true,
+      uidHash: hashForAudit(decoded.uid),
+      emailHash: hashForAudit(decoded.email),
+    };
   }
 
   private async recordSessionRevocation(email: string | undefined, uid: string) {

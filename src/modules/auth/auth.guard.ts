@@ -105,7 +105,7 @@ export class AuthGuard implements CanActivate {
     request: RequestWithUser,
   ): Promise<AuthResolution> {
     try {
-      const decoded = await this.firebaseAdmin.auth().verifyIdToken(token);
+      const decoded = await this.firebaseAdmin.auth().verifyIdToken(token, true);
       const email = decoded.email || '';
 
       return {
