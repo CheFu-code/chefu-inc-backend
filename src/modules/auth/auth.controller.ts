@@ -31,6 +31,7 @@ import {
   timingSafeEqual,
 } from 'node:crypto';
 import isEmail from 'validator/lib/isEmail';
+import type { AuthenticationResponseJSON } from '@simplewebauthn/server';
 import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { AppsService } from '../apps/apps.service';
@@ -55,6 +56,7 @@ import {
 } from './security-events.service';
 import { SessionSignerService } from './session-signer.service';
 import { ProfilePictureService } from './profile-picture.service';
+import { PasskeyService } from './passkey.service';
 import { ResendService } from '../email/resend.service';
 import {
   FLOW_ACCESS_DENIED_MESSAGE,
@@ -82,6 +84,7 @@ function decodeJwtPayload(token: string) {
       iat?: number;
       exp?: number;
       picture?: string;
+      chefu_auth_provider?: string;
       firebase?: {
         sign_in_provider?: string;
       };
@@ -173,6 +176,8 @@ export class AuthController {
     private readonly runtimeLimits: RuntimeLimitService,
     @Inject(ProfilePictureService)
     private readonly profilePictureService: ProfilePictureService,
+    @Inject(PasskeyService)
+    private readonly passkeyService: PasskeyService,
   ) {}
 
   @Get('me')
@@ -220,7 +225,7 @@ export class AuthController {
       throw new BadRequestException('Email and password are required.');
     }
 
-    await this.enforceAuthRateLimit(email, request.ip || 'unknown');
+    await this.enforceAuthRateLimit(email, request.ip || 'unknown', 3);
 
     const apiKey = process.env.FIREBASE_WEB_API_KEY || process.env.FIREBASE_API_KEY;
     if (!apiKey) {
@@ -244,10 +249,39 @@ export class AuthController {
 
     if (!response.ok) {
       const errorBody = (await response.json().catch(() => ({}))) as {
-        error?: { message?: string };
+        error?: { message?: string; status?: string };
+        mfaPendingCredential?: string;
+        mfaInfo?: Array<{
+          mfaEnrollmentId?: string;
+          displayName?: string;
+          totpInfo?: Record<string, unknown>;
+        }>;
       };
+      const upstreamError =
+        errorBody.error?.message || errorBody.error?.status || '';
+      if (
+        errorBody.mfaPendingCredential ||
+        upstreamError === 'MFA_REQUIRED'
+      ) {
+        throw new HttpException(
+          {
+            statusCode: 409,
+            message: 'Multi-factor authentication is required.',
+            mfaRequired: true,
+            mfaPendingCredential: errorBody.mfaPendingCredential || null,
+            mfaInfo: (errorBody.mfaInfo || [])
+              .filter(factor => Boolean(factor.totpInfo))
+              .map(factor => ({
+                mfaEnrollmentId: factor.mfaEnrollmentId || '',
+                displayName: factor.displayName || '',
+                factorId: 'totp',
+              })),
+          },
+          409,
+        );
+      }
       throw new UnauthorizedException(
-        errorBody.error?.message || 'Invalid email or password.',
+        upstreamError || 'Invalid email or password.',
       );
     }
 
@@ -299,16 +333,142 @@ export class AuthController {
       );
     }
 
+    const uid = payload.localId || payload.local_id;
+    if (!uid) {
+      throw new BadGatewayException(
+        'The authentication service returned an unexpected response. Please try again later.',
+      );
+    }
+    const customToken = await this.firebaseAdmin.auth().createCustomToken(uid, {
+      chefu_auth_provider: 'password',
+    });
+
     return {
       token: idToken,
       idToken,
+      customToken,
       refreshToken: payload.refreshToken || payload.refresh_token || '',
       expiresIn: payload.expiresIn || payload.expires_in || '',
       user: {
-        uid: payload.localId || payload.local_id || '',
+        uid,
         email: payload.email || email,
       },
     };
+  }
+
+  @Post('session/password')
+  @HttpCode(200)
+  async createPasswordSession(
+    @Body() body: { email?: string; password?: string },
+    @Headers(CHEFU_APP_HEADER) chefuApp: string | undefined,
+    @Headers(FLOW_SESSION_HEADER) flowSession: string | undefined,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const authResult = await this.login(body, request);
+    return this.createSession(
+      `Bearer ${authResult.idToken}`,
+      chefuApp,
+      flowSession,
+      request,
+      response,
+    );
+  }
+
+  @Post('session/mfa')
+  @HttpCode(200)
+  async completePasswordMfaSession(
+    @Body()
+    body: {
+      email?: string;
+      mfaPendingCredential?: string;
+      mfaEnrollmentId?: string;
+      verificationCode?: string;
+    },
+    @Headers(CHEFU_APP_HEADER) chefuApp: string | undefined,
+    @Headers(FLOW_SESSION_HEADER) flowSession: string | undefined,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const email = String(body.email || '').trim().toLowerCase();
+    const pendingCredential = String(body.mfaPendingCredential || '');
+    const enrollmentId = String(body.mfaEnrollmentId || '');
+    const verificationCode = String(body.verificationCode || '').trim();
+    if (!isEmail(email) || !pendingCredential || !enrollmentId) {
+      throw new BadRequestException('Complete the active MFA sign-in challenge.');
+    }
+    if (!/^\d{6}$/.test(verificationCode)) {
+      throw new BadRequestException('Enter the 6-digit authenticator code.');
+    }
+
+    await this.enforceAuthRateLimit(email, request.ip || 'unknown', 3);
+    const apiKey = process.env.FIREBASE_WEB_API_KEY || process.env.FIREBASE_API_KEY;
+    if (!apiKey) {
+      throw new InternalServerErrorException(
+        'Firebase web API key is not configured.',
+      );
+    }
+    const mfaResponse = await fetch(
+      `https://identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:finalize?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mfaPendingCredential: pendingCredential,
+          mfaEnrollmentId: enrollmentId,
+          totpVerificationInfo: { verificationCode },
+        }),
+      },
+    );
+    const mfaResult = (await mfaResponse.json().catch(() => ({}))) as {
+      idToken?: string;
+      error?: { message?: string };
+    };
+    if (!mfaResponse.ok || !mfaResult.idToken) {
+      throw new UnauthorizedException('The authenticator code is incorrect or expired.');
+    }
+
+    return this.createSession(
+      `Bearer ${mfaResult.idToken}`,
+      chefuApp,
+      flowSession,
+      request,
+      response,
+    );
+  }
+
+  @Post('passkey/session/options')
+  @HttpCode(200)
+  async createPasskeySessionOptions(@Req() request: Request) {
+    return this.passkeyService.createAuthenticationOptions(
+      this.getClientIp(request) || 'unknown',
+    );
+  }
+
+  @Post('passkey/session/verify')
+  @HttpCode(200)
+  async verifyPasskeySession(
+    @Body()
+    body: {
+      challengeId?: string;
+      response?: AuthenticationResponseJSON;
+    },
+    @Headers(CHEFU_APP_HEADER) chefuApp: string | undefined,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.passkeyService.verifyAuthentication(
+      this.getClientIp(request) || 'unknown',
+      body,
+    );
+    const idToken = await this.exchangeCustomTokenForIdToken(result.customToken);
+    return this.createSession(
+      `Bearer ${idToken}`,
+      chefuApp,
+      undefined,
+      request,
+      response,
+    );
   }
 
   @Post('logout')
@@ -338,6 +498,297 @@ export class AuthController {
       email: request.user?.email,
       uid: request.user?.uid,
     });
+  }
+
+  @Post('security/reauthenticate')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async reauthenticateAccount(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Body()
+    body: {
+      password?: string;
+      mfaPendingCredential?: string;
+      mfaEnrollmentId?: string;
+      verificationCode?: string;
+    },
+  ) {
+    const user = request.user;
+    if (!user?.uid || !user.email) {
+      throw new UnauthorizedException('Authentication required.');
+    }
+
+    await this.enforceAuthRateLimit(user.email, this.getClientIp(request) || 'unknown', 3);
+    let idToken = '';
+    if (body.mfaPendingCredential) {
+      const enrollmentId = String(body.mfaEnrollmentId || '');
+      const verificationCode = String(body.verificationCode || '').trim();
+      if (!enrollmentId || !/^\d{6}$/.test(verificationCode)) {
+        throw new BadRequestException('Enter the 6-digit authenticator code.');
+      }
+      const response = await fetch(
+        `https://identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:finalize?key=${encodeURIComponent(this.getFirebaseWebApiKey())}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mfaPendingCredential: body.mfaPendingCredential,
+            mfaEnrollmentId: enrollmentId,
+            totpVerificationInfo: { verificationCode },
+          }),
+        },
+      );
+      const result = (await response.json().catch(() => ({}))) as {
+        idToken?: string;
+      };
+      idToken = result.idToken || '';
+      if (!response.ok || !idToken) {
+        throw new UnauthorizedException('The authenticator code is incorrect or expired.');
+      }
+    } else {
+      const password = String(body.password || '');
+      if (!password) throw new BadRequestException('Password is required.');
+      const response = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(this.getFirebaseWebApiKey())}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: user.email,
+            password,
+            returnSecureToken: true,
+          }),
+        },
+      );
+      const result = (await response.json().catch(() => ({}))) as {
+        idToken?: string;
+        mfaPendingCredential?: string;
+        mfaInfo?: Array<{
+          mfaEnrollmentId?: string;
+          displayName?: string;
+          totpInfo?: Record<string, unknown>;
+        }>;
+      };
+      if (!response.ok) {
+        if (result.mfaPendingCredential) {
+          return {
+            mfaRequired: true,
+            mfaPendingCredential: result.mfaPendingCredential,
+            mfaInfo: (result.mfaInfo || [])
+              .filter(factor => Boolean(factor.totpInfo))
+              .map(factor => ({
+                mfaEnrollmentId: factor.mfaEnrollmentId || '',
+                displayName: factor.displayName || '',
+              })),
+          };
+        }
+        throw new UnauthorizedException('The password is incorrect.');
+      }
+      idToken = result.idToken || '';
+      if (!idToken) {
+        throw new BadGatewayException('Authentication service returned an invalid response.');
+      }
+    }
+
+    const decoded = await this.firebaseAdmin.auth().verifyIdToken(idToken, true);
+    if (decoded.uid !== user.uid || decoded.email?.toLowerCase() !== user.email.toLowerCase()) {
+      throw new UnauthorizedException('Reauthentication did not match the active account.');
+    }
+
+    const reauthToken = randomBytes(32).toString('base64url');
+    const expiresAtMs = Date.now() + 5 * 60_000;
+    await this.firebaseAdmin.db()
+      .collection('auth_reauthentication_sessions')
+      .doc(createHash('sha256').update(reauthToken).digest('hex'))
+      .create({
+        uid: user.uid,
+        idToken,
+        createdAt: Timestamp.now(),
+        expiresAt: Timestamp.fromMillis(expiresAtMs),
+      });
+    return { mfaRequired: false, reauthToken, expiresInSeconds: 300 };
+  }
+
+  @Post('security/totp/setup')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async startTotpEnrollment(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Body() body: { reauthToken?: string },
+  ) {
+    const user = request.user;
+    if (!user?.uid || !user.email) throw new UnauthorizedException('Authentication required.');
+    const reauth = await this.getReauthenticationSession(body.reauthToken, user.uid);
+    const response = await fetch(
+      `https://identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:start?key=${encodeURIComponent(this.getFirebaseWebApiKey())}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken: reauth.idToken }),
+      },
+    );
+    const result = (await response.json().catch(() => ({}))) as {
+      totpSessionInfo?: {
+        sharedSecretKey?: string;
+        sessionInfo?: string;
+      };
+      error?: { message?: string };
+    };
+    const secret = result.totpSessionInfo?.sharedSecretKey;
+    const sessionInfo = result.totpSessionInfo?.sessionInfo;
+    if (!response.ok || !secret || !sessionInfo) {
+      throw new BadGatewayException(
+        result.error?.message || 'Unable to start authenticator setup.',
+      );
+    }
+
+    const setupId = randomBytes(24).toString('base64url');
+    await this.firebaseAdmin.db()
+      .collection('auth_totp_setups')
+      .doc(createHash('sha256').update(setupId).digest('hex'))
+      .create({
+        uid: user.uid,
+        sessionInfo,
+        reauthTokenHash: createHash('sha256').update(body.reauthToken || '').digest('hex'),
+        expiresAt: Timestamp.fromMillis(Date.now() + 5 * 60_000),
+      });
+    const issuer = 'Chefu Technologies';
+    const label = `${issuer}:${user.email}`;
+    const otpauthUrl =
+      `otpauth://totp/${encodeURIComponent(label)}?secret=${encodeURIComponent(secret)}` +
+      `&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
+    return { setupId, secret, otpauthUrl, expiresInSeconds: 300 };
+  }
+
+  @Post('security/totp/verify')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async verifyTotpEnrollment(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Body() body: { setupId?: string; reauthToken?: string; verificationCode?: string },
+  ) {
+    const user = request.user;
+    if (!user?.uid) throw new UnauthorizedException('Authentication required.');
+    const reauth = await this.getReauthenticationSession(body.reauthToken, user.uid);
+    const setupId = String(body.setupId || '');
+    const verificationCode = String(body.verificationCode || '').trim();
+    if (!setupId || !/^\d{6}$/.test(verificationCode)) {
+      throw new BadRequestException('Enter the 6-digit authenticator code.');
+    }
+    const setupRef = this.firebaseAdmin.db().collection('auth_totp_setups')
+      .doc(createHash('sha256').update(setupId).digest('hex'));
+    const setupSnapshot = await setupRef.get();
+    const setup = setupSnapshot.data() as {
+      uid?: string;
+      sessionInfo?: string;
+      reauthTokenHash?: string;
+      expiresAt?: Timestamp;
+    } | undefined;
+    if (
+      !setupSnapshot.exists ||
+      setup?.uid !== user.uid ||
+      (setup.expiresAt?.toMillis() || 0) <= Date.now() ||
+      setup.reauthTokenHash !== createHash('sha256').update(body.reauthToken || '').digest('hex')
+    ) {
+      throw new BadRequestException('Authenticator setup expired. Start again.');
+    }
+    const response = await fetch(
+      `https://identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:finalize?key=${encodeURIComponent(this.getFirebaseWebApiKey())}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          idToken: reauth.idToken,
+          displayName: 'My Account TOTP',
+          totpVerificationInfo: {
+            sessionInfo: setup.sessionInfo,
+            verificationCode,
+          },
+        }),
+      },
+    );
+    const result = (await response.json().catch(() => ({}))) as {
+      error?: { message?: string };
+    };
+    if (!response.ok) {
+      throw new BadRequestException(
+        result.error?.message || 'The authenticator code is incorrect or expired.',
+      );
+    }
+    await setupRef.delete();
+    await this.recordAccountSecurityActivity(user.uid, user.email || '', 'mfa_enabled');
+    return this.mfaBackupCodes.securitySummary({ email: user.email, uid: user.uid });
+  }
+
+  @Post('security/totp/disable')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async disableTotp(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Body() body: { reauthToken?: string; factorUid?: string },
+  ) {
+    const user = request.user;
+    if (!user?.uid || !body.factorUid) {
+      throw new BadRequestException('Authenticator factor is required.');
+    }
+    const reauth = await this.getReauthenticationSession(body.reauthToken, user.uid);
+    const response = await fetch(
+      `https://identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:withdraw?key=${encodeURIComponent(this.getFirebaseWebApiKey())}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          idToken: reauth.idToken,
+          mfaEnrollmentId: body.factorUid,
+        }),
+      },
+    );
+    const result = (await response.json().catch(() => ({}))) as {
+      error?: { message?: string };
+    };
+    if (!response.ok) {
+      throw new BadRequestException(result.error?.message || 'Unable to disable 2FA.');
+    }
+    await this.recordAccountSecurityActivity(user.uid, user.email || '', 'mfa_disabled');
+    return this.mfaBackupCodes.securitySummary({ email: user.email, uid: user.uid });
+  }
+
+  @Patch('security/password')
+  @UseGuards(AuthGuard)
+  async changePassword(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Body() body: { reauthToken?: string; newPassword?: string },
+  ) {
+    const user = request.user;
+    const newPassword = String(body.newPassword || '');
+    if (!user?.uid || newPassword.length < 8 || newPassword.length > 128) {
+      throw new BadRequestException('Password must be between 8 and 128 characters.');
+    }
+    await this.getReauthenticationSession(body.reauthToken, user.uid);
+    await this.firebaseAdmin.auth().updateUser(user.uid, { password: newPassword });
+    await this.recordAccountSecurityActivity(user.uid, user.email || '', 'password_changed');
+    return { ok: true };
+  }
+
+  @Post('security/email-verification')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async sendAccountEmailVerification(
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
+    const user = request.user;
+    if (!user?.uid || !user.email) throw new UnauthorizedException('Authentication required.');
+    const authUser = await this.firebaseAdmin.auth().getUser(user.uid);
+    if (authUser.emailVerified) return { sent: false, verified: true };
+    const verificationUrl = await this.firebaseAdmin.auth()
+      .generateEmailVerificationLink(user.email);
+    await this.resendService.sendAccountEmailVerification({
+      email: user.email,
+      userName: authUser.displayName || user.email.split('@')[0],
+      verificationUrl,
+    });
+    await this.recordAccountSecurityActivity(user.uid, user.email, 'verification_email_sent');
+    return { sent: true, verified: false };
   }
 
   @Get('activity')
@@ -721,7 +1172,7 @@ export class AuthController {
       throw new BadRequestException('Email and password are required to finish device sign-in.');
     }
 
-    await this.enforceAuthRateLimit(email, request.ip || 'unknown');
+    await this.enforceAuthRateLimit(email, request.ip || 'unknown', 3);
 
     const apiKey = process.env.FIREBASE_WEB_API_KEY || process.env.FIREBASE_API_KEY;
     if (!apiKey) {
@@ -738,7 +1189,32 @@ export class AuthController {
     );
 
     if (!signInRes.ok) {
-      const errorBody = (await signInRes.json().catch(() => ({}))) as { error?: { message?: string } };
+      const errorBody = (await signInRes.json().catch(() => ({}))) as {
+        error?: { message?: string };
+        mfaPendingCredential?: string;
+        mfaInfo?: Array<{
+          mfaEnrollmentId?: string;
+          displayName?: string;
+          totpInfo?: Record<string, unknown>;
+        }>;
+      };
+      if (errorBody.mfaPendingCredential) {
+        const mfaInfo = (errorBody.mfaInfo || [])
+          .filter(factor => Boolean(factor.totpInfo))
+          .map(factor => ({
+            mfaEnrollmentId: factor.mfaEnrollmentId || '',
+            displayName: factor.displayName || '',
+            factorId: 'totp',
+          }));
+        if (!mfaInfo.some(factor => factor.mfaEnrollmentId)) {
+          throw new UnauthorizedException('No supported second factor is enrolled for this account.');
+        }
+        return {
+          mfaRequired: true,
+          mfaPendingCredential: errorBody.mfaPendingCredential,
+          mfaInfo,
+        };
+      }
       throw new UnauthorizedException(errorBody.error?.message || 'Invalid email or password.');
     }
 
@@ -761,6 +1237,99 @@ export class AuthController {
       email: payload.email || email,
       token: payload.idToken,
     };
+  }
+
+  @Post('device/mfa-complete')
+  @HttpCode(200)
+  async completeDeviceMfaAuth(
+    @Body()
+    body: {
+      deviceCode?: string;
+      userCode?: string;
+      email?: string;
+      mfaPendingCredential?: string;
+      mfaEnrollmentId?: string;
+      verificationCode?: string;
+    },
+    @Req() request: Request,
+  ) {
+    const deviceCode = normalizeDeviceCode(body.deviceCode);
+    const userCode = normalizeDeviceCode(body.userCode);
+    const email = String(body.email || '').trim().toLowerCase();
+    const mfaPendingCredential = String(body.mfaPendingCredential || '');
+    const mfaEnrollmentId = String(body.mfaEnrollmentId || '');
+    const verificationCode = String(body.verificationCode || '').trim();
+    if (
+      !deviceCode ||
+      !userCode ||
+      !email ||
+      !mfaPendingCredential ||
+      !mfaEnrollmentId ||
+      !/^\d{6}$/.test(verificationCode)
+    ) {
+      throw new BadRequestException('Complete all required device and authenticator fields.');
+    }
+
+    await this.enforceAuthRateLimit(email, request.ip || 'unknown', 3);
+
+    const ref = this.firebaseAdmin.db().collection('device_auth_sessions').doc(`device_auth:${deviceCode}`);
+    const snapshot = await ref.get();
+    if (!snapshot.exists) throw new BadRequestException('Unknown or expired device code.');
+    const record = snapshot.data() as {
+      userCode?: string;
+      status?: string;
+      createdAt?: number;
+      expiresAt?: number;
+    };
+    if (record.status !== 'pending') {
+      throw new BadRequestException(`This device code is already ${record.status}.`);
+    }
+    if (isDeviceAuthExpired({ createdAt: Number(record.createdAt || Date.now()), expiresAt: Number(record.expiresAt || Date.now()) })) {
+      await ref.set({ status: 'expired' }, { merge: true });
+      throw new BadRequestException('This device code has expired. Please try again.');
+    }
+    if (record.userCode && normalizeDeviceCode(record.userCode) !== userCode) {
+      throw new BadRequestException('User code does not match this device code.');
+    }
+
+    const mfaResponse = await fetch(
+      `https://identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:finalize?key=${encodeURIComponent(this.getFirebaseWebApiKey())}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mfaPendingCredential,
+          mfaEnrollmentId,
+          totpVerificationInfo: { verificationCode },
+        }),
+      },
+    );
+    const result = (await mfaResponse.json().catch(() => ({}))) as {
+      idToken?: string;
+      localId?: string;
+      email?: string;
+      error?: { message?: string };
+    };
+    if (!mfaResponse.ok || !result.idToken) {
+      throw new UnauthorizedException(result.error?.message || 'The authenticator code is incorrect or expired.');
+    }
+    const decoded = await this.firebaseAdmin.auth().verifyIdToken(result.idToken, true);
+    if (
+      decoded.email?.toLowerCase() !== email ||
+      result.email?.toLowerCase() !== email ||
+      decoded.uid !== result.localId
+    ) {
+      throw new UnauthorizedException('The authenticator sign-in did not match the requested account.');
+    }
+
+    await ref.set({
+      status: 'approved',
+      uid: decoded.uid,
+      email,
+      idToken: result.idToken,
+      approvedAt: Date.now(),
+    }, { merge: true });
+    return { ok: true, status: 'approved', email };
   }
 
   @Post('device/status')
@@ -966,12 +1535,16 @@ export class AuthController {
       password?: string;
       displayName?: string;
     },
+    @Headers(CHEFU_APP_HEADER) chefuApp: string | undefined,
+    @Headers(FLOW_SESSION_HEADER) flowSession: string | undefined,
     @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
   ) {
     if (typeof body.email !== 'string' || !body.email.trim()) {
       throw new BadRequestException('Email address is required.');
     }
     const email = body.email.trim().toLowerCase();
+    const sessionAppId = this.resolveSessionAppId(chefuApp, flowSession);
     const code = body.code?.trim() || '';
     const password = typeof body.password === 'string' ? body.password : '';
     const displayName = String(body.displayName || '').trim();
@@ -1164,6 +1737,21 @@ export class AuthController {
       );
     }
 
+    const signupCustomToken = await this.firebaseAdmin.auth().createCustomToken(
+      createdUid,
+      { chefu_auth_provider: 'password' },
+    );
+    const signupIdToken = await this.exchangeCustomTokenForIdToken(
+      signupCustomToken,
+    );
+    await this.createSession(
+      `Bearer ${signupIdToken}`,
+      chefuApp,
+      flowSession,
+      request,
+      response,
+    );
+
     try {
       await this.resendService.sendSignupWelcomeEmail({
         email,
@@ -1201,7 +1789,12 @@ export class AuthController {
       email,
       'email_verified',
     );
-    return { success: true, verified: true, message: 'Email verified and account created.' };
+    return {
+      success: true,
+      verified: true,
+      message: 'Email verified and account created.',
+      app: sessionAppId,
+    };
   }
 
   private async recordAccountSecurityActivity(
@@ -1381,17 +1974,20 @@ export class AuthController {
       }),
     );
 
+    const signInProvider =
+      tokenPayload?.chefu_auth_provider ||
+      tokenPayload?.firebase?.sign_in_provider;
     if (
       decodedToken.email &&
       !isSignupSession &&
-      tokenPayload?.firebase?.sign_in_provider &&
+      signInProvider &&
       userProfile.securityEmailsEnabled
     ) {
       void this.sendThrottledSignInNotification({
         email: decodedToken.email,
         uid: decodedToken.uid,
         userName: meta.name,
-        provider: tokenPayload.firebase.sign_in_provider,
+        provider: signInProvider,
         request,
         appId: sessionAppId,
       });
@@ -1653,6 +2249,72 @@ export class AuthController {
     if (isFlowRequest) return 'flow';
 
     return resolvedAppId || 'root';
+  }
+
+  private async exchangeCustomTokenForIdToken(customToken: string) {
+    const apiKey = this.getFirebaseWebApiKey();
+
+    const response = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: customToken, returnSecureToken: true }),
+      },
+    );
+    const result = (await response.json().catch(() => ({}))) as {
+      idToken?: string;
+      error?: { message?: string };
+    };
+
+    if (!response.ok || !result.idToken) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'firebase_custom_token_exchange_failed',
+          statusCode: response.status,
+          reason: result.error?.message || 'invalid_response',
+        }),
+      );
+      throw new BadGatewayException(
+        'Unable to establish your account session. Please try signing in.',
+      );
+    }
+
+    return result.idToken;
+  }
+
+  private getFirebaseWebApiKey() {
+    const apiKey = process.env.FIREBASE_WEB_API_KEY || process.env.FIREBASE_API_KEY;
+    if (!apiKey) {
+      throw new InternalServerErrorException(
+        'Firebase web API key is not configured.',
+      );
+    }
+    return apiKey;
+  }
+
+  private async getReauthenticationSession(token: string | undefined, uid: string) {
+    if (!token || token.length < 32) {
+      throw new UnauthorizedException('Confirm your password before continuing.');
+    }
+    const ref = this.firebaseAdmin.db()
+      .collection('auth_reauthentication_sessions')
+      .doc(createHash('sha256').update(token).digest('hex'));
+    const snapshot = await ref.get();
+    const session = snapshot.data() as {
+      uid?: string;
+      idToken?: string;
+      expiresAt?: Timestamp;
+    } | undefined;
+    if (
+      !session ||
+      session.uid !== uid ||
+      !session.idToken ||
+      (session.expiresAt?.toMillis() || 0) <= Date.now()
+    ) {
+      throw new UnauthorizedException('Your sign-in confirmation expired. Please confirm again.');
+    }
+    return { idToken: session.idToken };
   }
 
   private getClearCookieOptionsList() {
@@ -2571,14 +3233,18 @@ export class AuthController {
     return { message: 'Profile picture deleted successfully.' };
   }
 
-  private async enforceAuthRateLimit(email: string, ip: string) {
+  private async enforceAuthRateLimit(
+    email: string,
+    ip: string,
+    emailLimit = 5,
+  ) {
     const windowMs = 15 * 60 * 1_000; // 15 minutes
 
     const [byEmail, byIp] = await Promise.all([
       this.runtimeLimits.reserve({
         collection: 'runtime_auth_rate_limits',
         key: `email:${email}`,
-        limit: 5,
+        limit: emailLimit,
         windowMs,
       }),
       this.runtimeLimits.reserve({

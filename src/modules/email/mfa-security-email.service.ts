@@ -16,22 +16,12 @@ export class MfaSecurityEmailService {
   private readonly logger = new Logger(MfaSecurityEmailService.name);
   private readonly resendApiKey = process.env.RESEND_API_KEY;
   private readonly resendApiUrl = 'https://api.resend.com/emails';
-  private readonly enabledTemplateId =
-    process.env.TWO_FACTOR_ENABLED_TEMPLATE_ID ||
-    process.env['2FA_ENABLED_TEMPLATE_ID'] ||
-    'two-factor-enabled';
-  private readonly disabledTemplateId =
-    process.env.TWO_FACTOR_DISABLED_TEMPLATE_ID ||
-    process.env['2FA_DISABLED_TEMPLATE_ID'] ||
-    '2fa-disabled';
+  private readonly enabledTemplateId = "two-factor-enabled"
+  private readonly disabledTemplateId = "2fa-disabled"
   private readonly fromAddress = this.normalizeFromAddress(
-    process.env.SECURITY_EMAIL_FROM ||
-    process.env.SIGNIN_ALERT_FROM ||
     'Security <security@chefu.co.za>',
   );
-  private readonly securityUrl =
-    process.env.SIGNIN_ALERT_SECURITY_URL ||
-    'https://myaccount.chefu.co.za/account?section=security';
+  private readonly securityUrl = 'https://myaccount.chefu.co.za/account?section=security';
   private readonly supportUrl =
     process.env.SIGNIN_ALERT_SUPPORT_URL ||
     'https://www.chefu.co.za/security';

@@ -1,62 +1,9 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { assertResendConfigured } from "../../common/env";
+import { AccountEmailVerificationData, ApiKeyCompromisedNotificationData, EmailVerificationData, PasskeyAddedNotificationData, PasswordChangedNotificationData, SignInNotificationData, SignupWelcomeData } from "./resend.types";
 
-export interface SignInNotificationData {
-    email: string;
-    userName?: string;
-    provider: string;
-    deviceInfo?: string;
-    ipAddress?: string;
-    timestamp: Date;
-    appId?: string;
-}
 
-export interface PasswordChangedNotificationData {
-    email: string;
-    userName?: string;
-    deviceInfo?: string;
-    location?: string;
-    ipAddress?: string;
-    timestamp: Date;
-}
-
-export interface ApiKeyCompromisedNotificationData {
-    email: string;
-    userName?: string;
-    keyName?: string;
-    publicId: string;
-    source?: string;
-    url?: string;
-    timestamp: Date;
-}
-
-export interface PasskeyAddedNotificationData {
-    email: string;
-    userName?: string;
-    device?: string;
-    addedAt?: Date;
-    origin?: string;
-    ipAddress?: string;
-    securityUrl?: string;
-    supportEmail?: string;
-    year?: string;
-    appId?: string;
-}
-
-export interface EmailVerificationData {
-    email: string;
-    userName?: string;
-    code: string;
-    expiresIn?: string;
-    appName?: string;
-}
-
-export interface SignupWelcomeData {
-    email: string;
-    userName?: string;
-    appName?: string;
-}
 
 @Injectable()
 export class ResendService {
@@ -65,11 +12,10 @@ export class ResendService {
     private readonly passkeyAddedTemplateId = "new-passkey-added"
     private readonly signInTemplateId = "sign-in-alert"
     private readonly passwordChangedTemplateId = "password-reset-notification"
-    private readonly apiKeyCompromisedTemplateId =
-        process.env.API_KEY_COMPROMISED_TEMPLATE_ID || "api-key-compromised";
+    private readonly apiKeyCompromisedTemplateId ="api-key-revoked"
     private readonly emailVerificationTemplateId = "email-verification"
     private readonly signupEmailTemplateId = "welcome-email-1"
-
+    private readonly accountEmailVerificationTemplateId ="email-verification"
     private readonly fromAddress =
         this.normalizeFromAddress(
             "Security <security@chefu.co.za>",
@@ -343,6 +289,51 @@ export class ResendService {
         );
     }
 
+    async sendAccountEmailVerification(data: AccountEmailVerificationData): Promise<void> {
+            const apiKey = this.getApiKey();
+            const userName = data.userName || data.email.split("@")[0] || "there";
+            const year = new Date().getUTCFullYear().toString();
+            const response = await fetch(this.RESEND_API_URL, {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${apiKey}`,
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    from: "Chefu Technologies <notifications@chefu.co.za>",
+                    to: [data.email],
+                    subject: "Verify your Chefu account email",
+                    template: {
+                        id: this.accountEmailVerificationTemplateId,
+                        variables: {
+                            USER_NAME: userName,
+                            EMAIL: data.email,
+                            VERIFICATION_URL: data.verificationUrl,
+                            YEAR: year,
+                            userName,
+                            email: data.email,
+                            verificationUrl: data.verificationUrl,
+                            year,
+                        },
+                    },
+                }),
+            });
+
+            if (!response.ok) {
+                const error = await response.text();
+                throw new Error(`Resend request failed: ${response.status} ${error}`);
+            }
+
+            this.logger.log(
+                JSON.stringify({
+                    event: "account_email_verification_sent",
+                    email: data.email,
+                    templateId: this.accountEmailVerificationTemplateId,
+                    ...this.getDeliveryDiagnostics(apiKey),
+                }),
+            );
+    }
+
     private getDeliveryDiagnostics(apiKey: string) {
         return {
             apiKeyFingerprint: createHash("sha256")
@@ -368,6 +359,19 @@ export class ResendService {
             appName.replace(/[\r\n<>"]/g, "").trim().slice(0, 80) ||
             "Chefu Technologies";
         return `${safeAppName} <notifications@chefu.co.za>`;
+    }
+
+    private escapeHtml(value: string) {
+        return value.replace(/[&<>"']/g, character => {
+            const entities: Record<string, string> = {
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+            };
+            return entities[character];
+        });
     }
 
     private getPasskeyAddedPayload(data: PasskeyAddedNotificationData) {

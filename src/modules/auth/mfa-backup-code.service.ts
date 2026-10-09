@@ -58,9 +58,13 @@ export class MfaBackupCodeService {
             | BackupCodeState
             | undefined;
         const enrolledFactors = userRecord.multiFactor?.enrolledFactors || [];
+        const hasPasswordProvider = userRecord.providerData.some(
+            provider => provider.providerId === 'password',
+        );
 
         return {
             emailVerified: userRecord.emailVerified,
+            hasPasswordProvider,
             mfaEnabled: enrolledFactors.length > 0,
             enrolledFactors: enrolledFactors.map(factor => ({
                 uid: factor.uid,

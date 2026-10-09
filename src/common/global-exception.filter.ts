@@ -56,7 +56,15 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const details =
       typeof payload === 'object' && payload
         ? Object.fromEntries(
-            ['attemptsRemaining', 'retryAfterSeconds', 'resendsRemaining']
+            [
+              'attemptsRemaining',
+              'mfaInfo',
+              'mfaPendingCredential',
+              'mfaRequired',
+              'retryAfter',
+              'retryAfterSeconds',
+              'resendsRemaining',
+            ]
               .filter(key => key in payload)
               .map(key => [
                 key,
