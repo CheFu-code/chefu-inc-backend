@@ -43,6 +43,8 @@ const CATALOG_CACHE_TTL_MS = 60_000;
 export class AcademySdkCatalogService {
   private coursesCache: { courses: CourseDocument[]; expiresAt: number } | null = null;
   private videosCache: { expiresAt: number; videos: VideoDocument[] } | null = null;
+  private coursesRequest?: Promise<CourseDocument[]>;
+  private videosRequest?: Promise<VideoDocument[]>;
 
   constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
 
@@ -228,22 +230,34 @@ export class AcademySdkCatalogService {
     if (this.coursesCache && this.coursesCache.expiresAt > Date.now()) {
       return this.coursesCache.courses;
     }
+    if (this.coursesRequest) return this.coursesRequest;
 
-    const snapshot = await this.firebaseAdmin.db().collection('course').get();
-    const courses = snapshot.docs
-      .map(doc => this.toCourse(doc.id, doc.data()))
-      .filter(course => this.isCanonicalCourse(course))
-      .sort(
-        (a, b) =>
-          this.timestampMillis(b.createdOn) - this.timestampMillis(a.createdOn),
-      );
+    const request = this.firebaseAdmin
+      .db()
+      .collection('course')
+      .get()
+      .then(snapshot => {
+        const courses = snapshot.docs
+          .map(doc => this.toCourse(doc.id, doc.data()))
+          .filter(course => this.isCanonicalCourse(course))
+          .sort(
+            (a, b) =>
+              this.timestampMillis(b.createdOn) -
+              this.timestampMillis(a.createdOn),
+          );
 
-    this.coursesCache = {
-      courses,
-      expiresAt: Date.now() + this.catalogCacheTtlMs(),
-    };
-
-    return courses;
+        this.coursesCache = {
+          courses,
+          expiresAt: Date.now() + this.catalogCacheTtlMs(),
+        };
+        return courses;
+      });
+    this.coursesRequest = request;
+    try {
+      return await request;
+    } finally {
+      if (this.coursesRequest === request) this.coursesRequest = undefined;
+    }
   }
 
   private toCourse(id: string, data: FirebaseFirestore.DocumentData) {
@@ -338,29 +352,36 @@ export class AcademySdkCatalogService {
     if (this.videosCache && this.videosCache.expiresAt > Date.now()) {
       return this.videosCache.videos;
     }
+    if (this.videosRequest) return this.videosRequest;
 
     const db = this.firebaseAdmin.db();
-    const [uploadedSnap, youtubeSnap] = await Promise.all([
+    const request = Promise.all([
       db.collection('videos').get(),
       db.collection('youTubeVideos').get(),
-    ]);
+    ]).then(([uploadedSnap, youtubeSnap]) => {
+      const videos = [
+        ...uploadedSnap.docs
+          .map(doc => this.toUploadedVideo(doc.id, doc.data()))
+          .filter(video => video.visibility === 'public'),
+        ...youtubeSnap.docs.map(doc => this.toYouTubeVideo(doc.id, doc.data())),
+      ].sort(
+        (a, b) =>
+          this.timestampMillis(b.uploadedAt) -
+          this.timestampMillis(a.uploadedAt),
+      );
 
-    const videos = [
-      ...uploadedSnap.docs
-        .map(doc => this.toUploadedVideo(doc.id, doc.data()))
-        .filter(video => video.visibility === 'public'),
-      ...youtubeSnap.docs.map(doc => this.toYouTubeVideo(doc.id, doc.data())),
-    ].sort(
-      (a, b) =>
-        this.timestampMillis(b.uploadedAt) - this.timestampMillis(a.uploadedAt),
-    );
-
-    this.videosCache = {
-      expiresAt: Date.now() + this.catalogCacheTtlMs(),
-      videos,
-    };
-
-    return videos;
+      this.videosCache = {
+        expiresAt: Date.now() + this.catalogCacheTtlMs(),
+        videos,
+      };
+      return videos;
+    });
+    this.videosRequest = request;
+    try {
+      return await request;
+    } finally {
+      if (this.videosRequest === request) this.videosRequest = undefined;
+    }
   }
 
   private toUploadedVideo(id: string, data: FirebaseFirestore.DocumentData) {

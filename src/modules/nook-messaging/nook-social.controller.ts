@@ -269,10 +269,17 @@ export class NookSocialController {
   conversations(
     @Req() request: AuthenticatedRequest,
     @Query('unreadOnly') unreadOnly = 'false',
-    @Query('page') page = '0',
+    @Query('page') page?: string,
     @Query('limit') limit = '20',
+    @Query('cursor') cursor?: string,
   ) {
-    return this.social.listConversations(request.user, unreadOnly === 'true', Number(page), Number(limit));
+    return this.social.listConversations(
+      request.user,
+      unreadOnly === 'true',
+      page === undefined ? undefined : Number(page),
+      Number(limit),
+      cursor,
+    );
   }
 
   @Post('conversations')

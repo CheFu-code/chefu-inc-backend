@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Param,
   Patch,
   Post,
@@ -25,6 +26,7 @@ export class ProductsController {
   constructor(private readonly products: ProductsService) {}
 
   @Get()
+  @Header('Cache-Control', 'public, max-age=5, s-maxage=15, stale-while-revalidate=30')
   listPublicProducts() {
     return this.products.listPublicProducts();
   }

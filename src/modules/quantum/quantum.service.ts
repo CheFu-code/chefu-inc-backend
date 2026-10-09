@@ -5,7 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { DocumentData, FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { DocumentData, FieldPath, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
@@ -56,30 +56,50 @@ export class QuantumService {
       .slice(0, MAX_CONVERSATIONS)
       .map(conversation => this.normalizeConversation(conversation));
     const collection = this.conversationsCollection(user);
-    const existingSnapshot = await collection.get();
     const incomingIds = new Set(normalized.map(conversation => conversation.id));
-    const batch = this.firebaseAdmin.db().batch();
+    let query = collection
+      .orderBy(FieldPath.documentId())
+      .limit(400);
+    let wroteIncoming = false;
+    let deletedCount = 0;
 
-    for (const doc of existingSnapshot.docs) {
-      if (!incomingIds.has(doc.id)) {
-        batch.delete(doc.ref);
+    while (true) {
+      const snapshot = await query.get();
+      const batch = this.firebaseAdmin.db().batch();
+      let operationCount = 0;
+
+      for (const doc of snapshot.docs) {
+        if (!incomingIds.has(doc.id)) {
+          batch.delete(doc.ref);
+          operationCount += 1;
+          deletedCount += 1;
+        }
       }
-    }
 
-    for (const conversation of normalized) {
-      batch.set(
-        collection.doc(conversation.id),
-        {
-          ...conversation,
-          ownerUid: user.uid,
-          ownerEmail: user.email,
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        { merge: true },
-      );
-    }
+      if (!wroteIncoming) {
+        for (const conversation of normalized) {
+          batch.set(
+            collection.doc(conversation.id),
+            {
+              ...conversation,
+              ownerUid: user.uid,
+              ownerEmail: user.email,
+              updatedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true },
+          );
+          operationCount += 1;
+        }
+        wroteIncoming = true;
+      }
 
-    await batch.commit();
+      if (operationCount) await batch.commit();
+      if (snapshot.docs.length < 400) break;
+      query = collection
+        .orderBy(FieldPath.documentId())
+        .startAfter(snapshot.docs[snapshot.docs.length - 1])
+        .limit(400);
+    }
 
     this.logger.log(
       JSON.stringify({
@@ -87,6 +107,7 @@ export class QuantumService {
         uid: user.uid,
         email: user.email,
         count: normalized.length,
+        deletedCount,
       }),
     );
 
@@ -110,15 +131,30 @@ export class QuantumService {
       id: conversationId || conversation.id,
     });
 
-    await this.conversationsCollection(user).doc(normalized.id).set(
-      {
-        ...normalized,
-        ownerUid: user.uid,
-        ownerEmail: user.email,
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    );
+    const db = this.firebaseAdmin.db();
+    const collection = this.conversationsCollection(user);
+    const ref = collection.doc(normalized.id);
+    await db.runTransaction(async transaction => {
+      const recent = await transaction.get(
+        collection.orderBy('timestamp', 'desc').limit(MAX_CONVERSATIONS),
+      );
+      transaction.set(
+        ref,
+        {
+          ...normalized,
+          ownerUid: user.uid,
+          ownerEmail: user.email,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      );
+      const countAfterWrite =
+        recent.docs.filter(doc => doc.id !== normalized.id).length + 1;
+      if (countAfterWrite > MAX_CONVERSATIONS) {
+        const oldest = recent.docs[recent.docs.length - 1];
+        if (oldest && oldest.id !== normalized.id) transaction.delete(oldest.ref);
+      }
+    });
 
     return {
       conversation: normalized,

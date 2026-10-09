@@ -82,11 +82,13 @@ On the frontend host, set:
 ## Nook Explore Search
 
 Explore post search uses Firestore cursor pagination and indexed caption tokens;
-people search uses username-prefix queries and cursor pagination.
+people search uses username-prefix queries and cursor pagination. The Nook
+conversation list also uses indexed cursor pagination to bound each inbox read.
 Before shipping the matching Nook app version:
 
-1. Deploy the `nookSocialPosts` composite index from `firestore.indexes.json` and
-   wait until it is ready.
+1. Deploy the required composite indexes from `firestore.indexes.json` and wait
+   until they are ready. This includes the `nookSocialPosts` search indexes and
+   the `nookConversations` participant-and-last-message index.
 2. Deploy the backend, which writes search tokens on newly published posts.
 3. Run `npm run backfill:nook-post-search` from a trusted environment configured
    with production Firebase Admin credentials. This is a one-time migration for

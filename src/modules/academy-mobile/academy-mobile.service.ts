@@ -66,9 +66,15 @@ const PERMISSION_KEYS = [
   'location',
   'notifications',
 ] as const;
+const CATALOG_CACHE_TTL_MS = 15_000;
 
 @Injectable()
 export class AcademyMobileService {
+  private coursesCache?: { courses: PlainObject[]; expiresAt: number };
+  private coursesRequest?: Promise<PlainObject[]>;
+  private videosCache?: { videos: VideoDocument[]; expiresAt: number };
+  private videosRequest?: Promise<VideoDocument[]>;
+
   constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
 
   async getProfile(user: AuthenticatedUser) {
@@ -631,35 +637,71 @@ export class AcademyMobileService {
   }
 
   private async loadVideos() {
+    if (this.videosCache && this.videosCache.expiresAt > Date.now()) {
+      return this.videosCache.videos;
+    }
+    if (this.videosRequest) return this.videosRequest;
+
     const db = this.firebaseAdmin.db();
-    const [uploadedSnap, youtubeSnap] = await Promise.all([
+    const request = Promise.all([
       db.collection('videos').get(),
       db.collection('youTubeVideos').get(),
-    ]);
-
-    return [
-      ...uploadedSnap.docs
-        .map(doc => this.toUploadedVideo(doc.id, doc.data()))
-        .filter(video => video.visibility === 'public'),
-      ...youtubeSnap.docs.map(doc => this.toYouTubeVideo(doc.id, doc.data())),
-    ].sort(
-      (a, b) =>
-        this.timestampMillis(b.uploadedAt || b.createdAt) -
-        this.timestampMillis(a.uploadedAt || a.createdAt),
-    );
+    ]).then(([uploadedSnap, youtubeSnap]) => {
+      const videos = [
+        ...uploadedSnap.docs
+          .map(doc => this.toUploadedVideo(doc.id, doc.data()))
+          .filter(video => video.visibility === 'public'),
+        ...youtubeSnap.docs.map(doc => this.toYouTubeVideo(doc.id, doc.data())),
+      ].sort(
+        (a, b) =>
+          this.timestampMillis(b.uploadedAt || b.createdAt) -
+          this.timestampMillis(a.uploadedAt || a.createdAt),
+      );
+      this.videosCache = {
+        videos,
+        expiresAt: Date.now() + CATALOG_CACHE_TTL_MS,
+      };
+      return videos;
+    });
+    this.videosRequest = request;
+    try {
+      return await request;
+    } finally {
+      if (this.videosRequest === request) this.videosRequest = undefined;
+    }
   }
 
   private async loadCourses() {
-    const snapshot = await this.firebaseAdmin.db().collection('course').get();
+    if (this.coursesCache && this.coursesCache.expiresAt > Date.now()) {
+      return this.coursesCache.courses;
+    }
+    if (this.coursesRequest) return this.coursesRequest;
 
-    return snapshot.docs
-      .map(doc => this.toCourse(doc.id, doc.data()))
-      .filter(course => this.isCanonicalCourse(course))
-      .sort(
-        (a, b) =>
-          this.timestampMillis(b.createdOn) -
-          this.timestampMillis(a.createdOn),
-      );
+    const request = this.firebaseAdmin
+      .db()
+      .collection('course')
+      .get()
+      .then(snapshot => {
+        const courses = snapshot.docs
+          .map(doc => this.toCourse(doc.id, doc.data()))
+          .filter(course => this.isCanonicalCourse(course))
+          .sort(
+            (a, b) =>
+              this.timestampMillis(b.createdOn) -
+              this.timestampMillis(a.createdOn),
+          );
+        this.coursesCache = {
+          courses,
+          expiresAt: Date.now() + CATALOG_CACHE_TTL_MS,
+        };
+        return courses;
+      });
+    this.coursesRequest = request;
+    try {
+      return await request;
+    } finally {
+      if (this.coursesRequest === request) this.coursesRequest = undefined;
+    }
   }
 
   private filterCourses(courses: PlainObject[], query: CourseListQuery) {

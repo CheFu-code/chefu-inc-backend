@@ -62,6 +62,8 @@ const FOLLOWS = 'nookSocialFollows';
 const BOOKMARKS = 'nookSocialBookmarks';
 const BLOCKS = 'nookSocialBlocks';
 const MAX_PAGE_SIZE = 50;
+const CONVERSATION_QUERY_BATCH_SIZE = 100;
+const MAX_CONVERSATION_SCAN_PER_PAGE = 500;
 const HOME_FEED_UIDS_PER_QUERY = 30;
 const USERNAME_PATTERN = /^[a-z0-9._]{3,30}$/;
 
@@ -983,7 +985,17 @@ export class NookSocialService {
     return { url };
   }
 
-  async listConversations(user: AuthenticatedUser, unreadOnly: boolean, page: number, pageSize: number) {
+  async listConversations(
+    user: AuthenticatedUser,
+    unreadOnly: boolean,
+    page: number | undefined,
+    pageSize: number,
+    cursor?: string,
+  ) {
+    if (page === undefined) {
+      return this.listConversationsByCursor(user, unreadOnly, pageSize, cursor);
+    }
+
     const rows = await this.firebaseAdmin.db().collection('nookConversations')
       .where('participantUids', 'array-contains', user.uid).limit(500).get();
     const blockedUids = await this.blockedUids(user.uid);
@@ -1017,11 +1029,151 @@ export class NookSocialService {
     )
       .sort((left, right) => right.lastMessageAt - left.lastMessageAt);
     const paged = this.page(filtered, page, pageSize);
-    const items = await Promise.all(paged.items.map(async ({ otherUid, ...conversation }) => ({
-      ...conversation,
-      other: await this.getProfileForUser(otherUid, user.uid),
-    })));
+    const items = await this.addConversationProfiles(paged.items, user.uid);
     return { items, hasMore: paged.hasMore };
+  }
+
+  private async listConversationsByCursor(
+    user: AuthenticatedUser,
+    unreadOnly: boolean,
+    pageSize: number,
+    cursor?: string,
+  ) {
+    const safePageSize = Math.min(
+      MAX_PAGE_SIZE,
+      Math.max(1, Number.isFinite(pageSize) ? Math.floor(pageSize) : 20),
+    );
+    const decodedCursor = cursor ? this.decodeConversationCursor(cursor) : null;
+    const blockedUids = await this.blockedUids(user.uid);
+    const db = this.firebaseAdmin.db();
+    const baseQuery = db.collection('nookConversations')
+      .where('participantUids', 'array-contains', user.uid)
+      .orderBy('lastMessageAt', 'desc')
+      .orderBy(FieldPath.documentId(), 'desc');
+    let query = decodedCursor
+      ? baseQuery.startAfter(
+          new Timestamp(decodedCursor.seconds, decodedCursor.nanoseconds),
+          decodedCursor.id,
+        )
+      : baseQuery;
+
+    const eligible: Array<{
+      doc: FirebaseFirestore.QueryDocumentSnapshot;
+      conversation: Record<string, unknown> & { otherUid: string };
+    }> = [];
+    let scanned = 0;
+    let hasMoreRows = false;
+    let lastScanned: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+    const targetCount = safePageSize + 1;
+
+    while (
+      scanned < MAX_CONVERSATION_SCAN_PER_PAGE &&
+      eligible.length < targetCount
+    ) {
+      const batchSize = Math.min(
+        CONVERSATION_QUERY_BATCH_SIZE,
+        MAX_CONVERSATION_SCAN_PER_PAGE - scanned,
+      );
+      const snapshot = await query.limit(batchSize).get();
+      if (!snapshot.docs.length) break;
+      scanned += snapshot.docs.length;
+      lastScanned = snapshot.docs[snapshot.docs.length - 1];
+
+      for (const doc of snapshot.docs) {
+        const data = doc.data();
+        const otherUid =
+          (data.participantUids as string[]).find(uid => uid !== user.uid) ||
+          user.uid;
+        const lastRead = Number(
+          (data.lastReadBy as Record<string, number> | undefined)?.[user.uid] ||
+            0,
+        );
+        const latestSequence = Number(data.latestSequence || 0);
+        const storedUnreadCount = (
+          data.unreadCountBy as Record<string, number> | undefined
+        )?.[user.uid];
+        const hasStoredUnreadCount = Number.isFinite(storedUnreadCount);
+        const unreadCount = hasStoredUnreadCount
+          ? Math.max(0, Number(storedUnreadCount))
+          : latestSequence > lastRead && data.lastSenderUid !== user.uid
+            ? 1
+            : 0;
+
+        if (blockedUids.has(otherUid) || (unreadOnly && unreadCount === 0)) {
+          continue;
+        }
+
+        eligible.push({
+          doc,
+          conversation: {
+            _id: doc.id,
+            otherUid,
+            preview: (
+              (data.previewDeletedForUids as string[] | undefined) || []
+            ).includes(user.uid)
+              ? 'Message deleted for you.'
+              : String(data.preview || ''),
+            previewIsOwn: data.lastSenderUid === user.uid,
+            lastMessageAt: this.timestampMs(data.lastMessageAt),
+            unread: unreadCount > 0,
+            unreadCount,
+            unreadCountExact: hasStoredUnreadCount,
+          },
+        });
+        if (eligible.length >= targetCount) break;
+      }
+
+      hasMoreRows = snapshot.docs.length === batchSize;
+      if (eligible.length >= targetCount || !hasMoreRows) break;
+      query = query.startAfter(lastScanned);
+    }
+
+    const hasMore =
+      eligible.length > safePageSize ||
+      (scanned >= MAX_CONVERSATION_SCAN_PER_PAGE && hasMoreRows);
+    const pageItems = eligible.slice(0, safePageSize);
+    const items = await this.addConversationProfiles(
+      pageItems.map(item => item.conversation),
+      user.uid,
+    );
+    const cursorDoc = !hasMore
+      ? undefined
+      : eligible.length > safePageSize
+        ? pageItems[pageItems.length - 1]?.doc
+        : lastScanned;
+
+    return {
+      items,
+      hasMore,
+      nextCursor: cursorDoc
+        ? this.encodeConversationCursor(cursorDoc)
+        : null,
+    };
+  }
+
+  private async addConversationProfiles(
+    conversations: Array<Record<string, unknown> & { otherUid: string }>,
+    viewerUid: string,
+  ) {
+    if (!conversations.length) return [];
+    const profiles = await this.firebaseAdmin.db().getAll(
+      ...conversations.map(conversation =>
+        this.profileRef(conversation.otherUid),
+      ),
+    );
+    return conversations.map(({ otherUid, ...conversation }, index) => {
+      const profile = profiles[index];
+      return {
+        ...conversation,
+        other: profile?.exists
+          ? this.presentProfile(
+              profile.id,
+              profile.data() as ProfileDocument,
+              viewerUid,
+            )
+          : null,
+      };
+    });
   }
 
   async startConversation(user: AuthenticatedUser, profileId: string) {
@@ -1618,6 +1770,57 @@ export class NookSocialService {
       };
     } catch {
       throw new BadRequestException('Invalid post cursor.');
+    }
+  }
+
+  private encodeConversationCursor(
+    doc: FirebaseFirestore.QueryDocumentSnapshot,
+  ) {
+    const timestamp = doc.get('lastMessageAt');
+    const value =
+      timestamp instanceof Timestamp
+        ? timestamp
+        : Timestamp.fromMillis(this.timestampMs(timestamp));
+    return Buffer.from(
+      JSON.stringify({
+        seconds: value.seconds,
+        nanoseconds: value.nanoseconds,
+        id: doc.id,
+      }),
+    ).toString('base64url');
+  }
+
+  private decodeConversationCursor(cursor: string) {
+    try {
+      if (cursor.length > 3000) throw new Error('Invalid cursor');
+      const parsed: unknown = JSON.parse(
+        Buffer.from(cursor, 'base64url').toString('utf8'),
+      );
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        !('seconds' in parsed) ||
+        !('nanoseconds' in parsed) ||
+        !('id' in parsed) ||
+        typeof parsed.seconds !== 'number' ||
+        !Number.isSafeInteger(parsed.seconds) ||
+        typeof parsed.nanoseconds !== 'number' ||
+        !Number.isInteger(parsed.nanoseconds) ||
+        parsed.nanoseconds < 0 ||
+        parsed.nanoseconds >= 1_000_000_000 ||
+        typeof parsed.id !== 'string' ||
+        !parsed.id ||
+        parsed.id.length > 1500
+      ) {
+        throw new Error('Invalid cursor');
+      }
+      return {
+        seconds: parsed.seconds,
+        nanoseconds: parsed.nanoseconds,
+        id: parsed.id,
+      };
+    } catch {
+      throw new BadRequestException('Invalid conversation cursor.');
     }
   }
 

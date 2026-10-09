@@ -25,10 +25,23 @@ const COLLECTION = 'products';
 const AUDIT_COLLECTION = 'commerceAuditLogs';
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const PUBLIC_PRODUCTS_CACHE_TTL_MS = 15_000;
 
 @Injectable()
 export class ProductsService {
   private readonly logger = new Logger(ProductsService.name);
+  private publicProductsCache?: {
+    expiresAt: number;
+    result: { products: ProductDocument[] };
+  };
+  private publicProductsRequest?: Promise<{ products: ProductDocument[] }>;
+  private publicProductsCacheVersion = 0;
+  private adminProductsCache?: {
+    expiresAt: number;
+    result: { products: ProductDocument[] };
+  };
+  private adminProductsRequest?: Promise<{ products: ProductDocument[] }>;
+  private adminProductsCacheVersion = 0;
 
   constructor(private readonly firebaseAdmin: FirebaseAdminService) {
     cloudinary.config({
@@ -40,15 +53,72 @@ export class ProductsService {
   }
 
   async listPublicProducts() {
-    const snapshot = await this.firebaseAdmin.db().collection(COLLECTION)
+    const now = Date.now();
+    if (this.publicProductsCache && this.publicProductsCache.expiresAt > now) {
+      return this.publicProductsCache.result;
+    }
+    if (this.publicProductsRequest) return this.publicProductsRequest;
+
+    const cacheVersion = this.publicProductsCacheVersion;
+    const request = this.firebaseAdmin.db().collection(COLLECTION)
       .where('status', 'in', ['ACTIVE', 'OUT_OF_STOCK'])
-      .orderBy('featured', 'desc').orderBy('updatedAt', 'desc').get();
-    return { products: snapshot.docs.map(doc => this.serialize(doc.id, doc.data())) };
+      .orderBy('featured', 'desc').orderBy('updatedAt', 'desc').get()
+      .then(snapshot => {
+        const result = {
+          products: snapshot.docs.map(doc => this.serialize(doc.id, doc.data())),
+        };
+        if (cacheVersion === this.publicProductsCacheVersion) {
+          this.publicProductsCache = {
+            expiresAt: Date.now() + PUBLIC_PRODUCTS_CACHE_TTL_MS,
+            result,
+          };
+        }
+        return result;
+      });
+    this.publicProductsRequest = request;
+    try {
+      return await request;
+    } finally {
+      if (this.publicProductsRequest === request) {
+        this.publicProductsRequest = undefined;
+      }
+    }
   }
 
   async listAdminProducts() {
-    const snapshot = await this.firebaseAdmin.db().collection(COLLECTION).orderBy('updatedAt', 'desc').get();
-    return { products: snapshot.docs.map(doc => this.serialize(doc.id, doc.data())) };
+    if (this.adminProductsCache && this.adminProductsCache.expiresAt > Date.now()) {
+      return this.adminProductsCache.result;
+    }
+    if (this.adminProductsRequest) return this.adminProductsRequest;
+
+    const cacheVersion = this.adminProductsCacheVersion;
+    const request = this.firebaseAdmin
+      .db()
+      .collection(COLLECTION)
+      .orderBy('updatedAt', 'desc')
+      .get()
+      .then(snapshot => {
+        const result = {
+          products: snapshot.docs.map(doc =>
+            this.serialize(doc.id, doc.data()),
+          ),
+        };
+        if (cacheVersion === this.adminProductsCacheVersion) {
+          this.adminProductsCache = {
+            expiresAt: Date.now() + PUBLIC_PRODUCTS_CACHE_TTL_MS,
+            result,
+          };
+        }
+        return result;
+      });
+    this.adminProductsRequest = request;
+    try {
+      return await request;
+    } finally {
+      if (this.adminProductsRequest === request) {
+        this.adminProductsRequest = undefined;
+      }
+    }
   }
 
   async getProductBySlug(slug: string, includeArchived: boolean) {
@@ -69,6 +139,7 @@ export class ProductsService {
     const now = new Date().toISOString();
     const document = { ...product, id, createdAt: now, updatedAt: now, createdBy: user.email } as ProductDocument;
     await db.collection(COLLECTION).doc(id).create(document);
+    this.invalidateProductsCache();
     await this.audit(user, 'PRODUCT_CREATED', id, { after: document });
     return document;
   }
@@ -85,6 +156,7 @@ export class ProductsService {
     }
     const updated = { ...existing, ...validated, id, updatedAt: new Date().toISOString() } as ProductDocument;
     await ref.set(updated);
+    this.invalidateProductsCache();
     await this.audit(user, existing.priceMinor !== updated.priceMinor ? 'PRICE_CHANGED' : 'PRODUCT_UPDATED', id, { before: existing, after: updated });
     return updated;
   }
@@ -94,6 +166,7 @@ export class ProductsService {
     const snapshot = await ref.get();
     if (!snapshot.exists) throw new NotFoundException('Product was not found.');
     await ref.update({ status: 'ARCHIVED', updatedAt: new Date().toISOString() });
+    this.invalidateProductsCache();
     await this.audit(user, 'PRODUCT_ARCHIVED', id, { beforeStatus: snapshot.data()?.status, afterStatus: 'ARCHIVED' });
     return { success: true, id, status: 'ARCHIVED' as const };
   }
@@ -113,6 +186,7 @@ export class ProductsService {
       transaction.update(ref, { inventoryQuantity: quantity, status, updatedAt: new Date().toISOString() });
       return { quantity, status, previousQuantity: current };
     });
+    this.invalidateProductsCache();
     await this.audit(user, 'INVENTORY_CHANGED', id, result);
     return { id, inventoryQuantity: result.quantity, status: result.status };
   }
@@ -170,6 +244,15 @@ export class ProductsService {
   }
 
   private slugify(value: string) { return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }
+
+  private invalidateProductsCache() {
+    this.publicProductsCacheVersion += 1;
+    this.publicProductsCache = undefined;
+    this.publicProductsRequest = undefined;
+    this.adminProductsCache = undefined;
+    this.adminProductsRequest = undefined;
+    this.adminProductsCacheVersion += 1;
+  }
 
   private uploadBuffer(buffer: Buffer, options: UploadApiOptions): Promise<{ secure_url: string; public_id: string }> {
     return new Promise((resolve, reject) => {
