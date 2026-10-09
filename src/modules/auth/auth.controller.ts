@@ -70,6 +70,7 @@ import {
   isDeviceAuthExpired,
   normalizeDeviceCode,
 } from './device-auth';
+import { FirebaseDecodedToken, ProfileUpdateBody,AcademyProfileUpdate,ProfilePictureUpdate,SignInAlertDecision } from './auth-controller.types';
 
 function decodeJwtPayload(token: string) {
   const [, payload] = token.split('.');
@@ -94,66 +95,7 @@ function decodeJwtPayload(token: string) {
   }
 }
 
-type FirebaseDecodedToken = Awaited<
-  ReturnType<ReturnType<FirebaseAdminService['auth']>['verifyIdToken']>
->;
 
-type AcademyProfileUpdate = {
-  bio?: string;
-  country?: string;
-  countryCode?: string;
-  language?: string;
-  learningGoal?: string;
-  skillLevel?: string;
-  learningInterests?: string[];
-  weeklyLearningGoal?: number;
-  lessonStyle?: string;
-  defaultCourseDifficulty?: string;
-  preferredContentFormat?: string;
-  aiTutorSuggestions?: boolean;
-  privacy?: {
-    publicProfile?: boolean;
-    showCompletedCourses?: boolean;
-    showCountry?: boolean;
-    personalizedAiRecommendations?: boolean;
-  };
-  emailPreferences?: Record<string, boolean>;
-};
-
-type ProfileUpdateBody = {
-  fullname?: string;
-  firstName?: string;
-  lastName?: string;
-  phone?: string;
-  bio?: string;
-  website?: string;
-  location?: string;
-  profilePicture?: unknown;
-  photoURL?: unknown;
-  avatarUrl?: unknown;
-  addressStreet?: string;
-  addressCity?: string;
-  addressPostalCode?: string;
-  countryName?: string;
-  countryCode?: string;
-  storeName?: string;
-  storeDescription?: string;
-  emailPreferences?: {
-    security?: boolean;
-  };
-  academyProfile?: AcademyProfileUpdate;
-};
-
-type ProfilePictureUpdate = {
-  shouldUpdate: boolean;
-  value: string;
-};
-
-type SignInAlertDecision = {
-  reason: string;
-  shouldSend: boolean;
-  throttleMs: number;
-};
 
 @Controller('auth')
 export class AuthController {
