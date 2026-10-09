@@ -805,7 +805,12 @@ export class AuthController {
     @Body() body: { email?: string; userName?: string },
     @Req() request: Request,
   ) {
-    const email = String(body.email || '').trim().toLowerCase();
+    if (typeof body.email !== 'string' || !body.email.trim()) {
+      throw new BadRequestException(
+        'Email address was not included. Refresh the registration page and try again.',
+      );
+    }
+    const email = body.email.trim().toLowerCase();
     if (email.length > 254 || !isEmail(email)) {
       throw new BadRequestException('Enter a valid email address.');
     }
@@ -897,7 +902,10 @@ export class AuthController {
     },
     @Req() request: Request,
   ) {
-    const email = String(body.email || '').trim().toLowerCase();
+    if (typeof body.email !== 'string' || !body.email.trim()) {
+      throw new BadRequestException('Email address is required.');
+    }
+    const email = body.email.trim().toLowerCase();
     const code = body.code?.trim() || '';
     const password = typeof body.password === 'string' ? body.password : '';
     const displayName = String(body.displayName || '').trim();
