@@ -231,16 +231,15 @@ export class NookSocialController {
   @Post('uploads')
   createUpload(@Req() request: AuthenticatedRequest, @Body() body: {
     purpose?: 'post' | 'story';
-    kind?: 'image' | 'video';
+    kind?: 'image';
     width?: number;
     height?: number;
-    duration?: number;
   }) {
     return this.social.createUpload(request.user, body);
   }
 
   @Post('uploads/:id/file')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 50 * 1024 * 1024 } }))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
   uploadFile(@Req() request: AuthenticatedRequest, @Param('id') id: string, @UploadedFile() file?: Express.Multer.File) {
     if (!file) throw new BadRequestException('Upload file is required.');
     return this.social.saveUpload(request.user, id, file.buffer, file.mimetype);

@@ -630,22 +630,17 @@ export class NookSocialService {
 
   async createUpload(user: AuthenticatedUser, body: {
     purpose?: 'post' | 'story';
-    kind?: 'image' | 'video';
+    kind?: 'image';
     width?: number;
     height?: number;
-    duration?: number;
   }) {
-    if (!['post', 'story'].includes(String(body.purpose)) || !['image', 'video'].includes(String(body.kind))) {
+    if (!['post', 'story'].includes(String(body.purpose)) || body.kind !== 'image') {
       throw new BadRequestException('Invalid upload purpose or media type.');
     }
-    if (body.purpose === 'story' && body.kind !== 'image') throw new BadRequestException('Stories must be images.');
     const width = Number(body.width);
     const height = Number(body.height);
     if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1 || width > 30_000 || height > 30_000) {
       throw new BadRequestException('Valid media dimensions are required.');
-    }
-    if (body.kind === 'video' && (!Number.isFinite(body.duration) || Number(body.duration) <= 0 || Number(body.duration) > 30)) {
-      throw new BadRequestException('Videos must be no longer than 30 seconds.');
     }
     const id = randomUUID();
     await this.firebaseAdmin.db().collection('nookSocialUploads').doc(id).create({
@@ -654,7 +649,6 @@ export class NookSocialService {
       kind: body.kind,
       width,
       height,
-      duration: body.duration,
       status: 'pending',
       createdAt: FieldValue.serverTimestamp(),
       expiresAt: Timestamp.fromMillis(Date.now() + 60 * 60_000),
@@ -676,14 +670,15 @@ export class NookSocialService {
     if (snapshot.get('expiresAt').toMillis() <= Date.now()) throw new BadRequestException('Upload session expired.');
     const purpose = snapshot.get('purpose') as string;
     const kind = snapshot.get('kind') as string;
-    const maxBytes = kind === 'video' ? 50 : 10;
-    const allowed = kind === 'video'
-      ? ['video/mp4', 'video/quicktime']
-      : ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+    if (kind !== 'image') {
+      throw new BadRequestException('Video posts are not supported. Choose a photo.');
+    }
+    const maxBytes = 10;
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
     if (!buffer.length || buffer.length > maxBytes * 1024 * 1024 || !allowed.includes(mimeType.toLowerCase())) {
       throw new BadRequestException(`Choose a supported file under ${maxBytes} MB.`);
     }
-    const resourceType = kind === 'video' ? 'video' : 'image';
+    const resourceType = 'image';
     const uploaded = await this.cloudinaryStorage.uploadBuffer(buffer, {
       public_id: `chefu/nook/${user.uid}/${id}`,
       resource_type: resourceType,
@@ -782,7 +777,8 @@ export class NookSocialService {
         return;
       }
       if (!uploadSnapshot.exists || uploadSnapshot.get('uid') !== user.uid ||
-          uploadSnapshot.get('purpose') !== 'post' || uploadSnapshot.get('status') !== 'uploaded') {
+          uploadSnapshot.get('purpose') !== 'post' || uploadSnapshot.get('status') !== 'uploaded' ||
+          uploadSnapshot.get('kind') !== 'image') {
         throw new NotFoundException('Upload session is unavailable.');
       }
       const upload = uploadSnapshot.data()!;
@@ -796,7 +792,6 @@ export class NookSocialService {
         caption,
         width: upload.width,
         height: upload.height,
-        duration: upload.duration,
         searchTokens: postSearchTokens(caption),
         createdAt: FieldValue.serverTimestamp(),
       });
