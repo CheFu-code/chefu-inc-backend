@@ -802,7 +802,7 @@ export class AuthController {
   @Post('email-verification/send')
   @HttpCode(200)
   async sendEmailVerificationCode(
-    @Body() body: { email?: string; userName?: string },
+    @Body() body: { email?: string; userName?: string; appId?: string },
     @Req() request: Request,
   ) {
     if (typeof body.email !== 'string' || !body.email.trim()) {
@@ -814,6 +814,19 @@ export class AuthController {
     if (email.length > 254 || !isEmail(email)) {
       throw new BadRequestException('Enter a valid email address.');
     }
+    const appId = body.appId?.trim().toLowerCase();
+    const requestedAppId = appId
+      ? this.appsService.resolveId(appId)
+      : null;
+    if (appId && !requestedAppId && appId !== 'infinity') {
+      throw new BadRequestException('Unknown application for email verification.');
+    }
+    const appName = appId === 'infinity'
+      ? 'Infinity'
+      : requestedAppId
+        ? this.appsService.list().find(app => app.id === requestedAppId)?.name ||
+          'Chefu Technologies'
+        : 'Chefu Technologies';
     await this.enforceAuthRateLimit(email, request.ip || 'unknown');
 
     try {
@@ -863,7 +876,7 @@ export class AuthController {
       transaction.set(ref, {
         email,
         userName: String(body.userName || '').trim().slice(0, 120) || null,
-        appName: 'CheFu Account',
+        appName,
         codeHash,
         expiresAt: Timestamp.fromMillis(now + 10 * 60_000),
         lastSentAt: Timestamp.fromMillis(now),
@@ -878,7 +891,7 @@ export class AuthController {
         userName: String(body.userName || '').trim().slice(0, 120) || undefined,
         code,
         expiresIn: '10 minutes',
-        appName: 'CheFu Account',
+        appName,
       });
     } catch (error) {
       await this.firebaseAdmin.db().runTransaction(async transaction => {

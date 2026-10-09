@@ -220,7 +220,7 @@ export class ResendService {
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                from: this.notificationFromAddress,
+                from: this.formatVerificationSender(appName),
                 to: [data.email],
                 subject: `Your ${appName} verification code`,
                 template: {
@@ -261,7 +261,9 @@ export class ResendService {
                     response.headers.get("x-request-id") ||
                     null,
                 templateId: this.emailVerificationTemplateId,
-                senderDomain: this.getEmailDomain(this.notificationFromAddress),
+                senderDomain: this.getEmailDomain(
+                    this.formatVerificationSender(appName),
+                ),
                 apiKeyConfigured: Boolean(apiKey),
                 apiKeyHasBearerPrefix: /^Bearer\s/i.test(apiKey),
                 apiKeyHasWrappingQuotes:
@@ -286,7 +288,9 @@ export class ResendService {
                     response.headers.get("x-request-id") ||
                     null,
                 templateId: this.emailVerificationTemplateId,
-                senderDomain: this.getEmailDomain(this.notificationFromAddress),
+                senderDomain: this.getEmailDomain(
+                    this.formatVerificationSender(appName),
+                ),
                 ...this.getDeliveryDiagnostics(apiKey),
             }),
         );
@@ -310,6 +314,13 @@ export class ResendService {
         const email = address.match(/<([^>]+)>/)?.[1] || address;
         const atIndex = email.lastIndexOf("@");
         return atIndex >= 0 ? email.slice(atIndex + 1).toLowerCase() : null;
+    }
+
+    private formatVerificationSender(appName: string) {
+        const safeAppName =
+            appName.replace(/[\r\n<>"]/g, "").trim().slice(0, 80) ||
+            "Chefu Technologies";
+        return `${safeAppName} <notifications@chefu.co.za>`;
     }
 
     private getPasskeyAddedPayload(data: PasskeyAddedNotificationData) {
