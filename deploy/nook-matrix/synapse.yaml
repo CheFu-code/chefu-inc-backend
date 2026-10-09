@@ -1,0 +1,61 @@
+server_name: matrix.chefu.co.za
+public_baseurl: https://matrix.chefu.co.za/
+
+pid_file: /data/homeserver.pid
+signing_key_path: /data/matrix.chefu.co.za.signing.key
+media_store_path: /data/media_store
+
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    x_forwarded: true
+    bind_addresses:
+      - 0.0.0.0
+    resources:
+      - names:
+          - client
+        compress: false
+
+enable_registration: false
+registration_requires_token: true
+password_config:
+  enabled: false
+
+federation_domain_whitelist: []
+allow_profile_lookup_over_federation: false
+trusted_key_servers: []
+suppress_key_server_warning: true
+
+url_preview_enabled: false
+enable_room_list_search: false
+allow_public_rooms_without_auth: false
+allow_public_rooms_over_federation: false
+
+oidc_providers:
+  - idp_id: chefu
+    idp_name: Chefu Account
+    enable_registration: true
+    discover: true
+    issuer: https://api.chefu.co.za
+    client_id: nook-matrix-synapse
+    client_auth_method: none
+    pkce_method: always
+    scopes:
+      - openid
+      - profile
+      - email
+    user_mapping_provider:
+      config:
+        subject_claim: sub
+        localpart_template: "{{ user.sub.lower() }}"
+        display_name_template: "{{ user.name }}"
+        email_template: "{{ user.email }}"
+
+sso:
+  client_whitelist:
+    - nook://matrix-login
+    - https://nook.chefu.co.za/matrix-login
+  update_profile_information: true
+
+report_stats: false

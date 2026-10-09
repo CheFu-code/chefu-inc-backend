@@ -106,6 +106,14 @@ physical device and registers/removes its token through authenticated Nook API
 routes. Foreground notification content is shown as an in-app banner; background
 notifications are displayed by the operating system.
 
+## Nook Matrix Homeserver
+
+The separate Synapse deployment scaffold is in
+[`deploy/nook-matrix`](./deploy/nook-matrix/README.md). It is not yet used by the
+Nook chat client. Do not claim Nook E2EE until the native and web Matrix clients,
+device verification, recovery, and privacy-safe push behavior are implemented
+and validated.
+
 ## Routes
 
 - `GET /health`
