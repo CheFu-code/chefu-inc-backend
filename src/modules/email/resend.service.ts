@@ -212,7 +212,7 @@ export class ResendService {
         const response = await fetch(this.RESEND_API_URL, {
             method: "POST",
             headers: {
-                Authorization: `******`,
+                Authorization: `Bearer ${apiKey}`,
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
