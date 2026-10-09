@@ -211,13 +211,6 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         scopes: ["openid", "profile", "email"],
     },
     {
-        id: "nook-matrix-synapse",
-        appId: "nook",
-        name: "Nook Matrix Homeserver",
-        redirectUris: ["https://matrix.chefu.co.za/_synapse/client/oidc/callback"],
-        scopes: ["openid", "profile", "email"],
-    },
-    {
         id: "cloudence-web",
         appId: "cloudence",
         name: "Cloudence",
