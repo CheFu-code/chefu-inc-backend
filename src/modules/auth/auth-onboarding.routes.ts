@@ -577,70 +577,62 @@ export abstract class AuthOnboardingRoutes extends AuthSecurityRoutes {
 
     await this.enforceAuthRateLimit(email, request.ip || 'unknown', 5);
 
-    let response: globalThis.Response;
+    const genericResponse = {
+      success: true,
+      message: 'If an account exists for this email, a reset email is on its way.',
+    };
+    let authUser;
     try {
-      response = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${encodeURIComponent(this.getFirebaseWebApiKey())}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            requestType: 'PASSWORD_RESET',
-            email,
-          }),
-        },
+      authUser = await this.firebaseAdmin.auth().getUserByEmail(email);
+    } catch (error) {
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        error.code === 'auth/user-not-found'
+      ) {
+        return genericResponse;
+      }
+      this.logger.error(
+        JSON.stringify({
+          event: 'password_reset_user_lookup_failed',
+          emailHash: hashForAudit(email),
+          errorName: error instanceof Error ? error.name : 'unknown',
+        }),
       );
+      throw new BadGatewayException('Unable to process a password reset right now.');
+    }
+
+    if (
+      authUser.disabled ||
+      !authUser.email
+    ) {
+      return genericResponse;
+    }
+
+    try {
+      const resetUrl = await this.firebaseAdmin.auth().generatePasswordResetLink(email);
+      await this.resendService.sendPasswordResetEmail({
+        email,
+        userName: authUser.displayName || email.split('@')[0],
+        resetUrl,
+      });
     } catch (error) {
       this.logger.error(
         JSON.stringify({
           event: 'password_reset_request_failed',
           emailHash: hashForAudit(email),
-          reason: error instanceof Error ? error.message : 'upstream_unavailable',
+          errorName: error instanceof Error ? error.name : 'unknown',
+          errorCode:
+            typeof error === 'object' && error !== null && 'code' in error
+              ? error.code
+              : undefined,
         }),
       );
       throw new BadGatewayException('Unable to send a password reset email right now.');
     }
 
-    if (!response.ok) {
-      const result = (await response.json().catch(() => ({}))) as {
-        error?: { message?: string; status?: string };
-      };
-      const errorCode = result.error?.message || result.error?.status || '';
-      if (response.status === 400) {
-        this.logger.warn(
-          JSON.stringify({
-            event: 'password_reset_request_not_accepted',
-            upstreamErrorCode: /^[A-Z0-9_]+$/.test(errorCode) ? errorCode : null,
-            emailHash: hashForAudit(email),
-          }),
-        );
-        return {
-          success: true,
-          message: 'If an account exists for this email, a reset email is on its way.',
-        };
-      }
-
-      this.logger.error(
-        JSON.stringify({
-          event: 'password_reset_request_failed',
-          upstreamStatus: response.status,
-          upstreamErrorCode: /^[A-Z0-9_]+$/.test(errorCode) ? errorCode : null,
-          emailHash: hashForAudit(email),
-        }),
-      );
-      if (response.status === 429) {
-        throw new HttpException(
-          'Too many password reset requests. Please try again later.',
-          429,
-        );
-      }
-      throw new BadGatewayException('Unable to send a password reset email right now.');
-    }
-
-    return {
-      success: true,
-      message: 'If an account exists for this email, a reset email is on its way.',
-    };
+    return genericResponse;
   }
 
   @Post('email-verification/verify')

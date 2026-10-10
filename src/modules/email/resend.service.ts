@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { assertResendConfigured } from "../../common/env";
-import { AccountDeletionConfirmationData, AccountEmailVerificationData, ApiKeyCompromisedNotificationData, EmailVerificationData, PasskeyAddedNotificationData, PasswordChangedNotificationData, SignInNotificationData, SignupWelcomeData } from "./resend.types";
+import { AccountDeletionConfirmationData, AccountEmailVerificationData, ApiKeyCompromisedNotificationData, EmailVerificationData, PasskeyAddedNotificationData, PasswordChangedNotificationData, PasswordResetEmailData, SignInNotificationData, SignupWelcomeData } from "./resend.types";
 
 
 
@@ -380,6 +380,89 @@ export class ResendService {
                 emailHash: createHash("sha256").update(data.email.toLowerCase()).digest("hex"),
                 templateId,
                 ...this.getDeliveryDiagnostics(apiKey),
+            }),
+        );
+    }
+
+    async sendPasswordResetEmail(data: PasswordResetEmailData): Promise<void> {
+        const templateId = "password-reset"
+        if (!templateId) {
+            throw new Error("RESEND_PASSWORD_RESET_TEMPLATE_ID is not configured.");
+        }
+
+        const apiKey = this.getApiKey();
+        const userName = data.userName || data.email.split("@")[0] || "there";
+        const supportEmail = "support@chefu.co.za";
+        const year = new Date().getUTCFullYear().toString();
+        const response = await fetch(this.RESEND_API_URL, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                from: "Chefu Technologies <notifications@chefu.co.za>",
+                to: [data.email],
+                subject: "Reset your Chefu Technologies account password",
+                template: {
+                    id: templateId,
+                    variables: {
+                        USER_NAME: userName,
+                        EMAIL: data.email,
+                        RESET_URL: data.resetUrl,
+                        SUPPORT_EMAIL: supportEmail,
+                        YEAR: year,
+                    },
+                },
+            }),
+        });
+
+        if (!response.ok) {
+            const responseBody = await response.text();
+            let providerError: Record<string, unknown>;
+            try {
+                const parsed = JSON.parse(responseBody) as Record<string, unknown>;
+                providerError = {
+                    ...(typeof parsed.message === "string"
+                        ? { message: parsed.message.slice(0, 200) }
+                        : {}),
+                    ...(typeof parsed.name === "string"
+                        ? { name: parsed.name.slice(0, 100) }
+                        : {}),
+                };
+            } catch {
+                providerError = { message: "Resend returned a non-JSON error response." };
+            }
+            this.logger.error(
+                JSON.stringify({
+                    event: "password_reset_email_delivery_failed",
+                    emailHash: createHash("sha256")
+                        .update(data.email.toLowerCase())
+                        .digest("hex"),
+                    statusCode: response.status,
+                    templateId,
+                    providerError,
+                    resendRequestId:
+                        response.headers.get("x-resend-id") ||
+                        response.headers.get("x-request-id") ||
+                        null,
+                }),
+            );
+            throw new Error(`Resend request failed: ${response.status}`);
+        }
+
+        this.logger.log(
+            JSON.stringify({
+                event: "password_reset_email_accepted",
+                emailHash: createHash("sha256")
+                    .update(data.email.toLowerCase())
+                    .digest("hex"),
+                templateId,
+                statusCode: response.status,
+                resendRequestId:
+                    response.headers.get("x-resend-id") ||
+                    response.headers.get("x-request-id") ||
+                    null,
             }),
         );
     }

@@ -65,3 +65,9 @@ export interface AccountDeletionConfirmationData {
     userName?: string;
     deletedAt?: Date;
 }
+
+export interface PasswordResetEmailData {
+    email: string;
+    userName?: string;
+    resetUrl: string;
+}
