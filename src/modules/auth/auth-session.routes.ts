@@ -192,6 +192,11 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       local_id?: string;
       email?: string;
       mfaPendingCredential?: string;
+      mfaInfo?: Array<{
+        mfaEnrollmentId?: string;
+        displayName?: string;
+        totpInfo?: Record<string, unknown>;
+      }>;
       error?: {
         message?: string;
         status?: string;
@@ -205,6 +210,24 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
         ? upstreamError
         : null;
       const requiresMfa = Boolean(payload?.mfaPendingCredential);
+      if (requiresMfa || upstreamErrorCode === 'MFA_REQUIRED') {
+        throw new HttpException(
+          {
+            statusCode: 409,
+            message: 'Multi-factor authentication is required.',
+            mfaRequired: true,
+            mfaPendingCredential: payload?.mfaPendingCredential || null,
+            mfaInfo: (payload?.mfaInfo || [])
+              .filter(factor => Boolean(factor.totpInfo && factor.mfaEnrollmentId))
+              .map(factor => ({
+                mfaEnrollmentId: factor.mfaEnrollmentId || '',
+                displayName: factor.displayName || '',
+                factorId: 'totp',
+              })),
+          },
+          409,
+        );
+      }
       this.logger.error(
         JSON.stringify({
           event: 'auth_login_invalid_identity_toolkit_response',
@@ -219,11 +242,6 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
           requestId: request.headers['x-request-id'] || null,
         }),
       );
-      if (requiresMfa || upstreamErrorCode === 'MFA_REQUIRED') {
-        throw new UnauthorizedException(
-          'This account requires multi-factor verification, which Nook sign-in does not support yet. Sign in through Chefu Account or use an account without MFA enabled.',
-        );
-      }
       throw new BadGatewayException(
         'The authentication service returned an unexpected response. Please try again later.',
       );

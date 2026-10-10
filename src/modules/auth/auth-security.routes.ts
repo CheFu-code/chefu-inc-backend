@@ -327,7 +327,7 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
       userName: authUser.displayName || '',
       code,
       expiresIn: '10 minutes',
-      appName: 'CheFu account deletion',
+      appName: 'Chefu Technologies account deletion',
     });
     response.cookie(ACCOUNT_DELETION_CHALLENGE_COOKIE_NAME, generatedChallengeToken, {
       ...this.getCookieOptions(),
