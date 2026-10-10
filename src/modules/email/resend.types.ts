@@ -59,3 +59,9 @@ export interface AccountEmailVerificationData {
     userName?: string;
     verificationUrl: string;
 }
+
+export interface AccountDeletionConfirmationData {
+    email: string;
+    userName?: string;
+    deletedAt?: Date;
+}

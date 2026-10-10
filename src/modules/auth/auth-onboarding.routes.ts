@@ -552,6 +552,97 @@ export abstract class AuthOnboardingRoutes extends AuthSecurityRoutes {
     };
   }
 
+  @Post('password-reset/request')
+  @HttpCode(200)
+  async requestPasswordReset(
+    @Body() body: { email?: string; appId?: string; returnTo?: string },
+    @Req() request: Request,
+  ) {
+    if (typeof body.email !== 'string' || !body.email.trim()) {
+      throw new BadRequestException('Email address is required.');
+    }
+    const email = body.email.trim().toLowerCase();
+    if (email.length > 254 || !isEmail(email)) {
+      throw new BadRequestException('Enter a valid email address.');
+    }
+
+    const requestedAppId = body.appId?.trim().toLowerCase();
+    if (
+      requestedAppId &&
+      !this.appsService.resolveId(requestedAppId) &&
+      requestedAppId !== 'infinity'
+    ) {
+      throw new BadRequestException('Unknown application for password reset.');
+    }
+
+    await this.enforceAuthRateLimit(email, request.ip || 'unknown', 5);
+
+    let response: globalThis.Response;
+    try {
+      response = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${encodeURIComponent(this.getFirebaseWebApiKey())}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requestType: 'PASSWORD_RESET',
+            email,
+          }),
+        },
+      );
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'password_reset_request_failed',
+          emailHash: hashForAudit(email),
+          reason: error instanceof Error ? error.message : 'upstream_unavailable',
+        }),
+      );
+      throw new BadGatewayException('Unable to send a password reset email right now.');
+    }
+
+    if (!response.ok) {
+      const result = (await response.json().catch(() => ({}))) as {
+        error?: { message?: string; status?: string };
+      };
+      const errorCode = result.error?.message || result.error?.status || '';
+      if (response.status === 400) {
+        this.logger.warn(
+          JSON.stringify({
+            event: 'password_reset_request_not_accepted',
+            upstreamErrorCode: /^[A-Z0-9_]+$/.test(errorCode) ? errorCode : null,
+            emailHash: hashForAudit(email),
+          }),
+        );
+        return {
+          success: true,
+          message: 'If an account exists for this email, a reset email is on its way.',
+        };
+      }
+
+      this.logger.error(
+        JSON.stringify({
+          event: 'password_reset_request_failed',
+          upstreamStatus: response.status,
+          upstreamErrorCode: /^[A-Z0-9_]+$/.test(errorCode) ? errorCode : null,
+          emailHash: hashForAudit(email),
+        }),
+      );
+      if (response.status === 429) {
+        throw new HttpException(
+          'Too many password reset requests. Please try again later.',
+          429,
+        );
+      }
+      throw new BadGatewayException('Unable to send a password reset email right now.');
+    }
+
+    return {
+      success: true,
+      message: 'If an account exists for this email, a reset email is on its way.',
+    };
+  }
+
   @Post('email-verification/verify')
   @HttpCode(200)
   async verifyEmailVerificationCode(

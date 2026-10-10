@@ -518,7 +518,25 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
         emailHash: hashForAudit(user.email),
       }),
     );
-    return { deleted: true };
+    let confirmationEmailSent = false;
+    try {
+      await this.resendService.sendAccountDeletionConfirmation({
+        email: user.email,
+        userName: authUser.displayName || user.email.split('@')[0],
+        deletedAt: new Date(),
+      });
+      confirmationEmailSent = true;
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'account_deletion_confirmation_failed',
+          uidHash: hashForAudit(user.uid),
+          emailHash: hashForAudit(user.email),
+          errorName: error instanceof Error ? error.name : 'unknown',
+        }),
+      );
+    }
+    return { deleted: true, confirmationEmailSent };
   }
 
   private async clearAccountDeletionDocuments(uid: string) {

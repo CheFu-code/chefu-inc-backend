@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { assertResendConfigured } from "../../common/env";
-import { AccountEmailVerificationData, ApiKeyCompromisedNotificationData, EmailVerificationData, PasskeyAddedNotificationData, PasswordChangedNotificationData, SignInNotificationData, SignupWelcomeData } from "./resend.types";
+import { AccountDeletionConfirmationData, AccountEmailVerificationData, ApiKeyCompromisedNotificationData, EmailVerificationData, PasskeyAddedNotificationData, PasswordChangedNotificationData, SignInNotificationData, SignupWelcomeData } from "./resend.types";
 
 
 
@@ -12,10 +12,10 @@ export class ResendService {
     private readonly passkeyAddedTemplateId = "new-passkey-added"
     private readonly signInTemplateId = "sign-in-alert"
     private readonly passwordChangedTemplateId = "password-reset-notification"
-    private readonly apiKeyCompromisedTemplateId ="api-key-revoked"
+    private readonly apiKeyCompromisedTemplateId = "api-key-revoked"
     private readonly emailVerificationTemplateId = "email-verification"
     private readonly signupEmailTemplateId = "welcome-email-1"
-    private readonly accountEmailVerificationTemplateId ="email-verification"
+    private readonly accountEmailVerificationTemplateId = "email-verification"
     private readonly fromAddress =
         this.normalizeFromAddress(
             "Security <security@chefu.co.za>",
@@ -290,48 +290,98 @@ export class ResendService {
     }
 
     async sendAccountEmailVerification(data: AccountEmailVerificationData): Promise<void> {
-            const apiKey = this.getApiKey();
-            const userName = data.userName || data.email.split("@")[0] || "there";
-            const year = new Date().getUTCFullYear().toString();
-            const response = await fetch(this.RESEND_API_URL, {
-                method: "POST",
-                headers: {
-                    Authorization: `Bearer ${apiKey}`,
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    from: "Chefu Technologies <notifications@chefu.co.za>",
-                    to: [data.email],
-                    subject: "Verify your Chefu account email",
-                    template: {
-                        id: this.accountEmailVerificationTemplateId,
-                        variables: {
-                            USER_NAME: userName,
-                            EMAIL: data.email,
-                            VERIFICATION_URL: data.verificationUrl,
-                            YEAR: year,
-                            userName,
-                            email: data.email,
-                            verificationUrl: data.verificationUrl,
-                            year,
-                        },
+        const apiKey = this.getApiKey();
+        const userName = data.userName || data.email.split("@")[0] || "there";
+        const year = new Date().getUTCFullYear().toString();
+        const response = await fetch(this.RESEND_API_URL, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                from: "Chefu Technologies <notifications@chefu.co.za>",
+                to: [data.email],
+                subject: "Verify your Chefu Technologies account email",
+                template: {
+                    id: this.accountEmailVerificationTemplateId,
+                    variables: {
+                        USER_NAME: userName,
+                        EMAIL: data.email,
+                        VERIFICATION_URL: data.verificationUrl,
+                        YEAR: year,
+                        userName,
+                        email: data.email,
+                        verificationUrl: data.verificationUrl,
+                        year,
                     },
-                }),
-            });
+                },
+            }),
+        });
 
-            if (!response.ok) {
-                const error = await response.text();
-                throw new Error(`Resend request failed: ${response.status} ${error}`);
-            }
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`Resend request failed: ${response.status} ${error}`);
+        }
 
-            this.logger.log(
-                JSON.stringify({
-                    event: "account_email_verification_sent",
-                    email: data.email,
-                    templateId: this.accountEmailVerificationTemplateId,
-                    ...this.getDeliveryDiagnostics(apiKey),
-                }),
-            );
+        this.logger.log(
+            JSON.stringify({
+                event: "account_email_verification_sent",
+                email: data.email,
+                templateId: this.accountEmailVerificationTemplateId,
+                ...this.getDeliveryDiagnostics(apiKey),
+            }),
+        );
+    }
+
+    async sendAccountDeletionConfirmation(
+        data: AccountDeletionConfirmationData,
+    ): Promise<void> {
+        const templateId = "account-deletion-confirmation"
+        if (!templateId) {
+            throw new Error("RESEND_ACCOUNT_DELETION_TEMPLATE_ID is not configured.");
+        }
+
+        const apiKey = this.getApiKey();
+        const userName = data.userName || data.email.split("@")[0] || "there";
+        const supportEmail = "support@chefu.co.za";
+        const year = new Date().getUTCFullYear().toString();
+        const response = await fetch(this.RESEND_API_URL, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                from: "Chefu Technologies <notifications@chefu.co.za>",
+                to: [data.email],
+                subject: "Your Chefu Technologies account has been deleted",
+                template: {
+                    id: templateId,
+                    variables: {
+                        USER_NAME: userName,
+                        ACCOUNT_EMAIL: data.email,
+                        DELETION_DATE: (data.deletedAt || new Date()).toISOString().slice(0, 10),
+                        SUPPORT_EMAIL: supportEmail,
+                        YEAR: year,
+                    },
+                },
+            }),
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`Resend request failed: ${response.status} ${error}`);
+        }
+
+        this.logger.log(
+            JSON.stringify({
+                event: "account_deletion_confirmation_sent",
+                emailHash: createHash("sha256").update(data.email.toLowerCase()).digest("hex"),
+                templateId,
+                ...this.getDeliveryDiagnostics(apiKey),
+            }),
+        );
     }
 
     private getDeliveryDiagnostics(apiKey: string) {
