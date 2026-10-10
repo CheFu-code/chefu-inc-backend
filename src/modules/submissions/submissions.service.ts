@@ -11,6 +11,8 @@ const ALLOWED_CV_TYPES = new Set([
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ]);
+const CAREERS_TERMS_VERSION = '2026-10-10';
+const CAREERS_PRIVACY_NOTICE_VERSION = '2026-10-10';
 
 @Injectable()
 export class SubmissionsService {
@@ -38,7 +40,15 @@ export class SubmissionsService {
 
   async submitCareer(input: Record<string, unknown>) {
     if (this.string(input.website, 200)) throw new BadRequestException('Submission rejected.');
-    if (input.acceptTerms !== true) throw new BadRequestException('Consent is required.');
+    if (input.termsAccepted !== true || input.termsVersion !== CAREERS_TERMS_VERSION) {
+      throw new BadRequestException('Agreement to the current Terms is required.');
+    }
+    if (
+      input.privacyNoticeAcknowledged !== true ||
+      input.privacyNoticeVersion !== CAREERS_PRIVACY_NOTICE_VERSION
+    ) {
+      throw new BadRequestException('Acknowledgement of the current applicant privacy notice is required.');
+    }
 
     const fullName = this.requiredString(input.fullName, 'Full name', 120);
     const email = this.email(input.email);
@@ -71,8 +81,10 @@ export class SubmissionsService {
       hoursPerWeek: this.requiredString(input.hoursPerWeek, 'Hours per week', 40),
       status: 'submitted',
       confirmationEmailStatus: 'pending',
-      consentGiven: true,
-      consentCapturedAt: FieldValue.serverTimestamp(),
+      termsVersion: CAREERS_TERMS_VERSION,
+      termsAcceptedAt: FieldValue.serverTimestamp(),
+      privacyNoticeVersion: CAREERS_PRIVACY_NOTICE_VERSION,
+      privacyNoticeAcknowledgedAt: FieldValue.serverTimestamp(),
       retentionExpiresAt,
       createdAt: FieldValue.serverTimestamp(),
     };

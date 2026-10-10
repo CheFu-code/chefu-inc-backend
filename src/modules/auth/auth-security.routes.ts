@@ -76,6 +76,12 @@ import { FirebaseDecodedToken, ProfileUpdateBody,AcademyProfileUpdate,ProfilePic
 import { TRUSTED_DEVICE_COOKIE_NAME, TRUSTED_DEVICE_CHALLENGE_COOKIE_NAME, TRUSTED_DEVICE_TTL_MS, TRUSTED_DEVICE_CHALLENGE_TTL_MS, TRUSTED_DEVICE_CODE_MAX_ATTEMPTS } from './auth.controller.base';
 import { AuthSessionRoutes } from './auth-session.routes';
 
+const ACCOUNT_DELETION_CODE_TTL_MS = 10 * 60_000;
+const ACCOUNT_DELETION_PROOF_TTL_MS = 20 * 60_000;
+const ACCOUNT_DELETION_SEND_COOLDOWNS_MS = [0, 60_000, 150_000, 300_000];
+const ACCOUNT_DELETION_MAX_EMAILS_PER_DAY = 4;
+const ACCOUNT_DELETION_CHALLENGE_COOKIE_NAME = 'chefu_account_deletion_challenge';
+
 export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
   @Get('security')
   @UseGuards(AuthGuard)
@@ -172,6 +178,378 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
       }
     }
     return { revoked: selected.length };
+  }
+
+  @Post('account-deletion/email-challenge')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async sendAccountDeletionEmailCode(
+    @Req() request: Request & { user?: AuthenticatedUser; cookies?: Record<string, string> },
+    @Res({ passthrough: true }) response: Response,
+    @Body() body: { reauthToken?: string; acknowledged?: boolean },
+  ) {
+    const user = request.user;
+    if (!user?.uid || !user.email) throw new UnauthorizedException('Authentication required.');
+    if (body.acknowledged !== true) {
+      throw new BadRequestException('Acknowledge the account deletion consequences first.');
+    }
+
+    const authUser = await this.firebaseAdmin.auth().getUser(user.uid);
+    if ((authUser.multiFactor?.enrolledFactors.length || 0) > 0) {
+      throw new ForbiddenException('Use your authenticator code to confirm account deletion.');
+    }
+
+    let verifiedReauthTokenHash = '';
+    if (body.reauthToken) {
+      const reauth = await this.getReauthenticationSession(body.reauthToken, user.uid);
+      const decoded = await this.firebaseAdmin.auth().verifyIdToken(reauth.idToken, true);
+      if (
+        decoded.uid !== user.uid ||
+        decoded.email?.toLowerCase() !== user.email.toLowerCase()
+      ) {
+        throw new UnauthorizedException('Confirm your sign-in again before deleting your account.');
+      }
+      verifiedReauthTokenHash = createHash('sha256')
+        .update(body.reauthToken)
+        .digest('hex');
+    }
+
+    await this.enforceAuthRateLimit(
+      user.email,
+      this.getClientIp(request) || 'unknown',
+      5,
+    );
+
+    const now = Date.now();
+    const code = String(randomInt(100000, 1000000));
+    const existingChallengeToken = request.cookies?.[ACCOUNT_DELETION_CHALLENGE_COOKIE_NAME];
+    const generatedChallengeToken =
+      typeof existingChallengeToken === 'string' && existingChallengeToken.length >= 32
+        ? existingChallengeToken
+        : randomBytes(32).toString('base64url');
+    const generatedChallengeTokenHash = createHash('sha256')
+      .update(generatedChallengeToken)
+      .digest('hex');
+    const db = this.firebaseAdmin.db();
+    const challengeRef = db.collection('auth_account_deletion_challenges').doc(user.uid);
+    const sendLimitRef = db.collection('auth_account_deletion_send_limits').doc(user.uid);
+
+    const sendResult = await db.runTransaction(async transaction => {
+      const challengeSnapshot = await transaction.get(challengeRef);
+      const limitSnapshot = await transaction.get(sendLimitRef);
+      const currentChallenge = challengeSnapshot.data() as {
+        challengeTokenHash?: string;
+        emailHash?: string;
+        passwordVerifiedAt?: number;
+        proofExpiresAt?: Timestamp;
+      } | undefined;
+      const passwordVerifiedAt = Number(currentChallenge?.passwordVerifiedAt);
+      const hasActiveProof =
+        typeof existingChallengeToken === 'string' &&
+        existingChallengeToken.length >= 32 &&
+        currentChallenge?.challengeTokenHash === generatedChallengeTokenHash &&
+        currentChallenge.emailHash === hashForAudit(user.email) &&
+        Number.isFinite(passwordVerifiedAt) &&
+        now - passwordVerifiedAt <= ACCOUNT_DELETION_PROOF_TTL_MS &&
+        this.timestampToMillis(currentChallenge.proofExpiresAt) > now;
+      if (!hasActiveProof && !verifiedReauthTokenHash) {
+        throw new UnauthorizedException('Confirm your password again before requesting a code.');
+      }
+      const proofExpiresAt = hasActiveProof
+        ? currentChallenge?.proofExpiresAt
+        : Timestamp.fromMillis(now + ACCOUNT_DELETION_PROOF_TTL_MS);
+      const verifiedAt = hasActiveProof
+        ? currentChallenge?.passwordVerifiedAt
+        : now;
+      const limit = limitSnapshot.data() as { sentAtMs?: number[] } | undefined;
+      const recentSends = (Array.isArray(limit?.sentAtMs) ? limit.sentAtMs : [])
+        .filter(sentAt => Number.isFinite(sentAt) && sentAt > now - 24 * 60 * 60_000)
+        .sort((left, right) => left - right);
+      if (recentSends.length >= ACCOUNT_DELETION_MAX_EMAILS_PER_DAY) {
+        const retryAfterSeconds = Math.max(
+          1,
+          Math.ceil((recentSends[0] + 24 * 60 * 60_000 - now) / 1000),
+        );
+        throw new HttpException(
+          {
+            statusCode: 429,
+            message: 'Daily account-deletion code limit reached. Please try again later.',
+            retryAfterSeconds,
+            resendsRemaining: 0,
+          },
+          429,
+        );
+      }
+
+      const requiredCooldownMs = ACCOUNT_DELETION_SEND_COOLDOWNS_MS[recentSends.length];
+      const retryAfterMs = recentSends.length
+        ? recentSends[recentSends.length - 1] + requiredCooldownMs - now
+        : 0;
+      if (retryAfterMs > 0) {
+        throw new HttpException(
+          {
+            statusCode: 429,
+            message: 'Please wait before requesting another account-deletion code.',
+            retryAfterSeconds: Math.ceil(retryAfterMs / 1000),
+            resendsRemaining: Math.max(0, 3 - Math.max(0, recentSends.length - 1)),
+          },
+          429,
+        );
+      }
+
+      transaction.set(challengeRef, {
+        uid: user.uid,
+        codeHash: this.trustedDeviceCodeHash(user.uid, code),
+        challengeTokenHash: generatedChallengeTokenHash,
+        passwordVerifiedAt: verifiedAt,
+        emailHash: hashForAudit(user.email),
+        proofExpiresAt,
+        attempts: 0,
+        expiresAt: Timestamp.fromMillis(now + ACCOUNT_DELETION_CODE_TTL_MS),
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      const updatedSends = [...recentSends, now];
+      transaction.set(sendLimitRef, {
+        sentAtMs: updatedSends,
+        expiresAt: Timestamp.fromMillis(now + 24 * 60 * 60_000),
+      });
+      return {
+        cooldownSeconds:
+          ACCOUNT_DELETION_SEND_COOLDOWNS_MS[updatedSends.length] === undefined
+            ? 0
+            : ACCOUNT_DELETION_SEND_COOLDOWNS_MS[updatedSends.length] / 1000,
+        resendsRemaining: Math.max(0, 3 - Math.max(0, updatedSends.length - 1)),
+      };
+    });
+
+    await this.resendService.sendEmailVerification({
+      email: user.email,
+      userName: authUser.displayName || '',
+      code,
+      expiresIn: '10 minutes',
+      appName: 'CheFu account deletion',
+    });
+    response.cookie(ACCOUNT_DELETION_CHALLENGE_COOKIE_NAME, generatedChallengeToken, {
+      ...this.getCookieOptions(),
+      maxAge: ACCOUNT_DELETION_PROOF_TTL_MS,
+    });
+    return { sent: true, expiresInSeconds: ACCOUNT_DELETION_CODE_TTL_MS / 1000, ...sendResult };
+  }
+
+  @Delete('account')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async deleteSharedAccount(
+    @Req() request: Request & { user?: AuthenticatedUser; cookies?: Record<string, string> },
+    @Res({ passthrough: true }) response: Response,
+    @Body()
+    body: {
+      reauthToken?: string;
+      emailCode?: string;
+      acknowledged?: boolean;
+    },
+  ) {
+    const user = request.user;
+    if (!user?.uid || !user.email) throw new UnauthorizedException('Authentication required.');
+    if (body.acknowledged !== true) {
+      throw new BadRequestException('Acknowledge the account deletion consequences first.');
+    }
+
+    const authUser = await this.firebaseAdmin.auth().getUser(user.uid);
+    const hasMfa = (authUser.multiFactor?.enrolledFactors.length || 0) > 0;
+    if (hasMfa) {
+      const reauth = await this.getReauthenticationSession(body.reauthToken, user.uid);
+      const decoded = await this.firebaseAdmin.auth().verifyIdToken(reauth.idToken, true);
+      if (
+        decoded.uid !== user.uid ||
+        decoded.email?.toLowerCase() !== user.email.toLowerCase()
+      ) {
+        throw new UnauthorizedException('Confirm your sign-in again before deleting your account.');
+      }
+      if (decoded.firebase?.sign_in_second_factor !== 'totp') {
+        throw new UnauthorizedException('Complete authenticator verification before deleting your account.');
+      }
+    } else {
+      const code = String(body.emailCode || '').trim();
+      if (!/^\d{6}$/.test(code)) {
+        throw new BadRequestException('Enter the 6-digit email code to delete your account.');
+      }
+      const challengeRef = this.firebaseAdmin.db()
+        .collection('auth_account_deletion_challenges')
+        .doc(user.uid);
+      const challengeToken = request.cookies?.[ACCOUNT_DELETION_CHALLENGE_COOKIE_NAME];
+      if (typeof challengeToken !== 'string' || challengeToken.length < 32) {
+        throw new UnauthorizedException('Request a new account-deletion code and try again.');
+      }
+      const challengeTokenHash = createHash('sha256').update(challengeToken).digest('hex');
+      const suppliedCodeHash = this.trustedDeviceCodeHash(user.uid, code);
+      const accepted = await this.firebaseAdmin.db().runTransaction(async transaction => {
+        const snapshot = await transaction.get(challengeRef);
+        const challenge = snapshot.data() as {
+          uid?: string;
+          codeHash?: string;
+          challengeTokenHash?: string;
+          emailHash?: string;
+          passwordVerifiedAt?: number;
+          proofExpiresAt?: Timestamp;
+          attempts?: number;
+          expiresAt?: Timestamp;
+        } | undefined;
+        if (
+          !snapshot.exists ||
+          challenge?.uid !== user.uid ||
+          challenge.challengeTokenHash !== challengeTokenHash ||
+          challenge.emailHash !== hashForAudit(user.email) ||
+          !Number.isFinite(challenge.passwordVerifiedAt) ||
+          Date.now() - Number(challenge.passwordVerifiedAt) > ACCOUNT_DELETION_PROOF_TTL_MS ||
+          this.timestampToMillis(challenge.proofExpiresAt) <= Date.now() ||
+          this.timestampToMillis(challenge.expiresAt) <= Date.now() ||
+          Number(challenge.attempts || 0) >= TRUSTED_DEVICE_CODE_MAX_ATTEMPTS
+        ) {
+          throw new BadRequestException('This code expired. Request a new one.');
+        }
+        const expected = Buffer.from(challenge.codeHash || '');
+        const supplied = Buffer.from(suppliedCodeHash);
+        const matches =
+          expected.length === supplied.length && timingSafeEqual(expected, supplied);
+        if (!matches) {
+          transaction.update(challengeRef, {
+            attempts: FieldValue.increment(1),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          return false;
+        }
+        transaction.delete(challengeRef);
+        return true;
+      });
+      if (!accepted) throw new UnauthorizedException('The email code is incorrect.');
+    }
+
+    const db = this.firebaseAdmin.db();
+    await this.firebaseAdmin.auth().revokeRefreshTokens(user.uid);
+    await this.securityEvents.publishSubjectRevocation({
+      actor: user.uid,
+      email: user.email,
+      reason: 'account_deletion',
+      uid: user.uid,
+    });
+    await this.firebaseAdmin.auth().deleteUser(user.uid);
+
+    try {
+      await Promise.all([
+        this.clearAccountDeletionDocuments(user.uid),
+        db.collection('users').doc(user.email.toLowerCase()).set(
+          {
+            accountStatus: 'deleted',
+            accountDeletedAt: FieldValue.serverTimestamp(),
+            roles: [],
+            uid: FieldValue.delete(),
+            email: FieldValue.delete(),
+            fullname: FieldValue.delete(),
+            firstName: FieldValue.delete(),
+            lastName: FieldValue.delete(),
+            phone: FieldValue.delete(),
+            website: FieldValue.delete(),
+            location: FieldValue.delete(),
+            profilePicture: FieldValue.delete(),
+            avatarUrl: FieldValue.delete(),
+            profilePictureSource: FieldValue.delete(),
+            profilePictureUpdatedAt: FieldValue.delete(),
+            bio: FieldValue.delete(),
+            country: FieldValue.delete(),
+            countryCode: FieldValue.delete(),
+            countryName: FieldValue.delete(),
+            addressStreet: FieldValue.delete(),
+            addressCity: FieldValue.delete(),
+            addressPostalCode: FieldValue.delete(),
+            storeName: FieldValue.delete(),
+            storeDescription: FieldValue.delete(),
+            detectedCountryCode: FieldValue.delete(),
+            detectedCountrySource: FieldValue.delete(),
+            detectedCountryUpdatedAt: FieldValue.delete(),
+            lastLoginAt: FieldValue.delete(),
+            language: FieldValue.delete(),
+            learningGoal: FieldValue.delete(),
+            skillLevel: FieldValue.delete(),
+            learningInterests: FieldValue.delete(),
+            weeklyLearningGoal: FieldValue.delete(),
+            lessonStyle: FieldValue.delete(),
+            defaultCourseDifficulty: FieldValue.delete(),
+            preferredContentFormat: FieldValue.delete(),
+            aiTutorSuggestions: FieldValue.delete(),
+            privacy: FieldValue.delete(),
+            onboardingComplete: FieldValue.delete(),
+            appGuideComplete: FieldValue.delete(),
+            emailPreferences: FieldValue.delete(),
+            apps: FieldValue.delete(),
+            mfaBackupCodes: FieldValue.delete(),
+            securityEmailsEnabled: FieldValue.delete(),
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          { merge: true },
+        ),
+      ]);
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'account_deletion_cleanup_failed',
+          uidHash: hashForAudit(user.uid),
+          emailHash: hashForAudit(user.email),
+          reason: error instanceof Error ? error.message : 'unknown',
+        }),
+        error instanceof Error ? error.stack : undefined,
+      );
+      throw new InternalServerErrorException(
+        'Your shared sign-in was deleted, but some account security data could not be cleared. Contact support.',
+      );
+    }
+
+    for (const options of this.getClearCookieOptionsList()) {
+      response.clearCookie(SESSION_COOKIE_NAME, options);
+      response.clearCookie(SESSION_META_COOKIE_NAME, options);
+      response.clearCookie(TRUSTED_DEVICE_COOKIE_NAME, options);
+      response.clearCookie(TRUSTED_DEVICE_CHALLENGE_COOKIE_NAME, options);
+      response.clearCookie(ACCOUNT_DELETION_CHALLENGE_COOKIE_NAME, options);
+    }
+    this.logger.warn(
+      JSON.stringify({
+        event: 'shared_account_deleted',
+        uidHash: hashForAudit(user.uid),
+        emailHash: hashForAudit(user.email),
+      }),
+    );
+    return { deleted: true };
+  }
+
+  private async clearAccountDeletionDocuments(uid: string) {
+    const db = this.firebaseAdmin.db();
+    const [
+      trustedDevices,
+      passkeys,
+      reauthenticationSessions,
+    ] = await Promise.all([
+      db.collection('auth_trusted_devices').where('uid', '==', uid).get(),
+      db.collection('passkey_credentials').where('uid', '==', uid).get(),
+      db.collection('auth_reauthentication_sessions').where('uid', '==', uid).get(),
+    ]);
+    const documents = [
+      ...trustedDevices.docs,
+      ...passkeys.docs,
+      ...reauthenticationSessions.docs,
+    ];
+    for (let offset = 0; offset < documents.length; offset += 400) {
+      const batch = db.batch();
+      for (const document of documents.slice(offset, offset + 400)) {
+        batch.delete(document.ref);
+      }
+      await batch.commit();
+    }
+    await Promise.all([
+      db.collection('auth_account_deletion_challenges').doc(uid).delete(),
+      db.collection('auth_account_deletion_send_limits').doc(uid).delete(),
+      db.collection('auth_trusted_device_challenges').doc(uid).delete(),
+      db.collection('auth_trusted_device_send_limits').doc(uid).delete(),
+    ]);
   }
 
   @Post('trusted-devices/email-challenge')
