@@ -389,6 +389,25 @@ export class PasskeyService {
             'passkey_deleted',
         );
 
+        let notificationEmailSent = false;
+        try {
+            await this.resendService.sendPasskeyRemovedNotification({
+                email: credential.email,
+                device: credential.deviceName || 'Passkey',
+                removedAt: new Date(),
+            });
+            notificationEmailSent = true;
+        } catch (error) {
+            this.logger.error(
+                JSON.stringify({
+                    event: 'passkey_removed_email_delivery_failed',
+                    emailHash: hashForAudit(credential.email),
+                    uidHash: hashForAudit(uid),
+                    errorName: error instanceof Error ? error.name : 'unknown',
+                }),
+            );
+        }
+
         this.logger.log(
             JSON.stringify({
                 event: 'passkey_deleted',
@@ -397,7 +416,7 @@ export class PasskeyService {
             }),
         );
 
-        return { ok: true };
+        return { ok: true, notificationEmailSent };
     }
 
     private async credentialsForUser(uid: string) {

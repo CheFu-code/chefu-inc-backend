@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { assertResendConfigured } from "../../common/env";
-import { AccountDeletionConfirmationData, AccountEmailVerificationData, ApiKeyCompromisedNotificationData, EmailVerificationData, PasskeyAddedNotificationData, PasswordChangedNotificationData, PasswordResetEmailData, SignInNotificationData, SignupWelcomeData } from "./resend.types";
+import { AccountDeletionConfirmationData, AccountEmailVerificationData, ApiKeyCompromisedNotificationData, EmailVerificationData, PasskeyAddedNotificationData, PasskeyRemovedNotificationData, PasswordChangedNotificationData, PasswordResetEmailData, SignInNotificationData, SignupWelcomeData } from "./resend.types";
 
 
 
@@ -64,6 +64,79 @@ export class ResendService {
             JSON.stringify({
                 event: "passkey_added_notification_sent",
                 email: data.email,
+            }),
+        );
+    }
+
+    async sendPasskeyRemovedNotification(
+        data: PasskeyRemovedNotificationData,
+    ): Promise<void> {
+        const templateId = "passkey-removed"
+        if (!templateId) {
+            throw new Error("PASSKEY_REMOVED_TEMPLATE_ID is not configured.");
+        }
+
+        const apiKey = this.getApiKey();
+        const userName = data.userName || data.email.split("@")[0] || "there";
+        const device = data.device || "Passkey";
+        const removedAt = this.formatAddedAt(data.removedAt);
+        const securityUrl = data.securityUrl || this.securityUrl;
+        const supportEmail = "support@chefu.co.za";
+        const year = data.year || new Date().getUTCFullYear().toString();
+        const response = await fetch(this.RESEND_API_URL, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                from: this.resolveFromAddress(data.appId),
+                to: [data.email],
+                subject: "Security alert: Passkey removed from your account",
+                template: {
+                    id: templateId,
+                    variables: {
+                        USER_NAME: userName,
+                        EMAIL: data.email,
+                        DEVICE: device,
+                        REMOVED_AT: removedAt,
+                        SECURITY_URL: securityUrl,
+                        SUPPORT_EMAIL: supportEmail,
+                        YEAR: year,
+                    },
+                },
+            }),
+        });
+
+        if (!response.ok) {
+            this.logger.error(
+                JSON.stringify({
+                    event: "passkey_removed_email_failed",
+                    emailHash: createHash("sha256")
+                        .update(data.email.toLowerCase())
+                        .digest("hex"),
+                    templateId,
+                    statusCode: response.status,
+                    resendRequestId:
+                        response.headers.get("x-resend-id") ||
+                        response.headers.get("x-request-id") ||
+                        null,
+                }),
+            );
+            throw new Error(`Resend request failed: ${response.status}`);
+        }
+
+        this.logger.log(
+            JSON.stringify({
+                event: "passkey_removed_email_sent",
+                emailHash: createHash("sha256")
+                    .update(data.email.toLowerCase())
+                    .digest("hex"),
+                templateId,
+                resendRequestId:
+                    response.headers.get("x-resend-id") ||
+                    response.headers.get("x-request-id") ||
+                    null,
             }),
         );
     }

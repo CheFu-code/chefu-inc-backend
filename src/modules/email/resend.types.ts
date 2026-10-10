@@ -40,6 +40,17 @@ export interface PasskeyAddedNotificationData {
     appId?: string;
 }
 
+export interface PasskeyRemovedNotificationData {
+    email: string;
+    userName?: string;
+    device?: string;
+    removedAt?: Date;
+    securityUrl?: string;
+    supportEmail?: string;
+    year?: string;
+    appId?: string;
+}
+
 export interface EmailVerificationData {
     email: string;
     userName?: string;
