@@ -82,3 +82,10 @@ export interface PasswordResetEmailData {
     userName?: string;
     resetUrl: string;
 }
+
+export interface BreachedPasswordAlertData {
+    email: string;
+    userName?: string;
+    breachCount: number;
+    detectedAt?: Date;
+}

@@ -74,6 +74,10 @@ import {
 } from './device-auth';
 import { FirebaseDecodedToken, ProfileUpdateBody,AcademyProfileUpdate,ProfilePictureUpdate,SignInAlertDecision } from './auth-controller.types';
 import { AuthControllerBase, decodeJwtPayload } from './auth.controller.base';
+import {
+  findPasswordBreachCount,
+  getPasswordBreachRange,
+} from './password-breach';
 
 export abstract class AuthSessionRoutes extends AuthControllerBase {
   @Get('me')
@@ -147,6 +151,7 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       const errorBody = (await response.json().catch(() => ({}))) as {
         error?: { message?: string; status?: string };
         mfaPendingCredential?: string;
+        localId?: string;
         mfaInfo?: Array<{
           mfaEnrollmentId?: string;
           displayName?: string;
@@ -159,6 +164,9 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
         errorBody.mfaPendingCredential ||
         upstreamError === 'MFA_REQUIRED'
       ) {
+        if (errorBody.localId) {
+          void this.inspectPasswordForBreach(email, password);
+        }
         throw new HttpException(
           {
             statusCode: 409,
@@ -211,6 +219,9 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
         : null;
       const requiresMfa = Boolean(payload?.mfaPendingCredential);
       if (requiresMfa || upstreamErrorCode === 'MFA_REQUIRED') {
+        if (payload?.localId || payload?.local_id) {
+          void this.inspectPasswordForBreach(email, password);
+        }
         throw new HttpException(
           {
             statusCode: 409,
@@ -256,6 +267,7 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     const customToken = await this.firebaseAdmin.auth().createCustomToken(uid, {
       chefu_auth_provider: 'password',
     });
+    void this.inspectPasswordForBreach(payload.email || email, password);
 
     return {
       token: idToken,
@@ -268,6 +280,65 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
         email: payload.email || email,
       },
     };
+  }
+
+  private async inspectPasswordForBreach(email: string, password: string) {
+    try {
+      const { prefix, suffix } = getPasswordBreachRange(password);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5_000);
+      let response: globalThis.Response;
+      try {
+        response = await fetch(
+          `https://api.pwnedpasswords.com/range/${prefix}`,
+          {
+            headers: {
+              'Add-Padding': 'true',
+              'User-Agent': 'Chefu-Account-Password-Breach-Check',
+            },
+            signal: controller.signal,
+          },
+        );
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      if (!response.ok) {
+        throw new Error(`Password breach lookup failed with status ${response.status}.`);
+      }
+      const rangeResponse = await response.text();
+      const breachCount = findPasswordBreachCount(rangeResponse, suffix);
+      if (breachCount === 0) return;
+
+      const alertLimit = await this.runtimeLimits.reserve({
+        collection: 'password_breach_alert_limits',
+        key: email.toLowerCase(),
+        limit: 1,
+        windowMs: 24 * 60 * 60 * 1000,
+      });
+      if (alertLimit.limited) return;
+
+      await this.resendService.sendBreachedPasswordAlert({
+        email,
+        breachCount,
+        detectedAt: new Date(),
+      });
+      this.logger.warn(
+        JSON.stringify({
+          event: 'password_breach_detected',
+          emailHash: hashForAudit(email),
+          notificationSent: true,
+        }),
+      );
+    } catch (error) {
+      this.logger.error(
+        JSON.stringify({
+          event: 'password_breach_check_failed',
+          emailHash: hashForAudit(email),
+          errorName: error instanceof Error ? error.name : 'unknown',
+        }),
+      );
+    }
   }
 
   @Post('session/password')

@@ -1,7 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { assertResendConfigured } from "../../common/env";
-import { AccountDeletionConfirmationData, AccountEmailVerificationData, ApiKeyCompromisedNotificationData, EmailVerificationData, PasskeyAddedNotificationData, PasskeyRemovedNotificationData, PasswordChangedNotificationData, PasswordResetEmailData, SignInNotificationData, SignupWelcomeData } from "./resend.types";
+import { AccountDeletionConfirmationData, AccountEmailVerificationData, ApiKeyCompromisedNotificationData, BreachedPasswordAlertData, EmailVerificationData, PasskeyAddedNotificationData, PasskeyRemovedNotificationData, PasswordChangedNotificationData, PasswordResetEmailData, SignInNotificationData, SignupWelcomeData } from "./resend.types";
 
 
 
@@ -532,6 +532,73 @@ export class ResendService {
                     .digest("hex"),
                 templateId,
                 statusCode: response.status,
+                resendRequestId:
+                    response.headers.get("x-resend-id") ||
+                    response.headers.get("x-request-id") ||
+                    null,
+            }),
+        );
+    }
+
+    async sendBreachedPasswordAlert(
+        data: BreachedPasswordAlertData,
+    ): Promise<void> {
+        const templateId = "security-alert"
+        if (!templateId) {
+            throw new Error("BREACHED_PASSWORD_ALERT_TEMPLATE_ID is not configured.");
+        }
+
+        const apiKey = this.getApiKey();
+        const response = await fetch(this.RESEND_API_URL, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                from: this.fromAddress,
+                to: [data.email],
+                subject: "Urgent: Change your Chefu account password",
+                template: {
+                    id: templateId,
+                    variables: {
+                        USER_NAME: data.userName || data.email.split("@")[0] || "there",
+                        EMAIL: data.email,
+                        BREACH_COUNT: String(data.breachCount),
+                        DETECTED_AT: (data.detectedAt || new Date()).toISOString(),
+                        SECURITY_URL: this.securityUrl,
+                        SUPPORT_EMAIL: process.env.SUPPORT_EMAIL || "support@chefu.co.za",
+                        YEAR: new Date().getUTCFullYear().toString(),
+                    },
+                },
+            }),
+        });
+
+        if (!response.ok) {
+            this.logger.error(
+                JSON.stringify({
+                    event: "breached_password_alert_email_failed",
+                    emailHash: createHash("sha256")
+                        .update(data.email.toLowerCase())
+                        .digest("hex"),
+                    templateId,
+                    statusCode: response.status,
+                    resendRequestId:
+                        response.headers.get("x-resend-id") ||
+                        response.headers.get("x-request-id") ||
+                        null,
+                }),
+            );
+            throw new Error(`Resend request failed: ${response.status}`);
+        }
+
+        this.logger.warn(
+            JSON.stringify({
+                event: "breached_password_alert_email_sent",
+                emailHash: createHash("sha256")
+                    .update(data.email.toLowerCase())
+                    .digest("hex"),
+                templateId,
                 resendRequestId:
                     response.headers.get("x-resend-id") ||
                     response.headers.get("x-request-id") ||
