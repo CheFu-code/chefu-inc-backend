@@ -84,6 +84,8 @@ export const TRUSTED_DEVICE_CHALLENGE_COOKIE_NAME = 'chefu_trusted_device_challe
 export const TRUSTED_DEVICE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 export const TRUSTED_DEVICE_CHALLENGE_TTL_MS = 10 * 60 * 1000;
 export const TRUSTED_DEVICE_CODE_MAX_ATTEMPTS = 5;
+const TRUSTED_DEVICE_EMAIL_SEND_COOLDOWNS_MS = [0, 60_000, 150_000, 300_000];
+const TRUSTED_DEVICE_EMAIL_MAX_SENDS_PER_DAY = 4;
 
 export function decodeJwtPayload(token: string) {
   const [, payload] = token.split('.');
@@ -417,14 +419,63 @@ export class AuthControllerBase {
     userName: string;
     request: Request;
     response: Response;
-  }) {
+  }): Promise<{ cooldownSeconds: number; resendsRemaining: number }> {
     const code = String(randomInt(100000, 1000000));
     const challengeToken = randomBytes(32).toString('base64url');
-    const expiresAt = Timestamp.fromMillis(Date.now() + TRUSTED_DEVICE_CHALLENGE_TTL_MS);
-    await this.firebaseAdmin.db()
+    const now = Date.now();
+    const expiresAt = Timestamp.fromMillis(now + TRUSTED_DEVICE_CHALLENGE_TTL_MS);
+    const db = this.firebaseAdmin.db();
+    const challengeRef = db
       .collection('auth_trusted_device_challenges')
-      .doc(uid)
-      .set({
+      .doc(uid);
+    const sendLimitRef = db
+      .collection('auth_trusted_device_send_limits')
+      .doc(uid);
+    const sendResult = await db.runTransaction(async transaction => {
+      const snapshot = await transaction.get(sendLimitRef);
+      const limit = snapshot.data() as { sentAtMs?: number[] } | undefined;
+      const recentSends = (Array.isArray(limit?.sentAtMs) ? limit.sentAtMs : [])
+        .filter(sentAt => Number.isFinite(sentAt) && sentAt > now - 24 * 60 * 60_000)
+        .sort((left, right) => left - right);
+      if (recentSends.length >= TRUSTED_DEVICE_EMAIL_MAX_SENDS_PER_DAY) {
+        const retryAfterSeconds = Math.max(
+          1,
+          Math.ceil((recentSends[0] + 24 * 60 * 60_000 - now) / 1000),
+        );
+        throw new HttpException(
+          {
+            statusCode: 429,
+            message: 'Daily trusted-device email limit reached. Please try again later.',
+            retryAfterSeconds,
+            resendsRemaining: 0,
+          },
+          429,
+        );
+      }
+
+      const requiredCooldownMs =
+        TRUSTED_DEVICE_EMAIL_SEND_COOLDOWNS_MS[recentSends.length];
+      const retryAfterMs = recentSends.length
+        ? recentSends[recentSends.length - 1] + requiredCooldownMs - now
+        : 0;
+      if (retryAfterMs > 0) {
+        throw new HttpException(
+          {
+            statusCode: 429,
+            message: 'Please wait before requesting another trusted-device code.',
+            retryAfterSeconds: Math.ceil(retryAfterMs / 1000),
+            resendsRemaining: Math.max(0, 3 - Math.max(0, recentSends.length - 1)),
+          },
+          429,
+        );
+      }
+
+      const updatedSends = [...recentSends, now];
+      transaction.set(sendLimitRef, {
+        sentAtMs: updatedSends,
+        expiresAt: Timestamp.fromMillis(now + 24 * 60 * 60_000),
+      });
+      transaction.set(challengeRef, {
         uid,
         codeHash: this.trustedDeviceCodeHash(uid, code),
         challengeTokenHash: createHash('sha256').update(challengeToken).digest('hex'),
@@ -434,6 +485,14 @@ export class AuthControllerBase {
         userAgentHash: this.hashValue(request.headers['user-agent'] || 'unknown'),
         createdAt: FieldValue.serverTimestamp(),
       });
+      return {
+        cooldownSeconds:
+          TRUSTED_DEVICE_EMAIL_SEND_COOLDOWNS_MS[updatedSends.length] === undefined
+            ? 0
+            : TRUSTED_DEVICE_EMAIL_SEND_COOLDOWNS_MS[updatedSends.length] / 1000,
+        resendsRemaining: Math.max(0, 3 - Math.max(0, updatedSends.length - 1)),
+      };
+    });
     await this.resendService.sendEmailVerification({
       email,
       userName,
@@ -445,6 +504,7 @@ export class AuthControllerBase {
       ...this.getCookieOptions(),
       maxAge: TRUSTED_DEVICE_CHALLENGE_TTL_MS,
     });
+    return sendResult;
   }
 
   protected trustedDeviceCodeHash(uid: string, code: string) {

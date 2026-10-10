@@ -515,6 +515,8 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     const isSignupSession = signupSession || signupAlertSuppressed;
     const wasTrustedDevice = await this.isTrustedAuthDevice(decodedToken.uid, request);
     let trustDeviceVerificationRequired = false;
+    let trustDeviceResendCooldownSeconds = 0;
+    let trustDeviceResendsRemaining = 0;
     let trustDeviceRequiresAuthenticator = false;
     if (
       decodedToken.email &&
@@ -529,14 +531,31 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       ) {
         trustDeviceRequiresAuthenticator = true;
       } else if (!signupSession && !mfaEnabled) {
-        await this.issueTrustedDeviceEmailChallenge({
-          uid: decodedToken.uid,
-          email: decodedToken.email,
-          userName: authUser.displayName || decodedToken.name || '',
-          request,
-          response,
-        });
         trustDeviceVerificationRequired = true;
+        try {
+          const sendResult = await this.issueTrustedDeviceEmailChallenge({
+            uid: decodedToken.uid,
+            email: decodedToken.email,
+            userName: authUser.displayName || decodedToken.name || '',
+            request,
+            response,
+          });
+          trustDeviceResendCooldownSeconds = sendResult.cooldownSeconds;
+          trustDeviceResendsRemaining = sendResult.resendsRemaining;
+        } catch (error) {
+          if (!(error instanceof HttpException) || error.getStatus() !== 429) {
+            throw error;
+          }
+          const limit = error.getResponse();
+          if (typeof limit === 'object' && limit !== null) {
+            const retryAfterSeconds = Reflect.get(limit, 'retryAfterSeconds');
+            const resendsRemaining = Reflect.get(limit, 'resendsRemaining');
+            trustDeviceResendCooldownSeconds =
+              typeof retryAfterSeconds === 'number' ? retryAfterSeconds : 0;
+            trustDeviceResendsRemaining =
+              typeof resendsRemaining === 'number' ? resendsRemaining : 0;
+          }
+        }
       } else {
         await this.rememberTrustedAuthDevice({
           uid: decodedToken.uid,
@@ -601,6 +620,8 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       ok: true,
       app: sessionAppId,
       trustDeviceVerificationRequired,
+      trustDeviceResendCooldownSeconds,
+      trustDeviceResendsRemaining,
       trustDeviceRequiresAuthenticator,
     };
   }

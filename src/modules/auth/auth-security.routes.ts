@@ -136,10 +136,11 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
   async revokeTrustedDevices(
     @Req() request: Request & { user?: AuthenticatedUser },
     @Res({ passthrough: true }) response: Response,
-    @Body() body: { deviceId?: string; all?: boolean },
+    @Body() body: { deviceId?: string; all?: boolean; reauthToken?: string },
   ) {
     const uid = request.user?.uid;
     if (!uid) throw new UnauthorizedException('Authentication required.');
+    await this.getReauthenticationSession(body.reauthToken, uid);
     const collection = this.firebaseAdmin.db().collection('auth_trusted_devices');
     const snapshot = await collection.where('uid', '==', uid).get();
     const selected = body.all
@@ -194,14 +195,18 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
       this.getClientIp(request) || 'unknown',
       3,
     );
-    await this.issueTrustedDeviceEmailChallenge({
+    const sendResult = await this.issueTrustedDeviceEmailChallenge({
       uid: user.uid,
       email: user.email,
       userName: authUser.displayName || '',
       request,
       response,
     });
-    return { sent: true, expiresInSeconds: TRUSTED_DEVICE_CHALLENGE_TTL_MS / 1000 };
+    return {
+      sent: true,
+      expiresInSeconds: TRUSTED_DEVICE_CHALLENGE_TTL_MS / 1000,
+      ...sendResult,
+    };
   }
 
   @Post('trusted-devices/email-verify')
@@ -304,14 +309,18 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
     if ((authUser.multiFactor?.enrolledFactors.length || 0) > 0) {
       throw new ForbiddenException('Use your authenticator app to trust a device.');
     }
-    await this.issueTrustedDeviceEmailChallenge({
+    const sendResult = await this.issueTrustedDeviceEmailChallenge({
       uid: user.uid,
       email: user.email,
       userName: authUser.displayName || '',
       request,
       response,
     });
-    return { sent: true, expiresInSeconds: TRUSTED_DEVICE_CHALLENGE_TTL_MS / 1000 };
+    return {
+      sent: true,
+      expiresInSeconds: TRUSTED_DEVICE_CHALLENGE_TTL_MS / 1000,
+      ...sendResult,
+    };
   }
 
   @Post('security/reauthenticate')
