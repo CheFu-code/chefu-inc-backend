@@ -116,6 +116,24 @@ export class CoursesService {
         return { success: true };
     }
 
+    async clearProgress(user: AuthenticatedUser) {
+        const snapshot = await this.firebaseAdmin
+            .db()
+            .collection('course')
+            .where('createdBy', '==', user.email)
+            .get();
+
+        for (let offset = 0; offset < snapshot.docs.length; offset += 500) {
+            const batch = this.firebaseAdmin.db().batch();
+            for (const course of snapshot.docs.slice(offset, offset + 500)) {
+                batch.update(course.ref, { completedChapter: [] });
+            }
+            await batch.commit();
+        }
+
+        return { success: true, updated: snapshot.size };
+    }
+
     async generateCoursePdf(user: AuthenticatedUser, courseId: string) {
         this.acquirePdfSlot();
 
@@ -732,4 +750,3 @@ export class CoursesService {
             .replace(/\n/g, '<br />');
     }
 }
-

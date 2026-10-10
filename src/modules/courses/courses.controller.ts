@@ -47,6 +47,11 @@ export class CoursesController {
     );
   }
 
+  @Post('my/progress/reset')
+  clearProgress(@Req() request: CourseRequest) {
+    return this.coursesService.clearProgress(this.requireUser(request));
+  }
+
   @Patch(':courseId/resume')
   saveResume(
     @Req() request: CourseRequest,
