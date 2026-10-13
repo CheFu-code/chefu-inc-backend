@@ -5,12 +5,12 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { createHash, randomUUID } from 'node:crypto';
-import { UploadApiOptions, v2 as cloudinary } from 'cloudinary';
+import { v2 as cloudinary } from 'cloudinary';
 import { FieldValue } from 'firebase-admin/firestore';
+import { createHash, randomUUID } from 'node:crypto';
 import sanitizeHtml from 'sanitize-html';
-import { assertCloudinaryConfigured } from '../../common/env';
 import { CloudinaryStorageService } from '../../common/cloudinary-storage.service';
+import { assertCloudinaryConfigured } from '../../common/env';
 import { RuntimeLimitService } from '../../common/runtime-limit.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -18,42 +18,15 @@ import {
   CloudenceFileDocument,
   CloudenceFileResponse,
   CloudenceFileType,
-  UpdateCloudenceFileInput,
-  UploadCloudenceFileInput,
+  UpdateCloudenceFileInput
 } from './cloudence.types';
+import { ALLOWED_TYPES, AUDIT_COLLECTION, BLOCKED_EXTENSIONS, COLLECTION, EMAIL_REGEX, MAX_SHARE_RECIPIENTS, MAX_STORAGE_BYTES, QUOTA_COLLECTION } from './cloudence.constants';
 
-const COLLECTION = 'cloudenceFiles';
-const AUDIT_COLLECTION = 'cloudence_audit_logs';
-const QUOTA_COLLECTION = 'cloudence_quotas';
-const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB per file
-const MAX_STORAGE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB quota per user
-const MAX_SHARE_RECIPIENTS = 25; // Anti-phishing / anti-spam share cap
-const ALLOWED_TYPES = new Set(['document', 'image', 'video', 'audio', 'other']);
-
-// Block executables, scripts, and potential malware vectors
-const BLOCKED_EXTENSIONS = new Set([
-  'exe', 'bat', 'cmd', 'sh', 'bash', 'zsh', 'ps1', 'psm1', 'psd1',
-  'msi', 'msp', 'scr', 'pif', 'com', 'hta', 'cpl', 'vbs', 'vbe', 'wsf', 'wsh',
-  'php', 'php3', 'php4', 'php5', 'phtml', 'phar',
-  'py', 'pyc', 'pyo', 'pyw', 'rb', 'pl', 'cgi',
-  'jar', 'war', 'ear',
-  'dll', 'so', 'dylib', 'sys', 'drv',
-  'js', 'mjs', 'cjs', 'ts',
-]);
-
-const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
 @Injectable()
 export class CloudenceService {
   private readonly logger = new Logger(CloudenceService.name);
-
-  /**
-   * Thread-safe in-memory cache for user quota summaries (30s TTL).
-   * Keyed strictly by user.uid to guarantee absolute tenant isolation.
-   * Evicted immediately whenever the user uploads or deletes a file.
-   */
   private readonly quotaCache = new Map<string, { data: Record<string, any>; expiresAt: number }>();
-
   private getCachedQuota(userId: string): Record<string, any> | null {
     const entry = this.quotaCache.get(userId);
     if (!entry) return null;

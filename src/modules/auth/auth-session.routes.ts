@@ -2,82 +2,45 @@ import {
   BadGatewayException,
   BadRequestException,
   Body,
-  ConflictException,
-  Controller,
   Delete,
   ForbiddenException,
   Get,
   Headers,
   HttpCode,
   HttpException,
-  Inject,
   InternalServerErrorException,
-  Logger,
-  Param,
-  Patch,
   Post,
   Query,
   Req,
   Res,
   ServiceUnavailableException,
-  UseGuards,
   UnauthorizedException,
+  UseGuards
 } from '@nestjs/common';
-import { Request, Response } from 'express';
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import {
-  createHash,
-  createHmac,
-  randomBytes,
-  randomInt,
-  timingSafeEqual,
-} from 'node:crypto';
-import isEmail from 'validator/lib/isEmail';
 import type { AuthenticationResponseJSON } from '@simplewebauthn/server';
-import { RuntimeLimitService } from '../../common/runtime-limit.service';
+import { Request, Response } from 'express';
+import isEmail from 'validator/lib/isEmail';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
-import { AppsService } from '../apps/apps.service';
-import { CHEFU_APP_HEADER, ChefuAppId } from '../apps/app-registry';
-import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
-import { AuthenticatedUser } from './authenticated-user';
-import { AdminGuard } from './admin.guard';
-import { AuthGuard } from './auth.guard';
-import { ADMIN_ROLE } from './roles';
-import {
-  SESSION_META_AUDIENCE,
-  SESSION_META_ISSUER,
-  SESSION_COOKIE_NAME,
-  SESSION_MAX_AGE_SECONDS,
-  SESSION_META_COOKIE_NAME,
-  SessionMeta,
-} from './session.constants';
-import { MfaBackupCodeService } from './mfa-backup-code.service';
-import {
-  AccountSecurityActivityType,
-  SecurityEventsService,
-} from './security-events.service';
-import { SessionSignerService } from './session-signer.service';
-import { ProfilePictureService } from './profile-picture.service';
-import { PasskeyService } from './passkey.service';
-import { ResendService } from '../email/resend.service';
+import { CHEFU_APP_HEADER } from '../apps/app-registry';
 import {
   FLOW_ACCESS_DENIED_MESSAGE,
   FLOW_SESSION_HEADER,
-  isFlowAllowedEmail,
-  isFlowSessionRequest,
-  normalizeEmailAddress,
+  isFlowSessionRequest
 } from '../flow/flow-access';
-import {
-  buildDeviceAuthChallenge,
-  isDeviceAuthExpired,
-  normalizeDeviceCode,
-} from './device-auth';
-import { FirebaseDecodedToken, ProfileUpdateBody,AcademyProfileUpdate,ProfilePictureUpdate,SignInAlertDecision } from './auth-controller.types';
+import { FirebaseDecodedToken } from './auth-controller.types';
 import { AuthControllerBase, decodeJwtPayload } from './auth.controller.base';
+import { AuthGuard } from './auth.guard';
+import { AuthenticatedUser } from './authenticated-user';
 import {
   findPasswordBreachCount,
   getPasswordBreachRange,
 } from './password-breach';
+import { ADMIN_ROLE } from './roles';
+import {
+  SESSION_COOKIE_NAME,
+  SESSION_MAX_AGE_SECONDS,
+  SESSION_META_COOKIE_NAME
+} from './session.constants';
 
 export abstract class AuthSessionRoutes extends AuthControllerBase {
   @Get('me')

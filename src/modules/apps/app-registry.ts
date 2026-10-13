@@ -1,57 +1,8 @@
+import type { ChefuOauthClient, ChefuRegisteredAppRecord, ChefuApp, ChefuAppId } from "./app-registry.types";
+export type { ChefuOauthClient, ChefuRegisteredAppRecord, ChefuApp, ChefuAppId } from "./app-registry.types";
+
 export const CHEFU_APP_HEADER = "x-chefu-app";
 
-export type ChefuAppId =
-    | "academy"
-    | "admin"
-    | "flow"
-    | "quantum"
-    | "logix"
-    | "logix-dash"
-    | "merchant"
-    | "cloudence"
-    | "nook"
-    | "root";
-export type ChefuApp = {
-    id: ChefuAppId;
-    name: string;
-    origins: string[];
-};
-
-export type ChefuAppStatus = "pending" | "approved" | "revoked";
-export type ChefuClientType = "public" | "confidential";
-
-export type ChefuOauthClient = {
-    id: string;
-    appId: ChefuAppId;
-    name: string;
-    redirectUris: string[];
-    scopes: string[];
-};
-
-export type ChefuRegisteredAppRecord = {
-    client_id: string;
-    app_id?: string;
-    name: string;
-    owner: string;
-    client_type: ChefuClientType;
-    status: ChefuAppStatus;
-    redirect_uris: string[];
-    allowed_scopes: string[];
-    grant_types: string[];
-    created_at?: string | number | Date;
-    approved_by?: string | null;
-    approved_at?: string | number | Date | null;
-};
-
-export type ChefuAppSecretRecord = {
-    app_id: string;
-    client_id: string;
-    secret_hash: string;
-    secret_version: string;
-    expires_at?: string | number | Date | null;
-    rotated_at?: string | number | Date | null;
-    created_at?: string | number | Date;
-};
 
 export function mapAppRecordToOauthClient(record: ChefuRegisteredAppRecord): ChefuOauthClient | null {
     if (!record.client_id || record.status !== "approved") {
@@ -126,6 +77,11 @@ export const CHEFU_APPS: ChefuApp[] = [
         id: "nook",
         name: "Nook",
         origins: [],
+    },
+    {
+        id: "liftwise",
+        name: "LiftWise",
+        origins: ["https://liftwise.chefu.co.za"],
     },
 ];
 
@@ -208,6 +164,20 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         appId: "nook",
         name: "Nook Mobile",
         redirectUris: ["nook://sso-callback"],
+        scopes: ["openid", "profile", "email"],
+    },
+    {
+        id: "liftwise-mobile",
+        appId: "liftwise",
+        name: "LiftWise Mobile",
+        redirectUris: ["liftwise://sso-callback"],
+        scopes: ["openid", "profile", "email"],
+    },
+    {
+        id: "liftwise-web",
+        appId: "liftwise",
+        name: "LiftWise Web Development",
+        redirectUris: ["https://liftwise.chefu.co.za/sso-callback"],
         scopes: ["openid", "profile", "email"],
     },
     {

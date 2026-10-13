@@ -1,6 +1,14 @@
 {
   "indexes": [
     {
+      "collectionGroup": "quantum_agent_schedules",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "next_run_at", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "flowMessages",
       "queryScope": "COLLECTION",
       "fields": [

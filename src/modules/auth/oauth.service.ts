@@ -187,8 +187,8 @@ const USERINFO_PROFILE_CACHE_MAX_ENTRIES = 1_000;
 
 @Injectable()
 export class OAuthService {
-  private readonly nookRefreshTokenTtlMs = 15 * 24 * 60 * 60 * 1000;
-  private readonly nookMobileClientId = 'nook-mobile';
+  private readonly mobileRefreshTokenTtlMs = 15 * 24 * 60 * 60 * 1000;
+  private readonly persistentMobileClientIds = new Set(['nook-mobile', 'quantum-mobile', 'liftwise-mobile']);
   private readonly logger = new Logger(OAuthService.name);
   private readonly userInfoProfileCache = new Map<
     string,
@@ -586,7 +586,7 @@ export class OAuthService {
       typ: 'id_token',
     });
     const refreshToken = this.issueRefreshTokens ||
-      client.id === this.nookMobileClientId
+      this.persistentMobileClientIds.has(client.id)
       ? await this.issueRefreshToken({
         appId: codeDoc.appId,
         clientId: client.id,
@@ -759,7 +759,7 @@ export class OAuthService {
       : null;
     if (
       !this.issueRefreshTokens &&
-      preflightRecord?.clientId !== this.nookMobileClientId
+      !this.persistentMobileClientIds.has(preflightRecord?.clientId || '')
     ) {
       throw new BadRequestException('Refresh tokens are not enabled.');
     }
@@ -816,8 +816,8 @@ export class OAuthService {
       }
 
       const absoluteExpiresAt =
-        current.clientId === this.nookMobileClientId
-          ? current.absoluteExpiresAt ?? now + this.nookRefreshTokenTtlMs
+        this.persistentMobileClientIds.has(current.clientId)
+          ? current.absoluteExpiresAt ?? now + this.mobileRefreshTokenTtlMs
           : current.absoluteExpiresAt;
       transaction.update(refreshRef, {
         usedAt: now,
@@ -1431,8 +1431,8 @@ export class OAuthService {
     const tokenHash = this.hash(rawToken);
     const now = Date.now();
     const absoluteExpiresAt =
-      clientId === this.nookMobileClientId
-        ? now + this.nookRefreshTokenTtlMs
+      this.persistentMobileClientIds.has(clientId)
+        ? now + this.mobileRefreshTokenTtlMs
         : undefined;
 
     await this.refreshTokens().doc(tokenHash).set({

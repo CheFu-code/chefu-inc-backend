@@ -4,11 +4,6 @@ import { randomBytes } from 'node:crypto';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import {
   CHEFU_APPS,
-  ChefuApp,
-  ChefuAppId,
-  ChefuAppSecretRecord,
-  ChefuOauthClient,
-  ChefuRegisteredAppRecord,
   mapAppRecordToOauthClient,
   registeredAppOrigins,
   registeredOauthClients,
@@ -16,11 +11,19 @@ import {
   resolveOauthClient,
 } from './app-registry';
 
+import type {
+  ChefuApp,
+  ChefuAppId,
+  ChefuAppSecretRecord,
+  ChefuOauthClient,
+  ChefuRegisteredAppRecord
+} from './app-registry.types';
+
 @Injectable()
 export class AppsService {
   constructor(
     private readonly firebaseAdmin: FirebaseAdminService,
-  ) {}
+  ) { }
 
   list(): ChefuApp[] {
     return CHEFU_APPS;

@@ -30,12 +30,6 @@ type RequestWithUser = Request & { user?: AuthenticatedUser };
 export class CloudenceController {
   constructor(private readonly cloudence: CloudenceService) {}
 
-  /**
-   * Accepts multipart/form-data with a field named "file".
-   * Using memoryStorage so the buffer is available directly without disk I/O.
-   * All security checks (magic bytes, DLP, EXIF strip, quota) run in the service
-   * on the raw Buffer — no base64 overhead at any stage.
-   */
   @Post()
   @UseInterceptors(
     FileInterceptor('file', {
@@ -78,10 +72,7 @@ export class CloudenceController {
     return this.cloudence.usage(this.requireUser(request));
   }
 
-  /**
-   * Combined dashboard endpoint: returns recent files + quota in one round-trip.
-   * Replaces the two parallel fetches (getFiles + getTotalSpaceUsed) on the dashboard page.
-   */
+
   @Get('dashboard')
   dashboard(@Req() request: RequestWithUser) {
     return this.cloudence.dashboard(this.requireUser(request));
