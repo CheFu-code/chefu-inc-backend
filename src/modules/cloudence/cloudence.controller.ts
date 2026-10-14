@@ -22,6 +22,7 @@ import { AuthGuard } from '../auth/auth.guard';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { CloudenceService } from './cloudence.service';
 import { UpdateCloudenceFileInput } from './cloudence.types';
+import { CloudenceUploadGuard } from './cloudence-upload.guard';
 
 type RequestWithUser = Request & { user?: AuthenticatedUser };
 
@@ -31,6 +32,7 @@ export class CloudenceController {
   constructor(private readonly cloudence: CloudenceService) {}
 
   @Post()
+  @UseGuards(CloudenceUploadGuard)
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),

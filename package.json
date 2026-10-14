@@ -9,6 +9,7 @@
     "multer": "^2.4.0"
   },
   "scripts": {
+    "test:cloudence": "node --import tsx --test src/modules/cloudence/*.spec.ts",
     "test:liftwise": "node --import tsx --test src/modules/liftwise/liftwise.spec.ts",
     "test:quantum": "node --import tsx --test src/modules/quantum/agent/*.spec.ts",
     "dev": "tsx watch --env-file=.env src/main.ts",

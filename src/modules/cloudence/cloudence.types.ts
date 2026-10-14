@@ -37,6 +37,8 @@ export type UploadCloudenceFileInput = {
 export type UpdateCloudenceFileInput = {
   name?: string;
   users?: string[];
+  addUsers?: string[];
+  removeUsers?: string[];
   shareExpiresAt?: string;
 };
 
@@ -47,6 +49,7 @@ export type UpdateCloudenceFileInput = {
  * leakage at the API boundary regardless of what the frontend does.
  */
 export type CloudenceFileResponse = {
+  isOwner: boolean;
   id: string;
   name: string;
   type: CloudenceFileType;

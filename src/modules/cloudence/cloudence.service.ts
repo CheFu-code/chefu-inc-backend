@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { v2 as cloudinary } from 'cloudinary';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, Transaction } from 'firebase-admin/firestore';
 import { createHash, randomUUID } from 'node:crypto';
 import sanitizeHtml from 'sanitize-html';
 import { CloudinaryStorageService } from '../../common/cloudinary-storage.service';
@@ -22,11 +22,15 @@ import {
 } from './cloudence.types';
 import { ALLOWED_TYPES, AUDIT_COLLECTION, BLOCKED_EXTENSIONS, COLLECTION, EMAIL_REGEX, MAX_SHARE_RECIPIENTS, MAX_STORAGE_BYTES, QUOTA_COLLECTION } from './cloudence.constants';
 
+type StorageQuota = Record<CloudenceFileType, { size: number; latestDate: string }> & { used: number };
+
 
 @Injectable()
 export class CloudenceService {
   private readonly logger = new Logger(CloudenceService.name);
   private readonly quotaCache = new Map<string, { data: Record<string, any>; expiresAt: number }>();
+  private readonly quotaLoads = new Map<string, Promise<StorageQuota>>();
+  private readonly ownerNames = new Map<string, { name: string; expiresAt: number }>();
   private getCachedQuota(userId: string): Record<string, any> | null {
     const entry = this.quotaCache.get(userId);
     if (!entry) return null;
@@ -64,17 +68,6 @@ export class CloudenceService {
   async upload(user: AuthenticatedUser, rawBuffer: Buffer, rawName: string, rawContentType: string) {
     assertCloudinaryConfigured();
 
-    // Rate limit: max 15 uploads per minute per user
-    const rateLimit = await this.runtimeLimits.reserve({
-      collection: 'cloudence_upload_limits',
-      key: user.uid,
-      limit: 15,
-      windowMs: 60 * 1000,
-    });
-    if (rateLimit.limited) {
-      throw new BadRequestException('Upload rate limit reached. Please wait a minute before uploading more files.');
-    }
-
     const name = this.sanitizeFileName(String(rawName || '').trim());
     const contentType = String(rawContentType || 'application/octet-stream').toLowerCase();
 
@@ -105,7 +98,9 @@ export class CloudenceService {
     const sha256 = createHash('sha256').update(buffer).digest('hex');
 
     // Enforce 2GB user storage quota before upload
-    const currentUsage = await this.getOwnedStorageBytes(user.uid);
+    let currentUsage = await this.getOwnedStorageBytes(user.uid);
+    // A stale display cache must not reject an upload after another instance frees space.
+    if (currentUsage + buffer.length > MAX_STORAGE_BYTES) currentUsage = (await this.loadQuota(user.uid)).used;
     if (currentUsage + buffer.length > MAX_STORAGE_BYTES) {
       const usedMb = (currentUsage / (1024 * 1024)).toFixed(1);
       const fileMb = (buffer.length / (1024 * 1024)).toFixed(1);
@@ -151,12 +146,26 @@ export class CloudenceService {
 
     const document: CloudenceFileDocument = { ...partialDoc, signedUrl };
 
-    // Parallel writes: save file document and update quota concurrently.
-    // Independent documents in Firestore — saves 50–100ms per upload.
-    await Promise.all([
-      this.firebaseAdmin.db().collection(COLLECTION).doc(id).set(document),
-      this.updateQuotaOnUpload(user.uid, type, buffer.length, now),
-    ]);
+    const db = this.firebaseAdmin.db();
+    try {
+      const committedQuota = await db.runTransaction(async (transaction) => {
+        const quota = await this.readQuota(transaction, user.uid);
+        if (quota.used + document.size > MAX_STORAGE_BYTES) {
+          throw new BadRequestException('Storage quota of 2 GB exceeded.');
+        }
+        quota.used += document.size;
+        quota[type] = { size: quota[type].size + document.size, latestDate: now > quota[type].latestDate ? now : quota[type].latestDate };
+        transaction.set(db.collection(COLLECTION).doc(id), document);
+        transaction.set(db.collection(QUOTA_COLLECTION).doc(user.uid), { ...quota, updatedAt: now });
+        return quota;
+      });
+      this.setCachedQuota(user.uid, { ...committedQuota, all: MAX_STORAGE_BYTES });
+    } catch (error) {
+      // A rejected commit must not leave an uploaded asset outside the file ledger.
+      await this.cloudinaryStorage.delete(result.public_id, (result.resource_type || 'raw') as 'image' | 'video' | 'raw')
+        .catch((cleanupError) => this.logger.error(`Upload cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : cleanupError}`));
+      throw error;
+    }
 
     // Fire-and-forget: audit log is observability data, not transactional.
     // Awaiting it was adding 50–200 ms to every upload response.
@@ -164,7 +173,7 @@ export class CloudenceService {
       name, size: buffer.length, type, extension, sha256,
     }).catch((err) => this.logger.warn(`Audit log (file.uploaded) failed: ${err instanceof Error ? err.message : err}`));
 
-    return this.toResponse(this.sanitizeFileForUser(document, user));
+    return this.toResponse(this.sanitizeFileForUser(document, user), user);
   }
 
   async list(user: AuthenticatedUser, input: { type?: string; types?: string; search?: string; sort?: string; limit?: number }) {
@@ -243,7 +252,7 @@ export class CloudenceService {
     // Sort according to requested sort order
     documents.sort((left, right) => this.compareFiles(left, right, field, direction));
     const filesWithOwners = await this.withOwnerProfiles(documents.slice(0, limit));
-    const sliced = filesWithOwners.map((file) => this.toResponse(this.sanitizeFileForUser(file, user)));
+    const sliced = filesWithOwners.map((file) => this.toResponse(this.sanitizeFileForUser(file, user), user));
 
     return { total: sliced.length, documents: sliced };
   }
@@ -278,7 +287,11 @@ export class CloudenceService {
     const snapshot = await ref.get();
     const file = snapshot.data() as CloudenceFileDocument | undefined;
     // Determine the intent so the error message is meaningful to the caller.
-    const action = input.users !== undefined ? 'share' : 'rename';
+    const changesRecipients = input.users !== undefined || input.addUsers !== undefined || input.removeUsers !== undefined;
+    const action = changesRecipients || input.shareExpiresAt !== undefined ? 'share' : 'rename';
+    if (input.users !== undefined && (input.addUsers !== undefined || input.removeUsers !== undefined)) {
+      throw new BadRequestException('Use either a complete recipient list or recipient additions/removals.');
+    }
     this.assertCanEdit(file, user, action);
 
     let name = file!.name;
@@ -286,12 +299,23 @@ export class CloudenceService {
       name = this.sanitizeFileName(String(input.name));
       if (!name) throw new BadRequestException('File name is required.');
       this.assertSafeExtension(name);
+      if (this.extension(name) !== file!.extension) {
+        throw new BadRequestException('Renaming a file cannot change its format. Keep the original file extension.');
+      }
     }
 
     let users = file!.users;
     let shareExpiresAt = file!.shareExpiresAt;
 
-    if (input.users !== undefined) {
+    const normalizeRecipients = (value: unknown): string[] => {
+      if (!Array.isArray(value)) throw new BadRequestException('Recipients must be a list of email addresses.');
+      const emails = value.map(String).map((email) => email.trim().toLowerCase()).filter(Boolean);
+      for (const email of emails) if (!EMAIL_REGEX.test(email)) throw new BadRequestException(`"${email}" is not a valid email address.`);
+      return [...new Set(emails.filter((email) => email !== user.email.trim().toLowerCase()))];
+    };
+    const additions = input.addUsers !== undefined ? normalizeRecipients(input.addUsers) : [];
+    const removals = input.removeUsers !== undefined ? normalizeRecipients(input.removeUsers) : [];
+    if (changesRecipients) {
       // Rate limit: max 30 share operations per minute per user
       const rateLimit = await this.runtimeLimits.reserve({
         collection: 'cloudence_share_limits',
@@ -303,19 +327,8 @@ export class CloudenceService {
         throw new BadRequestException('Too many share requests. Please wait a moment before trying again.');
       }
 
-      const rawUsers = input.users.map(String).map((email) => email.trim().toLowerCase()).filter(Boolean);
-      for (const email of rawUsers) {
-        if (!EMAIL_REGEX.test(email)) {
-          throw new BadRequestException(`"${email}" is not a valid email address.`);
-        }
-      }
-      // Deduplicate and ensure owner does not add themselves
-      users = [...new Set(rawUsers.filter((email) => email !== user.email))];
+      if (input.users !== undefined) users = normalizeRecipients(input.users);
 
-      // Anti-phishing & anti-spam: limit total shared recipients per file
-      if (users.length > MAX_SHARE_RECIPIENTS) {
-        throw new BadRequestException(`A file can be shared with a maximum of ${MAX_SHARE_RECIPIENTS} users.`);
-      }
     }
 
     if (input.shareExpiresAt !== undefined) {
@@ -323,6 +336,9 @@ export class CloudenceService {
         throw new BadRequestException('shareExpiresAt must be a valid ISO date string.');
       }
       shareExpiresAt = input.shareExpiresAt ? new Date(input.shareExpiresAt).toISOString() : undefined;
+      if (shareExpiresAt && Date.parse(shareExpiresAt) <= Date.now()) {
+        throw new BadRequestException('Sharing expiration must be in the future.');
+      }
     }
 
     const [updated] = await this.withOwnerProfiles([{
@@ -332,40 +348,52 @@ export class CloudenceService {
       shareExpiresAt,
       updatedAt: new Date().toISOString(),
     }]);
-    await ref.set(updated);
+    const saved = await this.firebaseAdmin.db().runTransaction(async (transaction) => {
+      const current = (await transaction.get(ref)).data() as CloudenceFileDocument | undefined;
+      this.assertCanEdit(current, user, action);
+      const nextUsers = input.users !== undefined ? users : [...new Set([...current!.users, ...additions])].filter((email) => !removals.includes(email));
+      if (changesRecipients && nextUsers.length > MAX_SHARE_RECIPIENTS) {
+        throw new BadRequestException(`A file can be shared with a maximum of ${MAX_SHARE_RECIPIENTS} users.`);
+      }
+      const next = {
+        ...current!,
+        owner: updated.owner,
+        ...(input.name !== undefined ? { name } : {}),
+        ...(changesRecipients ? { users: nextUsers } : {}),
+        ...(input.shareExpiresAt !== undefined ? { shareExpiresAt: shareExpiresAt || FieldValue.delete() } : {}),
+        updatedAt: updated.updatedAt,
+      };
+      transaction.set(ref, next);
+      return { ...next, shareExpiresAt: input.shareExpiresAt !== undefined ? shareExpiresAt : current!.shareExpiresAt } as CloudenceFileDocument;
+    });
 
     // Fire-and-forget audit writes — observability only, not transactional
     if (input.name !== undefined && name !== file!.name) {
       void this.logAudit(user, 'file.renamed', id, { oldName: file!.name, newName: name })
         .catch((err) => this.logger.warn(`Audit log (file.renamed) failed: ${err instanceof Error ? err.message : err}`));
     }
-    if (input.users !== undefined) {
-      void this.logAudit(user, 'file.shared', id, { previousUsers: file!.users, updatedUsers: users, shareExpiresAt })
+    if (changesRecipients) {
+      void this.logAudit(user, 'file.shared', id, { previousUsers: file!.users, updatedUsers: saved.users, shareExpiresAt })
         .catch((err) => this.logger.warn(`Audit log (file.shared) failed: ${err instanceof Error ? err.message : err}`));
     }
 
-    return this.toResponse(this.sanitizeFileForUser(updated, user));
+    return this.toResponse(this.sanitizeFileForUser(saved, user), user);
   }
 
   async remove(user: AuthenticatedUser, id: string) {
     const ref = this.firebaseAdmin.db().collection(COLLECTION).doc(id);
-    const snapshot = await ref.get();
-    const file = snapshot.data() as CloudenceFileDocument | undefined;
-    this.assertCanEdit(file, user, 'delete');
-
-    const now = new Date().toISOString();
-    // Soft-delete to prevent irrecoverable data loss on account compromise
-    const updated = {
-      ...file!,
-      isDeleted: true,
-      deletedAt: now,
-      deletedBy: user.uid,
-      updatedAt: now,
-    };
-    await ref.set(updated);
-
-    // Atomically decrement quota for the file owner
-    await this.updateQuotaOnDelete(file!.ownerId, file!.type, file!.size);
+    const file = await this.firebaseAdmin.db().runTransaction(async (transaction) => {
+      const current = (await transaction.get(ref)).data() as CloudenceFileDocument | undefined;
+      this.assertCanEdit(current, user, 'delete');
+      const quota = await this.readQuota(transaction, current.ownerId);
+      const now = new Date().toISOString();
+      quota.used = Math.max(0, quota.used - current.size);
+      quota[current.type] = { ...quota[current.type], size: Math.max(0, quota[current.type].size - current.size) };
+      transaction.set(ref, { ...current, isDeleted: true, deletedAt: now, deletedBy: user.uid, updatedAt: now });
+      transaction.set(this.firebaseAdmin.db().collection(QUOTA_COLLECTION).doc(current.ownerId), { ...quota, updatedAt: now });
+      return current;
+    });
+    this.invalidateQuotaCache(file.ownerId);
 
     // Fire-and-forget audit — observability, not transactional
     void this.logAudit(user, 'file.deleted', id, {
@@ -375,150 +403,61 @@ export class CloudenceService {
     return { status: 'success' };
   }
 
+  private async readQuota(transaction: Transaction, userId: string, initialize = false): Promise<StorageQuota> {
+    const db = this.firebaseAdmin.db();
+    const snapshot = await transaction.get(db.collection(QUOTA_COLLECTION).doc(userId));
+    const data = snapshot.data();
+    const types: CloudenceFileType[] = ['image', 'document', 'video', 'audio', 'other'];
+    if (data && Number.isFinite(data.used) && data.used >= 0 && types.every((type) => Number.isFinite(data[type]?.size) && data[type].size >= 0)) {
+      return {
+        used: data.used,
+        ...Object.fromEntries(types.map((type) => [type, { size: data[type].size, latestDate: String(data[type].latestDate || '') }])),
+      } as StorageQuota;
+    }
+
+    // Initialize legacy or missing summaries inside the same transaction as the mutation.
+    const files = await transaction.get(db.collection(COLLECTION).where('ownerId', '==', userId));
+    const quota: StorageQuota = {
+      image: { size: 0, latestDate: '' }, document: { size: 0, latestDate: '' },
+      video: { size: 0, latestDate: '' }, audio: { size: 0, latestDate: '' },
+      other: { size: 0, latestDate: '' }, used: 0,
+    };
+    for (const file of files.docs) {
+      const value = file.data() as CloudenceFileDocument;
+      if (value.isDeleted) continue;
+      const type = types.includes(value.type) ? value.type : 'other';
+      const size = Math.max(0, Number(value.size) || 0);
+      quota.used += size;
+      quota[type].size += size;
+      if (value.updatedAt > quota[type].latestDate) quota[type].latestDate = value.updatedAt;
+    }
+    if (initialize) transaction.set(db.collection(QUOTA_COLLECTION).doc(userId), { ...quota, updatedAt: new Date().toISOString() });
+    return quota;
+  }
+
+  private async loadQuota(userId: string): Promise<StorageQuota> {
+    const existing = this.quotaLoads.get(userId);
+    if (existing) return existing;
+    const db = this.firebaseAdmin.db();
+    const pending = db.runTransaction((transaction) => this.readQuota(transaction, userId, true))
+      .finally(() => this.quotaLoads.delete(userId));
+    this.quotaLoads.set(userId, pending);
+    return pending;
+  }
+
   async usage(user: AuthenticatedUser) {
-    // Fast path: in-memory cache hit (0.02ms vs 60ms Firestore roundtrip)
     const cached = this.getCachedQuota(user.uid);
     if (cached) return cached;
-
-    const quotaRef = this.firebaseAdmin.db().collection(QUOTA_COLLECTION).doc(user.uid);
-    const quotaSnap = await quotaRef.get();
-
-    if (quotaSnap.exists) {
-      const data = quotaSnap.data() || {};
-      if (data.image && data.document && data.video && data.audio && data.other) {
-        const result = {
-          image: data.image,
-          document: data.document,
-          video: data.video,
-          audio: data.audio,
-          other: data.other,
-          used: Number(data.used) || 0,
-          all: MAX_STORAGE_BYTES,
-        };
-        this.setCachedQuota(user.uid, result);
-        return result;
-      }
-    }
-
-    // Cold cache fallback: compute once, cache in Firestore & in-memory, and return.
-    // isDeleted == false pushed to DB level so deleted docs are never transferred.
-    const snapshot = await this.firebaseAdmin.db().collection(COLLECTION)
-      .where('ownerId', '==', user.uid)
-      .where('isDeleted', '==', false)
-      .select('type', 'size', 'updatedAt', 'isDeleted')
-      .get();
-
-    const totalSpace = {
-      image: { size: 0, latestDate: '' },
-      document: { size: 0, latestDate: '' },
-      video: { size: 0, latestDate: '' },
-      audio: { size: 0, latestDate: '' },
-      other: { size: 0, latestDate: '' },
-      used: 0,
-      all: MAX_STORAGE_BYTES,
-    };
-
-    for (const doc of snapshot.docs) {
-      const data = doc.data();
-      const type = (data.type as CloudenceFileType) || 'other';
-      const size = Number(data.size) || 0;
-      const updatedAt = String(data.updatedAt || '');
-
-      if (totalSpace[type]) {
-        totalSpace[type].size += size;
-        if (!totalSpace[type].latestDate || updatedAt > totalSpace[type].latestDate) {
-          totalSpace[type].latestDate = updatedAt;
-        }
-      }
-      totalSpace.used += size;
-    }
-
-    // Cache the aggregated summary in Firestore for O(1) subsequent loads
-    await quotaRef.set({
-      image: totalSpace.image,
-      document: totalSpace.document,
-      video: totalSpace.video,
-      audio: totalSpace.audio,
-      other: totalSpace.other,
-      used: totalSpace.used,
-      updatedAt: new Date().toISOString(),
-    }, { merge: true });
-
-    this.setCachedQuota(user.uid, totalSpace);
-    return totalSpace;
+    const result = { ...await this.loadQuota(user.uid), all: MAX_STORAGE_BYTES };
+    this.setCachedQuota(user.uid, result);
+    return result;
   }
 
   async getOwnedStorageBytes(userId: string): Promise<number> {
-    try {
-      // Fast path: use cached quota used bytes if available
-      const cached = this.getCachedQuota(userId);
-      if (cached && typeof cached.used === 'number') {
-        return cached.used;
-      }
-
-      const quotaRef = this.firebaseAdmin.db().collection(QUOTA_COLLECTION).doc(userId);
-      const quotaSnap = await quotaRef.get();
-      if (quotaSnap.exists) {
-        const used = Number(quotaSnap.data()?.used) || 0;
-        return used;
-      }
-      const snapshot = await this.firebaseAdmin.db().collection(COLLECTION)
-        .where('ownerId', '==', userId)
-        .where('isDeleted', '==', false)
-        .select('size', 'isDeleted')
-        .get();
-      const used = snapshot.docs.reduce((acc, doc) => {
-        const data = doc.data();
-        return acc + (Number(data.size) || 0);
-      }, 0);
-      await quotaRef.set({ used, updatedAt: new Date().toISOString() }, { merge: true });
-      return used;
-    } catch (error) {
-      this.logger.warn(`Storage bytes query failed: ${error instanceof Error ? error.message : error}`);
-      return 0;
-    }
-  }
-
-  private async updateQuotaOnUpload(userId: string, type: CloudenceFileType, size: number, date: string) {
-    this.invalidateQuotaCache(userId);
-    try {
-      const quotaRef = this.firebaseAdmin.db().collection(QUOTA_COLLECTION).doc(userId);
-      const snap = await quotaRef.get();
-      if (!snap.exists) return;
-      const data = snap.data() || {};
-      const typeData = data[type] || { size: 0, latestDate: '' };
-      await quotaRef.set({
-        used: (Number(data.used) || 0) + size,
-        [type]: {
-          size: (Number(typeData.size) || 0) + size,
-          latestDate: !typeData.latestDate || date > typeData.latestDate ? date : typeData.latestDate,
-        },
-        updatedAt: new Date().toISOString(),
-      }, { merge: true });
-    } catch (error) {
-      this.logger.warn(`Failed to update quota on upload: ${error instanceof Error ? error.message : error}`);
-    }
-  }
-
-  private async updateQuotaOnDelete(userId: string, type: CloudenceFileType, size: number) {
-    this.invalidateQuotaCache(userId);
-    try {
-      const quotaRef = this.firebaseAdmin.db().collection(QUOTA_COLLECTION).doc(userId);
-      const snap = await quotaRef.get();
-      if (!snap.exists) return;
-      const data = snap.data() || {};
-      const typeData = data[type] || { size: 0, latestDate: '' };
-      await quotaRef.set({
-        used: Math.max(0, (Number(data.used) || 0) - size),
-        [type]: {
-          size: Math.max(0, (Number(typeData.size) || 0) - size),
-          latestDate: typeData.latestDate || '',
-        },
-        updatedAt: new Date().toISOString(),
-      }, { merge: true });
-    } catch (error) {
-      this.logger.warn(`Failed to update quota on delete: ${error instanceof Error ? error.message : error}`);
-    }
+    // Only the preliminary check can use a cache; the upload commit enforces quota transactionally.
+    const cached = this.getCachedQuota(userId);
+    if (cached) return Number(cached.used) || 0;
+    return (await this.loadQuota(userId)).used;
   }
 
   async getDownloadUrl(user: AuthenticatedUser, id: string) {
@@ -766,7 +705,18 @@ export class CloudenceService {
     if (!files.length) return files;
 
     // Resolve each owner once per request, including owners of shared files.
-    const owners = [...new Map(files.map((file) => [file.ownerId, file.owner])).entries()];
+    const allOwners = [...new Map(files.map((file) => [file.ownerId, file.owner])).entries()];
+    const cachedNames = new Map<string, string>();
+    const owners = allOwners.filter(([uid, owner]) => {
+      const key = `${uid}:${owner.email.trim().toLowerCase()}`;
+      const cached = this.ownerNames.get(key);
+      if (cached && cached.expiresAt > Date.now()) {
+        cachedNames.set(uid, cached.name);
+        return false;
+      }
+      this.ownerNames.delete(key);
+      return true;
+    });
     const emails = [...new Set(owners.map(([, owner]) => owner.email.trim().toLowerCase()).filter(Boolean))];
     const profiles = new Map<string, Record<string, unknown>>();
     try {
@@ -780,7 +730,7 @@ export class CloudenceService {
     }
 
     const text = (value: unknown) => typeof value === 'string' ? value.trim() : '';
-    const names = new Map(await Promise.all(owners.map(async ([uid, owner]) => {
+    const names = new Map([...cachedNames, ...await Promise.all(owners.map(async ([uid, owner]) => {
       const profile = profiles.get(owner.email.trim().toLowerCase()) || {};
       const emailName = owner.email.split('@')[0];
       let fullName = text(profile.fullname)
@@ -798,8 +748,13 @@ export class CloudenceService {
         }
       }
 
+      // Cache display names only, never authorization or recipient membership.
+      if (fullName && fullName !== emailName) {
+        if (this.ownerNames.size >= 5000) this.ownerNames.delete(this.ownerNames.keys().next().value!);
+        this.ownerNames.set(`${uid}:${owner.email.trim().toLowerCase()}`, { name: fullName, expiresAt: Date.now() + 5 * 60_000 });
+      }
       return [uid, fullName || text(owner.fullName) || emailName || 'Cloudence User'] as const;
-    })));
+    }))]);
 
     return files.map((file) => ({
       ...file,
@@ -822,7 +777,7 @@ export class CloudenceService {
    * Defense-in-depth: normalizeFile() on the Next.js side also strips them,
    * but this prevents leakage entirely at the API boundary.
    */
-  toResponse(file: CloudenceFileDocument): CloudenceFileResponse {
+  toResponse(file: CloudenceFileDocument, user: AuthenticatedUser): CloudenceFileResponse {
     return {
       id: file.id,
       name: file.name,
@@ -831,6 +786,7 @@ export class CloudenceService {
       url: file.url,
       size: file.size,
       owner: file.owner,
+      isOwner: file.ownerId === user.uid,
       users: file.users,
       createdAt: file.createdAt,
       updatedAt: file.updatedAt,
