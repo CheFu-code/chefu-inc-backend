@@ -34,6 +34,7 @@ function fixture(files: CloudenceFileDocument[] = []) {
   const versions = new Map<string, number>();
   let epoch = 0;
   const operations = { quotaReads: 0, quotaWrites: 0 };
+  const transactionReads: string[] = [];
   const snapshot = (key: string) => {
     const value = records.get(key);
     const cloned = value ? structuredClone(value) : undefined;
@@ -79,6 +80,7 @@ function fixture(files: CloudenceFileDocument[] = []) {
         const transaction = {
           get: async (target: { key?: string; get(): Promise<unknown> }) => {
             if (target.key) {
+              transactionReads.push(target.key);
               if (target.key.startsWith('cloudence_quotas/')) operations.quotaReads++;
               reads.set(target.key, versions.get(target.key) || 0);
               return snapshot(target.key);
@@ -128,7 +130,7 @@ function fixture(files: CloudenceFileDocument[] = []) {
       delete: async (id: string, _resourceType: string, deliveryType: string) => { deletions.push(id); deletionTypes.push(deliveryType); },
     } as unknown as CloudinaryStorageService,
   );
-  return { service, records, operations, authNames, authCalls, profileBatches, uploads, deletions, uploadOptions, deletionTypes, setUploadHandler: (handler: () => Promise<void>) => { uploadHandler = handler; }, failProfiles: () => { failProfiles = true; }, failTransactions: () => { failTransactions = true; } };
+  return { service, records, operations, transactionReads, authNames, authCalls, profileBatches, uploads, deletions, uploadOptions, deletionTypes, setUploadHandler: (handler: () => Promise<void>) => { uploadHandler = handler; }, failProfiles: () => { failProfiles = true; }, failTransactions: () => { failTransactions = true; } };
 }
 
 test('existing owned and shared files use their own account names without exposing shared recipients', async () => {
@@ -479,3 +481,58 @@ test('folder uploads place files atomically and clean up assets if the folder di
   assert.equal(f.deletions.length, 1);
   assert.equal((await f.service.usage(viewer)).used, 7);
 }));
+
+test('bulk folder moves are bounded, atomic, and preserve concurrent organization', async () => {
+  const f = fixture([file('a'), file('b'), file('c'), { ...file('denied', 'stranger'), users: [] }]);
+  const folder = (await f.service.folders.save(viewer, { section: 'documents', name: 'Work' })).folders[0];
+  await assert.rejects(f.service.folders.moveMany(viewer, ['a', 'denied'], folder.id), /permission/);
+  assert.deepEqual((await f.service.folders.read(viewer)).placements, {});
+  await assert.rejects(f.service.folders.moveMany(viewer, Array(51).fill('a'), folder.id), /50/);
+  await assert.rejects(f.service.folders.moveMany(viewer, [], folder.id), /valid files/);
+  await assert.rejects(f.service.folders.moveMany(viewer, ['bad/path'], folder.id), /valid files/);
+  await Promise.all([f.service.folders.moveMany(viewer, ['a', 'b', 'a'], folder.id), f.service.folders.moveMany(viewer, ['c'], folder.id)]);
+  assert.deepEqual((await f.service.folders.read(viewer)).placements, { a: folder.id, b: folder.id, c: folder.id });
+  assert.deepEqual(f.operations, { quotaReads: 0, quotaWrites: 0 });
+  assert.equal(f.uploads.length, 0);
+});
+
+test('explicit folder cleanup is bounded and removes stale placements without modifying live files', async () => {
+  const live = file('live');
+  const f = fixture([live]);
+  const folder = (await f.service.folders.save(viewer, { section: 'documents', name: 'Work' })).folders[0];
+  const placements = Object.fromEntries([...Array.from({ length: 150 }, (_, index) => [`deleted-${String(index).padStart(3, '0')}`, folder.id]), ['live', folder.id]]);
+  f.records.set('cloudenceFolders/viewer', { folders: [folder], placements });
+  const reads = f.transactionReads.length;
+  await f.service.folders.save(viewer, { id: folder.id, name: 'Current' });
+  assert.equal(f.transactionReads.length - reads, 21, 'Mutation cleanup reads only metadata plus 20 placements');
+  assert.equal(Object.keys((await f.service.folders.read(viewer)).placements).length, 131);
+  const checked = f.transactionReads.length;
+  const first = await f.service.folders.cleanup(viewer);
+  assert.equal(first.checked, 100);
+  assert.equal(first.cleaned, 100);
+  assert.equal(f.transactionReads.length - checked, 101);
+  assert.equal(first.remaining, 31);
+  const last = await f.service.folders.cleanup(viewer);
+  assert.equal(last.cleaned, 30);
+  assert.equal(last.remaining, 0);
+  assert.deepEqual((await f.service.folders.read(viewer)).placements, { live: folder.id });
+  assert.deepEqual(f.records.get('cloudenceFiles/live'), live);
+});
+
+test('file deletion clears its owner placement in the same transaction', async () => {
+  const f = fixture([file('owned')]);
+  const folder = (await f.service.folders.save(viewer, { section: 'documents', name: 'Work' })).folders[0];
+  await f.service.folders.move(viewer, 'owned', folder.id);
+  await f.service.remove(viewer, 'owned');
+  assert.equal((await f.service.folders.read(viewer)).placements.owned, undefined);
+  assert.equal(f.records.get('cloudenceFiles/owned')?.isDeleted, true);
+});
+
+test('cleanup removes nonexistent folder references without extra file reads', async () => {
+  const f = fixture([file('owned')]);
+  f.records.set('cloudenceFolders/viewer', { folders: [], placements: { owned: 'missing-folder' } });
+  const result = await f.service.folders.cleanup(viewer);
+  assert.equal(result.cleaned, 1);
+  assert.equal(f.transactionReads.length, 1);
+  assert.deepEqual((await f.service.folders.read(viewer)).placements, {});
+});

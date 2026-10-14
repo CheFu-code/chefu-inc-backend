@@ -81,6 +81,16 @@ export class CloudenceController {
     return this.cloudence.folders.save(this.requireUser(request), { section: body.section, name: body.name });
   }
 
+  @Post('folders/move')
+  bulkMove(@Req() request: RequestWithUser, @Body() body: { fileIds?: unknown; folderId?: unknown }) {
+    return this.cloudence.folders.moveMany(this.requireUser(request), body.fileIds, body.folderId);
+  }
+
+  @Post('folders/cleanup')
+  cleanupFolders(@Req() request: RequestWithUser) {
+    return this.cloudence.folders.cleanup(this.requireUser(request));
+  }
+
   @Patch('folders/:id')
   renameFolder(@Req() request: RequestWithUser, @Param('id') id: string, @Body() body: { name?: string }) {
     return this.cloudence.folders.save(this.requireUser(request), { id, name: body.name });

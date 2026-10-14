@@ -8,7 +8,8 @@ import { COLLECTION } from './cloudence.constants';
 
 export type FolderSection = 'documents' | 'images' | 'media' | 'others';
 export type CloudenceFolder = { id: string; name: string; section: FolderSection; createdAt: string };
-export type FolderSettings = { folders: CloudenceFolder[]; placements: Record<string, string> };
+export type FolderSettings = { folders: CloudenceFolder[]; placements: Record<string, string>; cleanupCursor?: string };
+export const MAX_BULK_MOVE = 50;
 const FOLDERS_COLLECTION = 'cloudenceFolders';
 const MAX_FOLDERS = 100;
 const MAX_PLACEMENTS = 5000;
@@ -27,7 +28,7 @@ export class CloudenceFoldersService {
 
   private ref(user: AuthenticatedUser) { return this.firebase.db().collection(FOLDERS_COLLECTION).doc(user.uid); }
   private settings(value: FirebaseFirestore.DocumentData | undefined): FolderSettings {
-    return { folders: value?.folders || [], placements: value?.placements || {} };
+    return { folders: value?.folders || [], placements: value?.placements || {}, ...(value?.cleanupCursor ? { cleanupCursor: value.cleanupCursor } : {}) };
   }
   async read(user: AuthenticatedUser) { return this.settings((await this.ref(user).get()).data()); }
 
@@ -46,6 +47,7 @@ export class CloudenceFoldersService {
     const ref = this.ref(user);
     return this.firebase.db().runTransaction(async (transaction) => {
       const state = this.settings((await transaction.get(ref)).data());
+      await this.prune(transaction, user, state);
       const existing = input.id ? state.folders.find((folder) => folder.id === input.id) : undefined;
       if (input.id && !existing) throw new NotFoundException('Folder was not found.');
       if (input.remove) {
@@ -85,15 +87,75 @@ export class CloudenceFoldersService {
   }
 
   async move(user: AuthenticatedUser, fileId: string, folderId: unknown) {
+    return this.moveMany(user, [fileId], folderId);
+  }
+
+  private validIds(value: unknown): string[] {
+    if (!Array.isArray(value) || !value.length || value.length > MAX_BULK_MOVE || value.some((id) => typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(id) || ['__proto__', 'constructor', 'prototype'].includes(id))) {
+      throw new BadRequestException(`Select between 1 and ${MAX_BULK_MOVE} valid files.`);
+    }
+    return [...new Set(value)];
+  }
+
+  async moveMany(user: AuthenticatedUser, fileIds: unknown, folderId: unknown) {
+    const ids = this.validIds(fileIds);
     const ref = this.ref(user);
     return this.firebase.db().runTransaction(async (transaction) => {
-      const file = (await transaction.get(this.firebase.db().collection(COLLECTION).doc(fileId))).data() as CloudenceFileDocument | undefined;
-      this.assertReadable(file, user);
       const state = this.settings((await transaction.get(ref)).data());
-      this.place(state, file, folderId);
+      const files = await Promise.all(ids.map(async (id) => {
+        const file = (await transaction.get(this.firebase.db().collection(COLLECTION).doc(id))).data() as CloudenceFileDocument | undefined;
+        this.assertReadable(file, user);
+        return file;
+      }));
+      const cleaned = await this.prune(transaction, user, state, new Map(files.map((file) => [file.id, file])));
+      for (const file of files) this.place(state, file, folderId);
       transaction.set(ref, state);
-      return { status: 'success', folderId: state.placements[file.id] || null };
+      return { status: 'success', moved: files.length, cleaned: cleaned.cleaned, folderId: folderId || null };
     });
+  }
+
+  private async prune(transaction: Transaction, user: AuthenticatedUser, state: FolderSettings, known = new Map<string, CloudenceFileDocument>(), batchSize = 20) {
+    const allIds = Object.keys(state.placements).sort();
+    const after = state.cleanupCursor ? allIds.filter((id) => id > state.cleanupCursor!) : allIds;
+    const candidates = after.length ? after : allIds;
+    const ids = candidates.slice(0, batchSize);
+    let cleaned = 0;
+    await Promise.all(ids.map(async (id) => {
+      const folder = state.folders.find((folder) => folder.id === state.placements[id]);
+      if (!folder) { delete state.placements[id]; cleaned++; return; }
+      const file = known.get(id) || (await transaction.get(this.firebase.db().collection(COLLECTION).doc(id))).data() as CloudenceFileDocument | undefined;
+      try {
+        this.assertReadable(file, user);
+        if (folder.section !== folderSection(file.type)) { delete state.placements[id]; cleaned++; }
+      }
+      catch (error) {
+        if (!(error instanceof NotFoundException || error instanceof ForbiddenException)) throw error;
+        delete state.placements[id];
+        cleaned++;
+      }
+    }));
+    if (ids.length) state.cleanupCursor = ids[ids.length - 1];
+    else delete state.cleanupCursor;
+    return { cleaned, checked: ids.length, remaining: Math.max(0, candidates.length - ids.length) };
+  }
+
+  async cleanup(user: AuthenticatedUser) {
+    const ref = this.ref(user);
+    return this.firebase.db().runTransaction(async (transaction) => {
+      const state = this.settings((await transaction.get(ref)).data());
+      const result = await this.prune(transaction, user, state, new Map(), 100);
+      if (result.checked) transaction.set(ref, state);
+      return { status: 'success', ...result };
+    });
+  }
+
+  async removePlacement(transaction: Transaction, user: AuthenticatedUser, fileId: string) {
+    const ref = this.ref(user);
+    const state = this.settings((await transaction.get(ref)).data());
+    if (state.placements[fileId]) {
+      delete state.placements[fileId];
+      transaction.set(ref, state);
+    }
   }
 
   async placeUpload(transaction: Transaction, user: AuthenticatedUser, file: CloudenceFileDocument, folderId: string) {

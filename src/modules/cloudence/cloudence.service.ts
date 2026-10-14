@@ -416,6 +416,7 @@ export class CloudenceService {
       const now = new Date().toISOString();
       quota.used = Math.max(0, quota.used - current.size);
       quota[current.type] = { ...quota[current.type], size: Math.max(0, quota[current.type].size - current.size) };
+      await this.folders.removePlacement(transaction, user, id);
       transaction.set(ref, { ...current, isDeleted: true, deletedAt: now, deletedBy: user.uid, updatedAt: now });
       transaction.set(this.firebaseAdmin.db().collection(QUOTA_COLLECTION).doc(current.ownerId), { ...quota, updatedAt: now });
       return current;
