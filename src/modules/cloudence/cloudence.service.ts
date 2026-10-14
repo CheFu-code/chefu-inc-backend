@@ -127,6 +127,10 @@ export class CloudenceService {
 
     const now = new Date().toISOString();
     const id = `cloudence_${randomUUID()}`;
+    const [ownerDetails] = await this.withOwnerProfiles([{
+      ownerId: user.uid,
+      owner: { id: user.uid, fullName: '', email: user.email },
+    }]);
 
     // Pre-compute and cache the signed delivery URL once at upload time so that
     // list() can return it from Firestore without running N×HMAC-SHA1 per request.
@@ -135,7 +139,7 @@ export class CloudenceService {
       url: result.secure_url,
       size: buffer.length,
       ownerId: user.uid,
-      owner: { id: user.uid, fullName: user.email.split('@')[0], email: user.email },
+      owner: ownerDetails.owner,
       users: [] as string[],
       publicId: result.public_id,
       resourceType: result.resource_type || 'raw',
@@ -238,7 +242,8 @@ export class CloudenceService {
 
     // Sort according to requested sort order
     documents.sort((left, right) => this.compareFiles(left, right, field, direction));
-    const sliced = documents.slice(0, limit).map((file) => this.toResponse(this.sanitizeFileForUser(file, user)));
+    const filesWithOwners = await this.withOwnerProfiles(documents.slice(0, limit));
+    const sliced = filesWithOwners.map((file) => this.toResponse(this.sanitizeFileForUser(file, user)));
 
     return { total: sliced.length, documents: sliced };
   }
@@ -320,13 +325,13 @@ export class CloudenceService {
       shareExpiresAt = input.shareExpiresAt ? new Date(input.shareExpiresAt).toISOString() : undefined;
     }
 
-    const updated = {
+    const [updated] = await this.withOwnerProfiles([{
       ...file!,
       name,
       users,
       shareExpiresAt,
       updatedAt: new Date().toISOString(),
-    };
+    }]);
     await ref.set(updated);
 
     // Fire-and-forget audit writes — observability only, not transactional
@@ -757,10 +762,53 @@ export class CloudenceService {
     };
   }
 
+  private async withOwnerProfiles<T extends Pick<CloudenceFileDocument, 'ownerId' | 'owner'>>(files: T[]): Promise<T[]> {
+    if (!files.length) return files;
+
+    // Resolve each owner once per request, including owners of shared files.
+    const owners = [...new Map(files.map((file) => [file.ownerId, file.owner])).entries()];
+    const emails = [...new Set(owners.map(([, owner]) => owner.email.trim().toLowerCase()).filter(Boolean))];
+    const profiles = new Map<string, Record<string, unknown>>();
+    try {
+      if (emails.length) {
+        const db = this.firebaseAdmin.db();
+        const snapshots = await db.getAll(...emails.map((email) => db.collection('users').doc(email)));
+        snapshots.forEach((snapshot, index) => profiles.set(emails[index], snapshot.data() || {}));
+      }
+    } catch (error) {
+      this.logger.warn(`Owner profile lookup failed: ${error instanceof Error ? error.message : error}`);
+    }
+
+    const text = (value: unknown) => typeof value === 'string' ? value.trim() : '';
+    const names = new Map(await Promise.all(owners.map(async ([uid, owner]) => {
+      const profile = profiles.get(owner.email.trim().toLowerCase()) || {};
+      const emailName = owner.email.split('@')[0];
+      let fullName = text(profile.fullname)
+        || [text(profile.firstName), text(profile.lastName)].filter(Boolean).join(' ')
+        || text(profile.displayName)
+        || text(profile.name);
+
+      // Older profiles may also contain the email-derived placeholder.
+      if (!fullName || fullName === emailName) {
+        try {
+          const authUser = await this.firebaseAdmin.auth().getUser(uid);
+          fullName = text(authUser.displayName) || fullName;
+        } catch (error) {
+          this.logger.warn(`Owner auth lookup failed: ${error instanceof Error ? error.message : error}`);
+        }
+      }
+
+      return [uid, fullName || text(owner.fullName) || emailName || 'Cloudence User'] as const;
+    })));
+
+    return files.map((file) => ({
+      ...file,
+      owner: { ...file.owner, fullName: names.get(file.ownerId)! },
+    }));
+  }
+
   private sanitizeFileForUser(file: CloudenceFileDocument, user: AuthenticatedUser): CloudenceFileDocument {
     const signed = this.withSignedUrl(file);
-    // Share Privacy: Only the owner should see the complete list of shared recipients.
-    // Non-owner recipients cannot see other recipients' email addresses.
     if (file.ownerId !== user.uid) {
       return { ...signed, users: [] };
     }
