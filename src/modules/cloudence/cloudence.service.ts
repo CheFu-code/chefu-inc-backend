@@ -7,6 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { v2 as cloudinary } from 'cloudinary';
+import { CloudenceFoldersService, folderSection, FolderSettings } from './cloudence-folders.service';
 import { FieldValue, Transaction } from 'firebase-admin/firestore';
 import { createHash, randomUUID } from 'node:crypto';
 import sanitizeHtml from 'sanitize-html';
@@ -58,6 +59,7 @@ export class CloudenceService {
     private readonly firebaseAdmin: FirebaseAdminService,
     private readonly runtimeLimits: RuntimeLimitService,
     private readonly cloudinaryStorage: CloudinaryStorageService,
+    readonly folders: CloudenceFoldersService = new CloudenceFoldersService(firebaseAdmin),
   ) {
   }
 
@@ -66,7 +68,7 @@ export class CloudenceService {
    * All existing security checks (magic bytes, DLP, SVG sanitisation, EXIF strip,
    * SHA-256, quota) run on the buffer directly — no base64 decode needed.
    */
-  async upload(user: AuthenticatedUser, rawBuffer: Buffer, rawName: string, rawContentType: string) {
+  async upload(user: AuthenticatedUser, rawBuffer: Buffer, rawName: string, rawContentType: string, folderId?: string) {
     assertCloudinaryConfigured();
 
     const name = this.sanitizeFileName(String(rawName || '').trim());
@@ -112,6 +114,7 @@ export class CloudenceService {
 
     const type = this.fileType(name, contentType);
     const extension = this.extension(name);
+    if (folderId) this.folders.validateDestination(await this.folders.read(user), folderSection(type), folderId);
     const result = await this.cloudinaryStorage.uploadBuffer(buffer, {
       public_id: `chefu/cloudence/${user.uid}/${randomUUID()}`,
       resource_type: 'auto',
@@ -155,6 +158,7 @@ export class CloudenceService {
         }
         quota.used += document.size;
         quota[type] = { size: quota[type].size + document.size, latestDate: now > quota[type].latestDate ? now : quota[type].latestDate };
+        if (folderId) await this.folders.placeUpload(transaction, user, document, folderId);
         transaction.set(db.collection(COLLECTION).doc(id), document);
         transaction.set(db.collection(QUOTA_COLLECTION).doc(user.uid), { ...quota, updatedAt: now });
         return quota;
@@ -173,10 +177,10 @@ export class CloudenceService {
       name, size: buffer.length, type, extension, sha256,
     }).catch((err) => this.logger.warn(`Audit log (file.uploaded) failed: ${err instanceof Error ? err.message : err}`));
 
-    return this.toResponse(this.sanitizeFileForUser(document, user), user);
+    return { ...this.toResponse(this.sanitizeFileForUser(document, user), user), ...(folderId ? { folderId } : {}) };
   }
 
-  async list(user: AuthenticatedUser, input: { type?: string; types?: string; search?: string; sort?: string; limit?: number }) {
+  async list(user: AuthenticatedUser, input: { type?: string; types?: string; search?: string; sort?: string; limit?: number; section?: string; folderId?: string; offset?: number }) {
     const collection = this.firebaseAdmin.db().collection(COLLECTION);
     const rawSearch = String(input?.search || '').slice(0, 100);
     const search = rawSearch.replace(/[\x00-\x1F\x7F]/g, '').trim().toLowerCase();
@@ -187,12 +191,29 @@ export class CloudenceService {
       : (type && type !== 'all' ? [type.toLowerCase()] : []);
 
     const limit = Math.min(Math.max(Number(input?.limit || 100), 1), 100);
+    if (!Number.isSafeInteger(limit)) throw new BadRequestException('Invalid file limit.');
     const { field, direction } = this.resolveSort(input?.sort);
 
     const userEmail = (user.email || '').toLowerCase().trim();
 
     // Fetch batch with limit * 2 (capped at 200) to ensure soft-deleted or non-matching records do not starve results
     const fetchLimit = Math.min(limit * 2, 200);
+    if (input.section) this.folders.assertSection(input.section);
+    if (input.folderId && !input.section) throw new BadRequestException('A section is required when browsing folders.');
+    const settingsPromise = input.section ? this.folders.read(user) : Promise.resolve(undefined);
+    let settings: FolderSettings | undefined;
+    let selectedSnapshots: { data(): FirebaseFirestore.DocumentData | undefined }[];
+    let nextOffset: number | undefined;
+    if (input.folderId) {
+      settings = await settingsPromise;
+      this.folders.validateDestination(settings!, input.section!, input.folderId);
+      const offset = input.offset ?? 0;
+      if (!Number.isSafeInteger(offset) || offset < 0 || offset > 5000) throw new BadRequestException('Invalid folder page.');
+      const ids = Object.entries(settings!.placements).filter(([, folderId]) => folderId === input.folderId).map(([id]) => id).sort();
+      const selected = ids.slice(offset, offset + limit);
+      selectedSnapshots = selected.length ? await this.firebaseAdmin.db().getAll(...selected.map((id) => collection.doc(id))) : [];
+      if (ids.length > offset + limit) nextOffset = offset + limit;
+    } else {
 
     // Query owned files with fallback if composite index is pending
     const ownedPromise = collection
@@ -225,13 +246,17 @@ export class CloudenceService {
           .get();
       });
 
-    const [ownedSnapshot, sharedSnapshot] = await Promise.all([ownedPromise, sharedPromise]);
+    const [ownedSnapshot, sharedSnapshot, folderSettings] = await Promise.all([ownedPromise, sharedPromise, settingsPromise]);
+    settings = folderSettings;
+    selectedSnapshots = [...ownedSnapshot.docs, ...sharedSnapshot.docs];
+    }
 
     const now = new Date();
     // O(N) deduplication using Map instead of O(N^2) findIndex
     const uniqueFiles = new Map<string, CloudenceFileDocument>();
-    for (const doc of [...ownedSnapshot.docs, ...sharedSnapshot.docs]) {
+    for (const doc of selectedSnapshots) {
       const data = doc.data() as CloudenceFileDocument;
+      if (!data) continue;
       if (!uniqueFiles.has(data.id)) {
         uniqueFiles.set(data.id, data);
       }
@@ -240,6 +265,8 @@ export class CloudenceService {
     const documents: CloudenceFileDocument[] = [];
     for (const file of uniqueFiles.values()) {
       if (file.isDeleted) continue; // Safety guard if fallback query was used
+      if (file.ownerId !== user.uid && (!userEmail || !file.users.some((email) => email.trim().toLowerCase() === userEmail))) continue;
+      if (input.section && folderSection(file.type) !== input.section) continue;
       // Non-owners cannot see file if the share expiration has passed
       if (file.ownerId !== user.uid && file.shareExpiresAt) {
         if (new Date(file.shareExpiresAt) <= now) continue;
@@ -252,9 +279,9 @@ export class CloudenceService {
     // Sort according to requested sort order
     documents.sort((left, right) => this.compareFiles(left, right, field, direction));
     const filesWithOwners = await this.withOwnerProfiles(documents.slice(0, limit));
-    const sliced = filesWithOwners.map((file) => this.toResponse(this.sanitizeFileForUser(file, user), user));
+    const sliced = filesWithOwners.map((file) => ({ ...this.toResponse(this.sanitizeFileForUser(file, user), user), ...(settings ? { folderId: settings.placements[file.id] || null } : {}) }));
 
-    return { total: sliced.length, documents: sliced };
+    return { total: sliced.length, documents: sliced, ...(settings ? { folders: settings.folders.filter((folder) => folder.section === input.section), nextOffset } : {}) };
   }
 
   private resolveSort(value?: string): { field: 'createdAt' | 'name' | 'size'; direction: 'asc' | 'desc' } {

@@ -401,3 +401,81 @@ test('byte ranges are forwarded only after authorization and raw asset extension
   assert.equal((await f.service.openContent(viewer, 'raw', { range: 'bytes=0-2' })).upstream.status, 206);
   await assert.rejects(f.service.openContent(viewer, 'raw', { range: 'bytes=0-1,5-6' }), /single byte range/);
 });
+
+test('folders validate names and sections, reject duplicates, and preserve concurrent creates', async () => {
+  const f = fixture();
+  await Promise.all([
+    f.service.folders.save(viewer, { section: 'documents', name: '  Invoices  ' }),
+    f.service.folders.save(viewer, { section: 'images', name: 'Holidays' }),
+  ]);
+  const state = await f.service.folders.read(viewer);
+  assert.equal(state.folders.length, 2);
+  assert.equal(state.folders[0].name, 'Invoices');
+  await assert.rejects(f.service.folders.save(viewer, { section: 'documents', name: 'INVOICES' }), /already exists/);
+  await f.service.folders.save(viewer, { section: 'images', name: 'Invoices' });
+  for (const name of ['', '..', 'bad/name', 'x'.repeat(81)]) await assert.rejects(f.service.folders.save(viewer, { section: 'documents', name }), /folder name/);
+  await assert.rejects(f.service.folders.save(viewer, { section: 'invalid', name: 'Valid' }), /valid file section/);
+  await assert.rejects(f.service.folders.save({ ...viewer, uid: 'other' }, { id: state.folders[0].id, name: 'Stolen' }), /not found/);
+});
+
+test('folder moves are personal and do not change file permissions, storage, or quota', async () => {
+  const shared = file('shared', 'owner', 'owner@example.com');
+  const f = fixture([shared]);
+  const created = await f.service.folders.save(viewer, { section: 'documents', name: 'Work' });
+  const folderId = created.folders[0].id;
+  await f.service.folders.move(viewer, shared.id, folderId);
+  assert.deepEqual(f.records.get('cloudenceFiles/shared'), shared);
+  assert.deepEqual(f.operations, { quotaReads: 0, quotaWrites: 0 });
+  assert.deepEqual((await f.service.folders.read({ ...viewer, uid: 'owner' })).folders, []);
+  const listed = await f.service.list(viewer, { section: 'documents', folderId });
+  assert.equal(listed.documents[0].folderId, folderId);
+  assert.equal(listed.documents[0].isOwner, false);
+  assert.deepEqual(listed.documents[0].users, []);
+  const imageFolder = (await f.service.folders.save(viewer, { section: 'images', name: 'Photos' })).folders.find((folder) => folder.section === 'images')!;
+  await assert.rejects(f.service.folders.move(viewer, shared.id, imageFolder.id), /same section/);
+  await assert.rejects(f.service.list(viewer, { section: 'images', folderId }), /not found/);
+  f.records.set('cloudenceFiles/shared', { ...shared, users: [] });
+  assert.equal((await f.service.list(viewer, { section: 'documents', folderId })).documents.length, 0);
+  await assert.rejects(f.service.folders.move(viewer, shared.id, null), /permission/);
+  f.records.set('cloudenceFiles/shared', { ...shared, shareExpiresAt: '2000-01-01' });
+  await assert.rejects(f.service.folders.move(viewer, shared.id, folderId), /permission/);
+});
+
+test('renaming and deleting folders preserve files and return placements to the section', async () => {
+  const original = file('owned');
+  const f = fixture([original]);
+  const folder = (await f.service.folders.save(viewer, { section: 'documents', name: 'Drafts' })).folders[0];
+  await f.service.folders.move(viewer, original.id, folder.id);
+  await f.service.folders.save(viewer, { id: folder.id, name: 'Final' });
+  assert.equal((await f.service.folders.read(viewer)).folders[0].name, 'Final');
+  await f.service.folders.save(viewer, { id: folder.id, remove: true });
+  const state = await f.service.folders.read(viewer);
+  assert.equal(state.folders.length, 0);
+  assert.deepEqual(state.placements, {});
+  assert.deepEqual(f.records.get('cloudenceFiles/owned'), original);
+  await assert.rejects(f.service.folders.move(viewer, original.id, folder.id), /not found/);
+});
+
+test('folder pages read only their selected files instead of relying on the recent-file query window', async () => {
+  const f = fixture([file('a'), file('b'), file('c'), file('unrelated')]);
+  const folder = (await f.service.folders.save(viewer, { section: 'documents', name: 'Archive' })).folders[0];
+  for (const id of ['a', 'b', 'c']) await f.service.folders.move(viewer, id, folder.id);
+  const first = await f.service.list(viewer, { section: 'documents', folderId: folder.id, limit: 2 });
+  assert.equal(first.nextOffset, 2);
+  assert.deepEqual(first.documents.map((file) => file.id), ['a', 'b']);
+  assert.deepEqual(f.profileBatches[0], ['cloudenceFiles/a', 'cloudenceFiles/b']);
+  const next = await f.service.list(viewer, { section: 'documents', folderId: folder.id, offset: 2, limit: 2 });
+  assert.deepEqual(next.documents.map((file) => file.id), ['c']);
+  assert.equal(next.nextOffset, undefined);
+});
+
+test('folder uploads place files atomically and clean up assets if the folder disappears during upload', async () => withUploadConfig(async () => {
+  const f = fixture();
+  const folder = (await f.service.folders.save(viewer, { section: 'documents', name: 'Uploads' })).folders[0];
+  const result = await f.service.upload(viewer, Buffer.from('content'), 'test.txt', 'text/plain', folder.id);
+  assert.equal((await f.service.folders.read(viewer)).placements[result.id], folder.id);
+  f.setUploadHandler(async () => { await f.service.folders.save(viewer, { id: folder.id, remove: true }); });
+  await assert.rejects(f.service.upload(viewer, Buffer.from('other'), 'second.txt', 'text/plain', folder.id), /not found/);
+  assert.equal(f.deletions.length, 1);
+  assert.equal((await f.service.usage(viewer)).used, 7);
+}));

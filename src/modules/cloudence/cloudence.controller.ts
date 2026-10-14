@@ -45,12 +45,13 @@ export class CloudenceController {
     @Req() request: RequestWithUser,
     @UploadedFile() file: Express.Multer.File,
     @Body('name') nameOverride?: string,
+    @Body('folderId') folderId?: string,
   ) {
     if (!file?.buffer || file.buffer.length === 0) {
       throw new BadRequestException('No file received. Send a multipart/form-data request with a "file" field.');
     }
     const name = nameOverride || file.originalname || 'unnamed';
-    return this.cloudence.upload(this.requireUser(request), file.buffer, name, file.mimetype);
+    return this.cloudence.upload(this.requireUser(request), file.buffer, name, file.mimetype, folderId);
   }
 
   @Get()
@@ -61,6 +62,9 @@ export class CloudenceController {
     @Query('search') search?: string,
     @Query('sort') sort?: string,
     @Query('limit') limit?: string,
+    @Query('section') section?: string,
+    @Query('folder') folderId?: string,
+    @Query('offset') offset?: string,
   ) {
     return this.cloudence.list(this.requireUser(request), {
       type,
@@ -68,7 +72,28 @@ export class CloudenceController {
       search,
       sort,
       limit: limit ? Number(limit) : undefined,
+      section, folderId, offset: offset ? Number(offset) : undefined,
     });
+  }
+
+  @Post('folders')
+  createFolder(@Req() request: RequestWithUser, @Body() body: { section?: string; name?: string }) {
+    return this.cloudence.folders.save(this.requireUser(request), { section: body.section, name: body.name });
+  }
+
+  @Patch('folders/:id')
+  renameFolder(@Req() request: RequestWithUser, @Param('id') id: string, @Body() body: { name?: string }) {
+    return this.cloudence.folders.save(this.requireUser(request), { id, name: body.name });
+  }
+
+  @Delete('folders/:id')
+  deleteFolder(@Req() request: RequestWithUser, @Param('id') id: string) {
+    return this.cloudence.folders.save(this.requireUser(request), { id, remove: true });
+  }
+
+  @Patch(':id/folder')
+  moveToFolder(@Req() request: RequestWithUser, @Param('id') id: string, @Body() body: { folderId?: string | null }) {
+    return this.cloudence.folders.move(this.requireUser(request), id, body.folderId);
   }
 
   @Get('usage')

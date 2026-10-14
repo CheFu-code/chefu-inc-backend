@@ -50,6 +50,8 @@ export type UpdateCloudenceFileInput = {
  * leakage at the API boundary regardless of what the frontend does.
  */
 export type CloudenceFileResponse = {
+  /** Personal folder placement for the requesting user, when section context is supplied. */
+  folderId?: string | null;
   isOwner: boolean;
   id: string;
   name: string;
