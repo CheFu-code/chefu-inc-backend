@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { v2 as cloudinary } from 'cloudinary';
 import { FieldValue, Transaction } from 'firebase-admin/firestore';
@@ -114,6 +115,7 @@ export class CloudenceService {
     const result = await this.cloudinaryStorage.uploadBuffer(buffer, {
       public_id: `chefu/cloudence/${user.uid}/${randomUUID()}`,
       resource_type: 'auto',
+      type: 'authenticated',
       overwrite: false,
       flags: 'strip_profile', // Strip EXIF GPS coordinates and camera metadata for physical privacy
       tags: ['chefu', 'cloudence', type, user.email],
@@ -127,8 +129,7 @@ export class CloudenceService {
       owner: { id: user.uid, fullName: '', email: user.email },
     }]);
 
-    // Pre-compute and cache the signed delivery URL once at upload time so that
-    // list() can return it from Firestore without running N×HMAC-SHA1 per request.
+    // Storage details remain internal; API responses use the authorized content endpoint.
     const partialDoc = {
       id, name, type, extension,
       url: result.secure_url,
@@ -138,13 +139,12 @@ export class CloudenceService {
       users: [] as string[],
       publicId: result.public_id,
       resourceType: result.resource_type || 'raw',
+      deliveryType: 'authenticated' as const,
       createdAt: now, updatedAt: now,
       isDeleted: false,
       sha256,
     };
-    const signedUrl = this.signUrl(partialDoc);
-
-    const document: CloudenceFileDocument = { ...partialDoc, signedUrl };
+    const document: CloudenceFileDocument = partialDoc;
 
     const db = this.firebaseAdmin.db();
     try {
@@ -162,7 +162,7 @@ export class CloudenceService {
       this.setCachedQuota(user.uid, { ...committedQuota, all: MAX_STORAGE_BYTES });
     } catch (error) {
       // A rejected commit must not leave an uploaded asset outside the file ledger.
-      await this.cloudinaryStorage.delete(result.public_id, (result.resource_type || 'raw') as 'image' | 'video' | 'raw')
+      await this.cloudinaryStorage.delete(result.public_id, (result.resource_type || 'raw') as 'image' | 'video' | 'raw', 'authenticated')
         .catch((cleanupError) => this.logger.error(`Upload cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : cleanupError}`));
       throw error;
     }
@@ -460,46 +460,54 @@ export class CloudenceService {
     return (await this.loadQuota(userId)).used;
   }
 
-  async getDownloadUrl(user: AuthenticatedUser, id: string) {
-    const ref = this.firebaseAdmin.db().collection(COLLECTION).doc(id);
-    const snapshot = await ref.get();
-    const file = snapshot.data() as CloudenceFileDocument | undefined;
+  private contentUrl(id: string, download = false): string {
+    const base = process.env.PUBLIC_API_BASE_URL || process.env.RENDER_EXTERNAL_URL || 'https://api.chefu.co.za';
+    const url = new URL(`/cloudence/files/${encodeURIComponent(id)}/content`, base);
+    if (download) url.searchParams.set('download', '1');
+    return url.toString();
+  }
 
-    if (!file || file.isDeleted) {
-      throw new NotFoundException('File was not found.');
-    }
-
+  private async readableFile(user: AuthenticatedUser, id: string): Promise<CloudenceFileDocument> {
+    const file = (await this.firebaseAdmin.db().collection(COLLECTION).doc(id).get()).data() as CloudenceFileDocument | undefined;
+    if (!file || file.isDeleted) throw new NotFoundException('File was not found.');
     const isOwner = file.ownerId === user.uid;
-    const isShared = file.users.includes(user.email);
-
-    if (!isOwner && !isShared) {
-      throw new ForbiddenException('You do not have permission to download this file.');
+    const email = user.email.trim().toLowerCase();
+    const isShared = file.users.some((recipient) => recipient.trim().toLowerCase() === email);
+    if (!isOwner && !isShared) throw new ForbiddenException('You do not have permission to access this file.');
+    if (!isOwner && file.shareExpiresAt && Date.parse(file.shareExpiresAt) <= Date.now()) {
+      throw new ForbiddenException('Sharing access for this file has expired.');
     }
-
-    if (!isOwner && file.shareExpiresAt && new Date() > new Date(file.shareExpiresAt)) {
-      throw new ForbiddenException('The sharing link for this file has expired.');
+    if (file.deliveryType !== 'authenticated') {
+      throw new ServiceUnavailableException('This file is awaiting protected-storage migration.');
     }
+    return file;
+  }
 
-    // Fire-and-forget audit — observability, not transactional
-    void this.logAudit(user, 'file.downloaded' as any, id, { name: file.name, sha256: file.sha256 })
-      .catch((err) => this.logger.warn(`Audit log (file.downloaded) failed: ${err instanceof Error ? err.message : err}`));
+  async getDownloadUrl(user: AuthenticatedUser, id: string) {
+    const file = await this.readableFile(user, id);
+    // This is an authenticated API URL, not a bearer link to Cloudinary.
+    return { downloadUrl: this.contentUrl(id, true), name: file.name, sha256: file.sha256, size: file.size };
+  }
 
-    // Generate a secure, expiring signed delivery URL with attachment header
-    const downloadUrl = cloudinary.url(file.publicId, {
-      sign_url: true,
-      secure: true,
-      resource_type: (file.resourceType as 'image' | 'video' | 'raw') || 'raw',
-      type: 'upload',
-      flags: `attachment:${encodeURIComponent(file.name)}`,
-      ...(file.extension ? { format: file.extension } : {}),
+  async openContent(user: AuthenticatedUser, id: string, options: { range?: string; preview?: boolean; signal?: AbortSignal } = {}) {
+    const file = await this.readableFile(user, id);
+    if (options.range && !/^bytes=(?:\d+-\d*|-\d+)$/.test(options.range)) throw new BadRequestException('Only a single byte range is supported.');
+    const resourceType = file.resourceType as 'image' | 'video' | 'raw';
+    if (!['image', 'video', 'raw'].includes(resourceType)) throw new ServiceUnavailableException('Unsupported storage resource.');
+    if (options.preview && (resourceType !== 'image' || file.type !== 'image')) throw new NotFoundException('No image preview is available.');
+    const storageUrl = cloudinary.url(file.publicId, {
+      sign_url: true, secure: true, type: 'authenticated', resource_type: resourceType,
+      ...(resourceType !== 'raw' ? { format: options.preview ? 'png' : file.extension } : {}),
+      ...(options.preview ? { width: 160, height: 160, crop: 'thumb', quality: 'auto' } : {}),
     });
-
-    return {
-      downloadUrl,
-      name: file.name,
-      sha256: file.sha256,
-      size: file.size,
-    };
+    const upstream = await fetch(storageUrl, {
+      headers: { 'Accept-Encoding': 'identity', ...(options.range ? { Range: options.range } : {}) }, signal: options.signal, redirect: 'error',
+    });
+    if (!upstream.ok && upstream.status !== 416) {
+      await upstream.body?.cancel();
+      throw new ServiceUnavailableException('File content could not be loaded. Please try again.');
+    }
+    return { file, upstream };
   }
 
   private assertSafeBuffer(buffer: Buffer<ArrayBufferLike>, name: string, contentType: string) {
@@ -674,33 +682,6 @@ export class CloudenceService {
     }
   }
 
-  private signUrl(file: Pick<CloudenceFileDocument, 'publicId' | 'resourceType' | 'extension' | 'url' | 'signedUrl'>): string {
-    // Fast path: return the pre-computed signed URL cached in Firestore at upload time.
-    // This avoids running HMAC-SHA1 for every file in every list() call (was N×CPU per request).
-    if ((file as CloudenceFileDocument).signedUrl) {
-      return (file as CloudenceFileDocument).signedUrl!;
-    }
-    if (!file.publicId) return file.url;
-    try {
-      return cloudinary.url(file.publicId, {
-        sign_url: true,
-        secure: true,
-        resource_type: (file.resourceType as 'image' | 'video' | 'raw') || 'raw',
-        type: 'upload',
-        ...(file.extension ? { format: file.extension } : {}),
-      });
-    } catch {
-      return file.url;
-    }
-  }
-
-  private withSignedUrl(file: CloudenceFileDocument): CloudenceFileDocument {
-    return {
-      ...file,
-      url: this.signUrl(file),
-    };
-  }
-
   private async withOwnerProfiles<T extends Pick<CloudenceFileDocument, 'ownerId' | 'owner'>>(files: T[]): Promise<T[]> {
     if (!files.length) return files;
 
@@ -763,11 +744,11 @@ export class CloudenceService {
   }
 
   private sanitizeFileForUser(file: CloudenceFileDocument, user: AuthenticatedUser): CloudenceFileDocument {
-    const signed = this.withSignedUrl(file);
+    const safe = { ...file, url: this.contentUrl(file.id) };
     if (file.ownerId !== user.uid) {
-      return { ...signed, users: [] };
+      return { ...safe, users: [] };
     }
-    return signed;
+    return safe;
   }
 
   /**
@@ -783,7 +764,7 @@ export class CloudenceService {
       name: file.name,
       type: file.type,
       extension: file.extension,
-      url: file.url,
+      url: this.contentUrl(file.id),
       size: file.size,
       owner: file.owner,
       isOwner: file.ownerId === user.uid,

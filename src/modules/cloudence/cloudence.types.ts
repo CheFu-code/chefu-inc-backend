@@ -7,7 +7,7 @@ export type CloudenceFileDocument = {
   extension: string;
   /** Raw Cloudinary delivery URL (stored at upload time). */
   url: string;
-  /** Pre-computed signed delivery URL cached in Firestore (avoids HMAC on every list). */
+  /** Legacy public URL, retained only for migration and never returned to clients. */
   signedUrl?: string;
   size: number;
   ownerId: string;
@@ -19,6 +19,7 @@ export type CloudenceFileDocument = {
   users: string[];
   publicId: string;
   resourceType: string;
+  deliveryType?: 'upload' | 'authenticated';
   createdAt: string;
   updatedAt: string;
   isDeleted?: boolean;
@@ -54,7 +55,7 @@ export type CloudenceFileResponse = {
   name: string;
   type: CloudenceFileType;
   extension: string;
-  /** Resolved signed delivery URL — pre-computed at upload, not re-derived per request. */
+  /** Authenticated API content endpoint; storage URLs never leave the backend. */
   url: string;
   size: number;
   owner: { id: string; fullName: string; email: string };

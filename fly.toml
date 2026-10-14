@@ -1,6 +1,10 @@
 app = "chefu-inc-backend"
 primary_region = "iad"
 
+[deploy]
+release_command = "npm run release:prod"
+release_command_timeout = "30m"
+
 [http_service]
 auto_start_machines = true
 auto_stop_machines = true

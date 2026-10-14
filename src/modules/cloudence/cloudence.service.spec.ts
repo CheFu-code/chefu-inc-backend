@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FieldValue } from 'firebase-admin/firestore';
+import { v2 as cloudinary } from 'cloudinary';
 import { MAX_STORAGE_BYTES } from './cloudence.constants';
 import { CloudenceService } from './cloudence.service';
 import type { CloudenceFileDocument } from './cloudence.types';
@@ -110,21 +111,24 @@ function fixture(files: CloudenceFileDocument[] = []) {
   };
   const uploads: string[] = [];
   const deletions: string[] = [];
+  const uploadOptions: unknown[] = [];
+  const deletionTypes: unknown[] = [];
   let uploadHandler: (() => Promise<void>) | undefined;
   const service = new CloudenceService(
     firebase as unknown as FirebaseAdminService,
     { reserve: async () => ({ limited: false }) } as unknown as RuntimeLimitService,
     {
-      uploadBuffer: async () => {
+      uploadBuffer: async (_buffer: Buffer, options: unknown) => {
+        uploadOptions.push(options);
         const id = `asset-${uploads.length}`;
         uploads.push(id);
         await uploadHandler?.();
         return { secure_url: 'https://example.com/upload.txt', public_id: id, resource_type: 'raw' };
       },
-      delete: async (id: string) => { deletions.push(id); },
+      delete: async (id: string, _resourceType: string, deliveryType: string) => { deletions.push(id); deletionTypes.push(deliveryType); },
     } as unknown as CloudinaryStorageService,
   );
-  return { service, records, operations, authNames, authCalls, profileBatches, uploads, deletions, setUploadHandler: (handler: () => Promise<void>) => { uploadHandler = handler; }, failProfiles: () => { failProfiles = true; }, failTransactions: () => { failTransactions = true; } };
+  return { service, records, operations, authNames, authCalls, profileBatches, uploads, deletions, uploadOptions, deletionTypes, setUploadHandler: (handler: () => Promise<void>) => { uploadHandler = handler; }, failProfiles: () => { failProfiles = true; }, failTransactions: () => { failTransactions = true; } };
 }
 
 test('existing owned and shared files use their own account names without exposing shared recipients', async () => {
@@ -341,4 +345,59 @@ test('recipient deltas preserve concurrent additions and removals', async () => 
   assert.deepEqual((f.records.get('cloudenceFiles/owned')?.users as string[]).sort(), [viewer.email, 'alice@example.com', 'bob@example.com'].sort());
   await assert.rejects(f.service.update(viewer, 'owned', { addUsers: ['invalid'] }), /valid email/);
   await assert.rejects(f.service.update(viewer, 'owned', { users: [], addUsers: [] }), /either/);
+});
+
+test('new uploads use protected storage and responses expose only authenticated API URLs', async () => withUploadConfig(async () => {
+  const f = fixture();
+  f.records.set('users/viewer@example.com', { fullname: 'Viewer' });
+  const result = await f.service.upload(viewer, Buffer.from('content'), 'test.txt', 'text/plain');
+  assert.equal((f.uploadOptions[0] as { type: string }).type, 'authenticated');
+  const stored = f.records.get(`cloudenceFiles/${result.id}`)!;
+  assert.equal(stored.deliveryType, 'authenticated');
+  assert.equal('signedUrl' in result, false);
+  assert.match(result.url, /\/cloudence\/files\/[^/]+\/content$/);
+  assert.doesNotMatch(result.url, /cloudinary/);
+}));
+
+test('owners and shared recipients can read protected files but revoked, expired, deleted, and legacy access fail closed', async (t) => {
+  const protectedFile = { ...file('protected'), deliveryType: 'authenticated' as const, resourceType: 'image', type: 'image' as const, extension: 'png', publicId: 'chefu/cloudence/viewer/private-id' };
+  const f = fixture([protectedFile]);
+  const requested: RequestInit[] = [];
+  t.mock.method(cloudinary, 'url', (_id, options) => {
+    assert.equal(options.type, 'authenticated');
+    return 'https://res.cloudinary.com/test/image/authenticated/internal-signature/file.png';
+  });
+  t.mock.method(global, 'fetch', async (_url, init) => {
+    requested.push(init!);
+    return new Response('content', { headers: { 'Content-Type': 'image/png' } });
+  });
+  const shared = { uid: 'friend', email: 'OTHER@EXAMPLE.COM', roles: [] };
+  assert.match((await f.service.getDownloadUrl(shared, 'protected')).downloadUrl, /\/content\?download=1$/);
+  assert.equal(await (await f.service.openContent(viewer, 'protected')).upstream.text(), 'content');
+  assert.equal(await (await f.service.openContent(shared, 'protected', { preview: true })).upstream.text(), 'content');
+  await assert.rejects(f.service.openContent({ uid: 'stranger', email: 'stranger@example.com', roles: [] }, 'protected'), /permission/);
+  f.records.set('cloudenceFiles/protected', { ...protectedFile, users: [] });
+  await assert.rejects(f.service.openContent(shared, 'protected'), /permission/);
+  f.records.set('cloudenceFiles/protected', { ...protectedFile, shareExpiresAt: '2000-01-01' });
+  await assert.rejects(f.service.openContent(shared, 'protected'), /expired/);
+  f.records.set('cloudenceFiles/protected', { ...protectedFile, isDeleted: true });
+  await assert.rejects(f.service.openContent(viewer, 'protected'), /not found/);
+  f.records.set('cloudenceFiles/protected', { ...protectedFile, deliveryType: 'upload' });
+  await assert.rejects(f.service.openContent(viewer, 'protected'), /migration/);
+  assert.equal(requested.length, 2, 'Denied requests never fetch storage content');
+});
+
+test('byte ranges are forwarded only after authorization and raw asset extensions are not duplicated', async (t) => {
+  const f = fixture([{ ...file('raw'), deliveryType: 'authenticated', publicId: 'chefu/cloudence/viewer/file.txt' }]);
+  t.mock.method(cloudinary, 'url', (_id, options) => {
+    assert.equal(options.format, undefined);
+    return 'https://res.cloudinary.com/test/raw/authenticated/internal/file.txt';
+  });
+  t.mock.method(global, 'fetch', async (_url, init) => {
+    assert.equal(new Headers(init?.headers).get('range'), 'bytes=0-2');
+    assert.equal(new Headers(init?.headers).get('accept-encoding'), 'identity');
+    return new Response('abc', { status: 206, headers: { 'Content-Range': 'bytes 0-2/10' } });
+  });
+  assert.equal((await f.service.openContent(viewer, 'raw', { range: 'bytes=0-2' })).upstream.status, 206);
+  await assert.rejects(f.service.openContent(viewer, 'raw', { range: 'bytes=0-1,5-6' }), /single byte range/);
 });

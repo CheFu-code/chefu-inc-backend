@@ -38,10 +38,11 @@ export class CloudinaryStorageService {
     });
   }
 
-  async delete(publicId: string, resourceType: 'image' | 'video' | 'raw') {
+  async delete(publicId: string, resourceType: 'image' | 'video' | 'raw', deliveryType: 'upload' | 'authenticated' = 'upload') {
     assertCloudinaryConfigured();
     const result = await cloudinary.uploader.destroy(publicId, {
       resource_type: resourceType,
+      type: deliveryType,
       invalidate: true,
     });
     if (result.result !== 'ok' && result.result !== 'not found') {
