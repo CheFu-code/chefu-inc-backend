@@ -127,6 +127,39 @@ const sessionBody = (workoutId: string) => ({
   ],
 });
 
+test("support reports use verified ownership, retain diagnostics, and retry without duplicates", async () => {
+  const { service, records } = setup();
+  const user = { uid: "alice", email: "alice@example.com", roles: [] };
+  const body = { requestId: "report-123", description: "  Workout fails to save after finishing.  ", appVersion: "1.0.0", platform: "android", userId: "bob", status: "closed", email: "bob@example.com" };
+  const response = await service.submitSupportReport(user, body);
+  assert.deepEqual(response, { id: "report-123", success: true });
+  const report = records.get("liftwise_users/alice/supportReports/report-123")!;
+  assert.equal(report.userId, "alice");
+  assert.equal(report.email, "alice@example.com");
+  assert.equal(report.status, "open");
+  assert.equal(report.description, "Workout fails to save after finishing.");
+  assert.equal(report.appVersion, "1.0.0");
+  assert.equal(report.platform, "android");
+  assert.ok(report.createdAt);
+  await service.submitSupportReport(user, body);
+  assert.equal(records.size, 1);
+  await assert.rejects(service.submitSupportReport(user, { ...body, description: "A different problem happened." }));
+  await service.submitSupportReport({ uid: "bob", email: "bob@example.com", roles: [] }, body);
+  assert.equal(records.size, 2);
+});
+
+test("invalid support reports are rejected without storing data", async () => {
+  const { service, records } = setup();
+  const user = { uid: "alice", email: "alice@example.com", roles: [] };
+  const body = { requestId: "report-123", description: "Workout fails to save.", appVersion: "1.0.0", platform: "ios" };
+  for (const change of [
+    { description: "short" }, { description: " ".repeat(20) },
+    { description: "x".repeat(3001) }, { platform: "unknown" },
+    { appVersion: "x".repeat(41) }, { requestId: "../bob" },
+  ]) await assert.rejects(service.submitSupportReport(user, { ...body, ...change }));
+  assert.equal(records.size, 0);
+});
+
 test("catalogue seeds once into Firestore and search returns the existing exercises", async () => {
   const { catalog, records } = setup();
   assert.equal((await catalog.all()).length, 20);

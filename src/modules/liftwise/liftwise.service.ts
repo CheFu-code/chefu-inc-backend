@@ -104,6 +104,36 @@ export class LiftWiseService {
     });
     return { success: true };
   }
+  async submitSupportReport(user: AuthenticatedUser, payload: unknown) {
+    const body = validate.object(payload);
+    const requestId = validate.id(body.requestId);
+    const description = validate.text(body.description, "problem description", 3000);
+    if (description.length < 10)
+      throw new BadRequestException("Please describe the problem in at least 10 characters.");
+    const appVersion = validate.text(body.appVersion, "app version", 40);
+    if (!["android", "ios", "web"].includes(body.platform as string))
+      throw new BadRequestException("Invalid platform.");
+    const report = this.owner(user.uid).collection("supportReports").doc(requestId);
+    await this.firebase.db().runTransaction(async (transaction) => {
+      const [existing] = await transaction.getAll(report);
+      if (existing.exists) {
+        if (existing.data()?.description !== description)
+          throw new BadRequestException("Please submit the updated report with a new request ID.");
+        return;
+      }
+      transaction.create(report, {
+        appId: "liftwise",
+        userId: user.uid,
+        email: user.email ?? null,
+        description,
+        appVersion,
+        platform: body.platform,
+        status: "open",
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    });
+    return { id: requestId, success: true };
+  }
   exercises(search?: string) {
     return this.catalog.list(search);
   }

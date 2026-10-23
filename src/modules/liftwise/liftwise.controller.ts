@@ -26,6 +26,10 @@ export class LiftWiseController {
   saveProfile(@Req() request: LiftWiseRequest, @Body() body: unknown) {
     return this.liftwise.saveProfile(request.user, body);
   }
+  @Post("support-reports")
+  supportReport(@Req() request: LiftWiseRequest, @Body() body: unknown) {
+    return this.liftwise.submitSupportReport(request.user, body);
+  }
   @Get("exercises")
   exercises(@Query("search") search?: string) {
     return this.liftwise.exercises(search);

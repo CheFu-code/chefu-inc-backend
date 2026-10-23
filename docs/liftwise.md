@@ -6,6 +6,7 @@
 | --- | --- |
 | GET /liftwise/profile | Workout preferences |
 | POST /liftwise/profile | Save onboarding preferences |
+| POST /liftwise/support-reports | Submit an authenticated problem report |
 | GET /liftwise/exercises?search= | Shared exercise catalogue |
 | GET /liftwise/exercises/:id | Exercise details |
 | GET /liftwise/exercises/:id/instructions | AI Coach with source instruction fallback |
@@ -28,3 +29,5 @@ Use the backend's existing Firebase Admin credentials, Cloudinary configuration 
 LiftWise's client calls this backend using `EXPO_PUBLIC_API_BASE_URL`. It is a new app with no existing users or data to transfer, so it starts fresh in Firestore using CheFu user IDs directly. The frontend's PostgreSQL APIs, Neon and Drizzle dependencies, database schema, migrations, and database configuration have been removed. No account mapping or legacy-data migration is required. Deploy the matching CheFu Account redirect policies and OAuth client registrations before testing SSO.
 
 Validation: `npm run typecheck`, `npm run build`, and `npm run test:liftwise`. Unit tests use isolated Firestore and OAuth adapters; end-to-end checks require live credentials and deployed apps.
+
+Help & Support provides quick answers and a problem-report form. Reports are saved under `liftwise_users/{uid}/supportReports/{requestId}` with verified user ID/email, description (10–3000 trimmed characters), app version, platform, server timestamp, and `status: open`. The client retains a request ID for retries so a lost response does not duplicate a report. Reports can be reviewed in Firestore (including a `supportReports` collection-group query); no email notifications or support dashboard are configured by this feature.
