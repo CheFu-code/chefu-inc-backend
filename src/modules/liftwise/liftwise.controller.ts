@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Inject,
   Param,
@@ -53,6 +54,14 @@ export class LiftWiseController {
   @Get("workouts/:id")
   workout(@Req() request: LiftWiseRequest, @Param("id") id: string) {
     return this.liftwise.workout(request.user.uid, id);
+  }
+  @Post("workouts/:id/duplicate")
+  duplicateWorkout(@Req() request: LiftWiseRequest, @Param("id") id: string) {
+    return this.liftwise.duplicateWorkout(request.user.uid, id);
+  }
+  @Delete("workouts/:id")
+  deleteWorkout(@Req() request: LiftWiseRequest, @Param("id") id: string) {
+    return this.liftwise.deleteWorkout(request.user.uid, id);
   }
   @Get("workout-sessions/calendar")
   calendar(

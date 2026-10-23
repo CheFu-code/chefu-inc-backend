@@ -23,6 +23,7 @@ function database() {
     return {
       key,
       get: async () => snapshot(key),
+      delete: async () => { records.delete(key); },
       create: async (value: Record<string, unknown>) => {
         assert.equal(records.has(key), false);
         records.set(key, structuredClone(value));
@@ -158,6 +159,39 @@ test("invalid support reports are rejected without storing data", async () => {
     { appVersion: "x".repeat(41) }, { requestId: "../bob" },
   ]) await assert.rejects(service.submitSupportReport(user, { ...body, ...change }));
   assert.equal(records.size, 0);
+});
+
+test("duplicating a workout preserves its details and stays within the owner account", async () => {
+  const { service, records } = setup();
+  const body = workoutBody();
+  const source = await service.createWorkout("alice", { ...body, name: "x".repeat(80), description: "Original plan", exercises: [{ ...body.exercises[0], targetWeight: 50 }] });
+  const original = { ...source, image: "https://images.example/shared-cover.jpg" };
+  records.set(`liftwise_users/alice/workouts/${source.id}`, original);
+  const copy = await service.duplicateWorkout("alice", source.id);
+  assert.notEqual(copy.id, source.id);
+  assert.equal(copy.name.length, 80);
+  assert.ok(copy.name.endsWith(" (copy)"));
+  assert.deepEqual(copy.exercises, original.exercises);
+  assert.equal(copy.description, original.description);
+  assert.equal(copy.image, original.image);
+  assert.ok(records.has(`liftwise_users/alice/workouts/${copy.id}`));
+  assert.deepEqual(await service.workout("alice", source.id), original);
+  await assert.rejects(service.duplicateWorkout("bob", source.id));
+  await assert.rejects(service.duplicateWorkout("alice", "../other"));
+});
+
+test("deleting a workout preserves history and other users' data and supports retries", async () => {
+  const { service } = setup();
+  const workout = await service.createWorkout("alice", workoutBody());
+  const session = await service.createSession("alice", sessionBody(workout.id));
+  const before = await service.session("alice", session.id);
+  await service.deleteWorkout("bob", workout.id);
+  assert.equal((await service.workout("alice", workout.id)).id, workout.id);
+  await service.deleteWorkout("alice", workout.id);
+  await assert.rejects(service.workout("alice", workout.id));
+  assert.deepEqual(await service.session("alice", session.id), before);
+  assert.deepEqual(await service.deleteWorkout("alice", workout.id), { success: true });
+  await assert.rejects(service.deleteWorkout("alice", "../other"));
 });
 
 test("catalogue seeds once into Firestore and search returns the existing exercises", async () => {

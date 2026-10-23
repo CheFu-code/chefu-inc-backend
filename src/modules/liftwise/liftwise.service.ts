@@ -174,6 +174,22 @@ export class LiftWiseService {
     if (!snapshot.exists) throw new NotFoundException("Workout not found.");
     return { ...snapshot.data(), id: snapshot.id } as Workout;
   }
+  async duplicateWorkout(uid: string, workoutId: string): Promise<Workout> {
+    const source = await this.workout(uid, workoutId);
+    const copy: Workout = {
+      ...source,
+      id: randomUUID(),
+      name: `${source.name.slice(0, 73)} (copy)`,
+      createdAt: new Date().toISOString(),
+    };
+    await this.owner(uid).collection("workouts").doc(copy.id).create(copy);
+    return copy;
+  }
+  async deleteWorkout(uid: string, workoutId: string) {
+    // Sessions keep their own workout snapshot; shared cover URLs remain valid.
+    await this.owner(uid).collection("workouts").doc(validate.id(workoutId)).delete();
+    return { success: true };
+  }
   async createWorkout(uid: string, payload: unknown) {
     const body = validate.object(payload);
     const name = validate.text(body.name, "workout name", 80);

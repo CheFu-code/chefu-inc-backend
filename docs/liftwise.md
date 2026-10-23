@@ -13,6 +13,8 @@
 | GET /liftwise/workouts?limit= | Own workouts |
 | POST /liftwise/workouts | Create workout, optionally upload cover |
 | GET /liftwise/workouts/:id | Own workout with exercise targets |
+| POST /liftwise/workouts/:id/duplicate | Copy an owned workout with a new ID |
+| DELETE /liftwise/workouts/:id | Remove an owned routine, preserving completed sessions |
 | GET /liftwise/workout-sessions?limit= | Own completed workout history |
 | POST /liftwise/workout-sessions | Save completed sets atomically |
 | GET /liftwise/workout-sessions/:id | Own history details and volume |
