@@ -65,6 +65,8 @@ export class LiftWiseService {
   }
   async saveProfile(user: AuthenticatedUser, payload: unknown) {
     const body = validate.object(payload);
+    if (body.weightUnit !== undefined && !["kg", "lb"].includes(body.weightUnit as string))
+      throw new BadRequestException("Invalid weight unit.");
     if (
       !["build-muscle", "lose-fat", "maintain"].includes(body.goal as string) ||
       !["beginner", "intermediate", "advanced"].includes(
@@ -92,7 +94,7 @@ export class LiftWiseService {
         ...preferences,
         goal: body.goal,
         experience: body.experience,
-        weightUnit: preferences.weightUnit || "kg",
+        weightUnit: body.weightUnit ?? preferences.weightUnit ?? "kg",
       };
       transaction.set(
         app,

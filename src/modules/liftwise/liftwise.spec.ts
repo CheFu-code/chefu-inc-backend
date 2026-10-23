@@ -219,6 +219,20 @@ test("onboarding preferences attach to the SSO account without overwriting share
   );
 });
 
+test("weight units persist, survive onboarding updates, and reject invalid values", async () => {
+  const { service } = setup();
+  const user = { uid: "alice", email: "alice@example.com", roles: [] };
+  const profile = { gender: "female", goal: "maintain", experience: "beginner" };
+  await service.saveProfile(user, { ...profile, weightUnit: "lb" });
+  assert.equal((await service.profile(user))?.weightUnit, "lb");
+  await service.saveProfile(user, profile);
+  assert.equal((await service.profile(user))?.weightUnit, "lb");
+  await assert.rejects(service.saveProfile(user, { ...profile, weightUnit: "oz" }));
+  assert.equal((await service.profile(user))?.weightUnit, "lb");
+  await service.saveProfile(user, { ...profile, weightUnit: "kg" });
+  assert.equal((await service.profile(user))?.weightUnit, "kg");
+});
+
 test("gender is shared across apps while goal and experience remain app-specific", async () => {
   const { service, records } = setup();
   const user = { uid: "alice", email: "alice@example.com", roles: [] };
