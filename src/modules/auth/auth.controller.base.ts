@@ -1,3 +1,4 @@
+import { sharedGender } from './shared-profile';
 import {
   BadGatewayException,
   BadRequestException,
@@ -726,6 +727,7 @@ export class AuthControllerBase {
     if (!email) {
       return {
         fullname: '',
+        gender: null,
         firstName: '',
         lastName: '',
         profilePicture: '',
@@ -774,6 +776,7 @@ export class AuthControllerBase {
     );
     return {
       fullname,
+      gender: sharedGender(data.gender) ?? null,
       firstName: this.stringValue(data.firstName),
       lastName: this.stringValue(data.lastName),
       phone: this.stringValue(data.phone),

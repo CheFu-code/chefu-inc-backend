@@ -28,6 +28,7 @@ import { ChefuOauthClient } from '../apps/app-registry';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { SecurityEventsService } from './security-events.service';
 import { SESSION_COOKIE_NAME } from './session.constants';
+import { sharedGender } from './shared-profile';
 
 type OAuthCodeDocument = {
   appId: string;
@@ -639,12 +640,17 @@ export class OAuthService {
     const profile: CachedUserInfoProfile = claims.email
       ? await this.getUserInfoProfile(claims.email)
       : { expiresAt: 0 };
+    // Shared answers must be current even when the avatar cache is still warm.
+    const gender = claims.email && claims.scope?.split(' ').includes('profile')
+      ? sharedGender((await this.firebaseAdmin.db().collection('users').doc(claims.email.trim().toLowerCase()).get()).get('gender'))
+      : undefined;
 
     return {
       sub: claims.sub,
       email: claims.email,
       name: claims.name,
       ...(profile.picture ? { picture: profile.picture } : {}),
+      ...(gender ? { gender } : {}),
       roles: claims.roles || [],
       app: claims.app,
       scope: claims.scope,
@@ -663,7 +669,7 @@ export class OAuthService {
     const request = this.firebaseAdmin
       .db()
       .collection('users')
-      .doc(email)
+      .doc(key)
       .get()
       .then(snapshot => {
         const profile = snapshot.data() || {};

@@ -3,8 +3,12 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
+import { FieldValue } from "firebase-admin/firestore";
+import type { AuthenticatedUser } from "../auth/authenticated-user";
+import { sharedGender } from "../auth/shared-profile";
 import { FirebaseAdminService } from "../firebase-admin/firebase-admin.service";
 import { CloudinaryStorageService } from "../../common/cloudinary-storage.service";
 import { LiftWiseCatalogService } from "./liftwise-catalog.service";
@@ -39,30 +43,63 @@ export class LiftWiseService {
       throw new BadRequestException("Invalid user ID.");
     return this.firebase.db().collection("liftwise_users").doc(uid);
   }
-  async profile(uid: string) {
-    const snapshot = await this.owner(uid).get();
-    return snapshot.exists ? (snapshot.data()?.profile ?? null) : null;
+  private account(user: AuthenticatedUser) {
+    const email = user.email?.trim().toLowerCase();
+    if (!email || email.includes("/"))
+      throw new UnauthorizedException(
+        "An authenticated account email is required.",
+      );
+    return this.firebase.db().collection("users").doc(email);
   }
-  async saveProfile(uid: string, payload: unknown) {
+  async profile(user: AuthenticatedUser) {
+    const account = this.account(user);
+    const [shared, app] = await Promise.all([
+      account.get(),
+      account.collection("appProfiles").doc("liftwise").get(),
+    ]);
+    const { gender: legacyGender, ...preferences } = app.data()?.profile ?? {};
+    const gender = sharedGender(shared.data()?.gender);
+    return app.exists || gender
+      ? { ...preferences, ...(gender ? { gender } : {}) }
+      : null;
+  }
+  async saveProfile(user: AuthenticatedUser, payload: unknown) {
     const body = validate.object(payload);
     if (
-      !["male", "female"].includes(body.gender as string) ||
       !["build-muscle", "lose-fat", "maintain"].includes(body.goal as string) ||
       !["beginner", "intermediate", "advanced"].includes(
         body.experience as string,
       )
     )
       throw new BadRequestException("Invalid workout preferences.");
-    const profile = {
-      gender: body.gender,
-      goal: body.goal,
-      experience: body.experience,
-      weightUnit: "kg",
-    };
-    await this.owner(uid).set(
-      { profile, updatedAt: new Date().toISOString() },
-      { merge: true },
-    );
+    const account = this.account(user);
+    const app = account.collection("appProfiles").doc("liftwise");
+    await this.firebase.db().runTransaction(async (transaction) => {
+      const [shared, existingApp] = await transaction.getAll(account, app);
+      const knownGender = sharedGender(shared.data()?.gender);
+      if (!knownGender && !["male", "female"].includes(body.gender as string))
+        throw new BadRequestException("Please choose your gender.");
+      // A stale app draft must never overwrite an answer already held by SSO.
+      if (!knownGender)
+        transaction.set(
+          account,
+          { gender: body.gender, updatedAt: FieldValue.serverTimestamp() },
+          { merge: true },
+        );
+      const { gender: legacyGender, ...preferences } =
+        existingApp.data()?.profile ?? {};
+      const profile = {
+        ...preferences,
+        goal: body.goal,
+        experience: body.experience,
+        weightUnit: preferences.weightUnit || "kg",
+      };
+      transaction.set(
+        app,
+        { appId: "liftwise", profile, updatedAt: FieldValue.serverTimestamp() },
+        { mergeFields: ["appId", "profile", "updatedAt"] },
+      );
+    });
     return { success: true };
   }
   exercises(search?: string) {

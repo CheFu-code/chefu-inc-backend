@@ -20,11 +20,11 @@ export class LiftWiseController {
   ) {}
   @Get("profile")
   profile(@Req() request: LiftWiseRequest) {
-    return this.liftwise.profile(request.user.uid);
+    return this.liftwise.profile(request.user);
   }
   @Post("profile")
   saveProfile(@Req() request: LiftWiseRequest, @Body() body: unknown) {
-    return this.liftwise.saveProfile(request.user.uid, body);
+    return this.liftwise.saveProfile(request.user, body);
   }
   @Get("exercises")
   exercises(@Query("search") search?: string) {

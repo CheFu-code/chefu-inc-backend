@@ -7,7 +7,7 @@ import { LiftWiseService } from "./liftwise.service";
 import { LiftWiseCatalogService } from "./liftwise-catalog.service";
 import { DEFAULT_EXERCISES } from "./liftwise-exercises.data";
 import type { FirebaseAdminService } from "../firebase-admin/firebase-admin.service";
-import type { OAuthService } from "../auth/oauth.service";
+import { OAuthService } from "../auth/oauth.service";
 import type { CloudinaryStorageService } from "../../common/cloudinary-storage.service";
 
 // Isolated Firestore adapter: exercises the real service's paths, queries and writes.
@@ -83,6 +83,9 @@ function database() {
       callback({
         getAll: async (...refs: ReturnType<typeof doc>[]) =>
           refs.map((ref) => snapshot(ref.key)),
+        set: (ref: ReturnType<typeof doc>, value: Record<string, unknown>) => {
+          void ref.set(value);
+        },
         create: (
           ref: ReturnType<typeof doc>,
           value: Record<string, unknown>,
@@ -152,12 +155,154 @@ test("workouts, sessions and profiles are isolated by verified user ID", async (
     service.createSession("bob", sessionBody(workout.id)),
     /not found/,
   );
-  await service.saveProfile("alice", {
+  await service.saveProfile(
+    { uid: "alice", email: "alice@example.com", roles: [] },
+    {
+      gender: "female",
+      goal: "maintain",
+      experience: "beginner",
+    },
+  );
+  assert.equal(
+    await service.profile({ uid: "bob", email: "bob@example.com", roles: [] }),
+    null,
+  );
+});
+
+test("onboarding preferences attach to the SSO account without overwriting shared fields", async () => {
+  const { service, records } = setup();
+  const accountPath = "users/alice@example.com";
+  const profilePath = `${accountPath}/appProfiles/liftwise`;
+  records.set(accountPath, {
+    uid: "alice",
+    fullname: "Alice",
+    gender: "shared-value",
+    roles: ["user"],
+  });
+  records.set(profilePath, {
+    appId: "liftwise",
+    enabled: true,
+    createdAt: "existing-date",
+  });
+  const user = { uid: "alice", email: " Alice@Example.com ", roles: [] };
+  const preferences = {
+    gender: "female",
+    goal: "build-muscle",
+    experience: "beginner",
+  };
+  await service.saveProfile(user, {
+    ...preferences,
+    email: "bob@example.com",
+    uid: "bob",
+  });
+  assert.deepEqual(await service.profile(user), {
+    ...preferences,
+    gender: "shared-value",
+    weightUnit: "kg",
+  });
+  assert.deepEqual(records.get(accountPath), {
+    uid: "alice",
+    fullname: "Alice",
+    gender: "shared-value",
+    roles: ["user"],
+  });
+  assert.equal(records.get(profilePath)?.enabled, true);
+  assert.equal(records.get(profilePath)?.createdAt, "existing-date");
+  assert.equal(
+    records.has("users/bob@example.com/appProfiles/liftwise"),
+    false,
+  );
+  assert.equal(records.has("liftwise_users/alice"), false);
+  assert.equal(
+    (records.get(profilePath)?.profile as Record<string, unknown>).gender,
+    undefined,
+  );
+});
+
+test("gender is shared across apps while goal and experience remain app-specific", async () => {
+  const { service, records } = setup();
+  const user = { uid: "alice", email: "alice@example.com", roles: [] };
+  records.set("users/alice@example.com", { uid: "alice", fullname: "Alice" });
+  assert.equal(await service.profile(user), null);
+  await service.saveProfile(user, {
     gender: "female",
     goal: "maintain",
     experience: "beginner",
   });
-  assert.equal(await service.profile("bob"), null);
+  assert.equal(records.get("users/alice@example.com")?.gender, "female");
+  assert.equal(records.get("users/alice@example.com")?.fullname, "Alice");
+  const preferences = records.get(
+    "users/alice@example.com/appProfiles/liftwise",
+  )?.profile as Record<string, unknown>;
+  assert.equal(preferences.gender, undefined);
+  assert.equal(preferences.goal, "maintain");
+  // Reuse another app's answer even when a stale draft submits something else.
+  records.set("users/alice@example.com", {
+    uid: "alice",
+    gender: "non-binary",
+  });
+  await service.saveProfile(user, {
+    gender: "male",
+    goal: "build-muscle",
+    experience: "advanced",
+  });
+  assert.equal(records.get("users/alice@example.com")?.gender, "non-binary");
+  assert.equal((await service.profile(user))?.gender, "non-binary");
+});
+
+test("shared gender is returned even before this app has a profile", async () => {
+  const { service, records } = setup();
+  records.set("users/alice@example.com", { gender: "female" });
+  assert.deepEqual(
+    await service.profile({
+      uid: "alice",
+      email: "alice@example.com",
+      roles: [],
+    }),
+    { gender: "female" },
+  );
+});
+
+test("SSO userinfo exposes current shared gender only with profile scope", async () => {
+  const { firebase, records } = database();
+  const oauth = Object.create(OAuthService.prototype) as OAuthService;
+  let scope = "openid profile email";
+  Object.assign(oauth, {
+    firebaseAdmin: firebase,
+    verifyAccessToken: async () => ({
+      typ: "access_token",
+      sub: "alice",
+      email: "alice@example.com",
+      app: "liftwise",
+      scope,
+    }),
+    getUserInfoProfile: async () => ({
+      expiresAt: Date.now() + 30_000,
+      picture: "https://example.com/avatar.jpg",
+    }),
+  });
+  records.set("users/alice@example.com", { gender: "female" });
+  assert.equal((await oauth.userinfo("Bearer token")).gender, "female");
+  records.set("users/alice@example.com", { gender: "non-binary" });
+  assert.equal((await oauth.userinfo("Bearer token")).gender, "non-binary");
+  scope = "openid email";
+  assert.equal((await oauth.userinfo("Bearer token")).gender, undefined);
+});
+
+test("profile access requires an authenticated email and rejects document paths", async () => {
+  const { service } = setup();
+  for (const email of ["", "../alice@example.com"]) {
+    const user = { uid: "alice", email, roles: [] };
+    await assert.rejects(service.profile(user), /authenticated account email/);
+    await assert.rejects(
+      service.saveProfile(user, {
+        gender: "female",
+        goal: "maintain",
+        experience: "beginner",
+      }),
+      /authenticated account email/,
+    );
+  }
 });
 
 test("history, volume, daily stats and calendar preserve the app response shapes", async () => {

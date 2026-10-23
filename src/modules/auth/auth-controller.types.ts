@@ -27,6 +27,7 @@ export type AcademyProfileUpdate = {
 };
 
 export type ProfileUpdateBody = {
+  gender?: string;
   fullname?: string;
   firstName?: string;
   lastName?: string;

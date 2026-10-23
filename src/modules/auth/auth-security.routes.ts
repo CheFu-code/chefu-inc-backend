@@ -1,3 +1,4 @@
+import { sharedGender } from './shared-profile';
 import {
   BadGatewayException,
   BadRequestException,
@@ -1167,6 +1168,12 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
       if (firebasePhoneNumber) {
         authUpdates.phoneNumber = firebasePhoneNumber;
       }
+    }
+
+    if (body.gender !== undefined) {
+      const gender = sharedGender(body.gender);
+      if (!gender) throw new BadRequestException('Gender must be a non-empty value of 80 characters or less.');
+      updates.gender = gender;
     }
 
     if (body.bio !== undefined) {
