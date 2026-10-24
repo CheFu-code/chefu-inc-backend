@@ -178,27 +178,11 @@ type NodeJsonWebKey = JsonWebKey & {
   use?: string;
 };
 
-type CachedUserInfoProfile = {
-  expiresAt: number;
-  picture?: string;
-};
-
-const USERINFO_PROFILE_CACHE_TTL_MS = 30_000;
-const USERINFO_PROFILE_CACHE_MAX_ENTRIES = 1_000;
-
 @Injectable()
 export class OAuthService {
   private readonly mobileRefreshTokenTtlMs = 15 * 24 * 60 * 60 * 1000;
   private readonly persistentMobileClientIds = new Set(['nook-mobile', 'quantum-mobile', 'liftwise-mobile']);
   private readonly logger = new Logger(OAuthService.name);
-  private readonly userInfoProfileCache = new Map<
-    string,
-    CachedUserInfoProfile
-  >();
-  private readonly userInfoProfileRequests = new Map<
-    string,
-    Promise<CachedUserInfoProfile>
-  >();
   private readonly issuer = this.cleanUrl(
     process.env.OAUTH_ISSUER ||
     process.env.PUBLIC_API_BASE_URL ||
@@ -637,67 +621,24 @@ export class OAuthService {
       throw new UnauthorizedException('Access token required.');
     }
 
-    const profile: CachedUserInfoProfile = claims.email
-      ? await this.getUserInfoProfile(claims.email)
-      : { expiresAt: 0 };
-    // Shared answers must be current even when the avatar cache is still warm.
-    const gender = claims.email && claims.scope?.split(' ').includes('profile')
-      ? sharedGender((await this.firebaseAdmin.db().collection('users').doc(claims.email.trim().toLowerCase()).get()).get('gender'))
-      : undefined;
+    const profile = claims.email && claims.scope?.split(' ').includes('profile')
+      ? (await this.firebaseAdmin.db().collection('users').doc(claims.email.trim().toLowerCase()).get()).data() || {}
+      : {};
+    const gender = sharedGender(profile.gender);
+    const name = typeof profile.fullname === 'string' ? profile.fullname : claims.name;
+    const picture = typeof profile.profilePicture === 'string' && profile.profilePicture
+      ? profile.profilePicture : typeof profile.avatarUrl === 'string' ? profile.avatarUrl : undefined;
 
     return {
       sub: claims.sub,
       email: claims.email,
-      name: claims.name,
-      ...(profile.picture ? { picture: profile.picture } : {}),
+      name,
+      ...(picture ? { picture } : {}),
       ...(gender ? { gender } : {}),
       roles: claims.roles || [],
       app: claims.app,
       scope: claims.scope,
     };
-  }
-
-  private async getUserInfoProfile(email: string) {
-    const key = email.trim().toLowerCase();
-    const cached = this.userInfoProfileCache.get(key);
-    if (cached && cached.expiresAt > Date.now()) return cached;
-    if (cached) this.userInfoProfileCache.delete(key);
-
-    const inFlight = this.userInfoProfileRequests.get(key);
-    if (inFlight) return inFlight;
-
-    const request = this.firebaseAdmin
-      .db()
-      .collection('users')
-      .doc(key)
-      .get()
-      .then(snapshot => {
-        const profile = snapshot.data() || {};
-        const picture =
-          typeof profile.profilePicture === 'string' && profile.profilePicture
-            ? profile.profilePicture
-            : typeof profile.avatarUrl === 'string' && profile.avatarUrl
-              ? profile.avatarUrl
-              : undefined;
-        const result: CachedUserInfoProfile = {
-          expiresAt: Date.now() + USERINFO_PROFILE_CACHE_TTL_MS,
-          ...(picture ? { picture } : {}),
-        };
-        this.userInfoProfileCache.set(key, result);
-        if (this.userInfoProfileCache.size > USERINFO_PROFILE_CACHE_MAX_ENTRIES) {
-          const oldestKey = this.userInfoProfileCache.keys().next().value;
-          if (oldestKey) this.userInfoProfileCache.delete(oldestKey);
-        }
-        return result;
-      });
-    this.userInfoProfileRequests.set(key, request);
-    try {
-      return await request;
-    } finally {
-      if (this.userInfoProfileRequests.get(key) === request) {
-        this.userInfoProfileRequests.delete(key);
-      }
-    }
   }
 
   async verifyAccessToken(

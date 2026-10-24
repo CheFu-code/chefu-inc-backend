@@ -13,6 +13,8 @@
 | GET /liftwise/workouts?limit= | Own workouts |
 | POST /liftwise/workouts | Create workout, optionally upload cover |
 | GET /liftwise/workouts/:id | Own workout with exercise targets |
+| PATCH /liftwise/workouts/:id/exercise-order | Save an exact permutation of the owned workout's exercise IDs |
+| PATCH /liftwise/workouts/:id/cover | Replace an owned workout's cover with a validated image upload |
 | POST /liftwise/workouts/:id/duplicate | Copy an owned workout with a new ID |
 | DELETE /liftwise/workouts/:id | Remove an owned routine, preserving completed sessions |
 | GET /liftwise/workout-sessions?limit= | Own completed workout history |

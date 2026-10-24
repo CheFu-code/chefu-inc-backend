@@ -5,7 +5,9 @@ import {
   Get,
   Inject,
   Param,
+  Patch,
   Post,
+  Put,
   Query,
   Req,
   UseGuards,
@@ -43,6 +45,18 @@ export class LiftWiseController {
   exercise(@Param("id") id: string) {
     return this.liftwise.exercise(id);
   }
+  @Get("exercise-bookmarks")
+  bookmarks(@Req() request: LiftWiseRequest) {
+    return this.liftwise.bookmarks(request.user.uid);
+  }
+  @Put("exercise-bookmarks/:id")
+  saveBookmark(@Req() request: LiftWiseRequest, @Param("id") id: string) {
+    return this.liftwise.saveBookmark(request.user.uid, id);
+  }
+  @Delete("exercise-bookmarks/:id")
+  deleteBookmark(@Req() request: LiftWiseRequest, @Param("id") id: string) {
+    return this.liftwise.deleteBookmark(request.user.uid, id);
+  }
   @Get("workouts")
   workouts(@Req() request: LiftWiseRequest, @Query("limit") limit?: string) {
     return this.liftwise.workouts(request.user.uid, limit);
@@ -54,6 +68,14 @@ export class LiftWiseController {
   @Get("workouts/:id")
   workout(@Req() request: LiftWiseRequest, @Param("id") id: string) {
     return this.liftwise.workout(request.user.uid, id);
+  }
+  @Patch("workouts/:id/exercise-order")
+  reorderExercises(@Req() request: LiftWiseRequest, @Param("id") id: string, @Body() body: unknown) {
+    return this.liftwise.reorderExercises(request.user.uid, id, body);
+  }
+  @Patch("workouts/:id/cover")
+  changeWorkoutCover(@Req() request: LiftWiseRequest, @Param("id") id: string, @Body() body: unknown) {
+    return this.liftwise.changeWorkoutCover(request.user.uid, id, body);
   }
   @Post("workouts/:id/duplicate")
   duplicateWorkout(@Req() request: LiftWiseRequest, @Param("id") id: string) {

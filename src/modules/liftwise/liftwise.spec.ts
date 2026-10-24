@@ -103,15 +103,18 @@ function database() {
 function setup() {
   const { firebase, records } = database();
   const catalog = new LiftWiseCatalogService(firebase);
+  const uploads: Record<string, unknown>[] = [];
   const storage = {
-    uploadBuffer: async () => ({
-      secure_url: "https://images.example/cover.jpg",
-    }),
+    uploadBuffer: async (_buffer: Buffer, options: Record<string, unknown>) => {
+      uploads.push(options);
+      return { secure_url: "https://images.example/cover.jpg" };
+    },
   } as unknown as CloudinaryStorageService;
   return {
     service: new LiftWiseService(firebase, catalog, storage),
     catalog,
     records,
+    uploads,
   };
 }
 const workoutBody = () => ({
@@ -192,6 +195,104 @@ test("deleting a workout preserves history and other users' data and supports re
   assert.deepEqual(await service.session("alice", session.id), before);
   assert.deepEqual(await service.deleteWorkout("alice", workout.id), { success: true });
   await assert.rejects(service.deleteWorkout("alice", "../other"));
+});
+
+test("exercise order persists without changing exercise targets or completed history", async () => {
+  const { service } = setup();
+  const workout = await service.createWorkout("alice", { ...workoutBody(), exercises: [
+    { id: DEFAULT_EXERCISES[0].id, reps: 10, sets: 3, rest: 60, targetWeight: 40 },
+    { id: DEFAULT_EXERCISES[1].id, reps: 8, sets: 4, rest: 90, targetWeight: 25 },
+  ] });
+  const session = await service.createSession("alice", sessionBody(workout.id));
+  const history = await service.session("alice", session.id);
+  const exerciseIds = workout.exercises.map((exercise) => exercise.id).reverse();
+  await service.reorderExercises("alice", workout.id, { exerciseIds });
+  const result = await service.workout("alice", workout.id);
+  assert.deepEqual(result, { ...workout, exercises: [...workout.exercises].reverse() });
+  assert.deepEqual(await service.session("alice", session.id), history);
+  await service.reorderExercises("alice", workout.id, { exerciseIds });
+  assert.deepEqual(await service.workout("alice", workout.id), result);
+});
+
+test("invalid orders and other users cannot modify a workout", async () => {
+  const { service } = setup();
+  const workout = await service.createWorkout("alice", workoutBody());
+  const first = workout.exercises[0].id;
+  for (const exerciseIds of [[], [first, first], [DEFAULT_EXERCISES[1].id], ["../bad"], "bad", Array(11).fill(first)]) {
+    await assert.rejects(service.reorderExercises("alice", workout.id, { exerciseIds }));
+    assert.deepEqual(await service.workout("alice", workout.id), workout);
+  }
+  await assert.rejects(service.reorderExercises("bob", workout.id, { exerciseIds: [first] }));
+  await assert.rejects(service.reorderExercises("alice", "../bad", { exerciseIds: [first] }));
+  assert.deepEqual(await service.workout("alice", workout.id), workout);
+});
+
+test("changing a cover preserves workout details, copied covers, and historical images", async () => {
+  const { service, records, uploads } = setup();
+  const workout = await service.createWorkout("alice", workoutBody());
+  const original = { ...workout, image: "https://images.example/original.jpg" };
+  records.set(`liftwise_users/alice/workouts/${workout.id}`, original);
+  const copy = await service.duplicateWorkout("alice", workout.id);
+  const session = await service.createSession("alice", sessionBody(workout.id));
+  const image = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]).toString("base64");
+  const result = await service.changeWorkoutCover("alice", workout.id, { image });
+  assert.deepEqual(await service.workout("alice", workout.id), { ...original, image: result.image });
+  assert.equal((await service.workout("alice", copy.id)).image, original.image);
+  assert.equal((await service.session("alice", session.id)).image, original.image);
+  assert.equal(uploads[0].folder, "liftwise/alice");
+  assert.ok(String(uploads[0].public_id).startsWith(`${workout.id}_`));
+  await service.changeWorkoutCover("alice", workout.id, { image });
+  assert.notEqual(uploads[0].public_id, uploads[1].public_id);
+});
+
+test("cover changes reject invalid images and unauthorized workouts before uploading", async () => {
+  const { service, uploads } = setup();
+  const workout = await service.createWorkout("alice", workoutBody());
+  for (const image of [undefined, "", "bad", "x".repeat(2_800_001)])
+    await assert.rejects(service.changeWorkoutCover("alice", workout.id, { image }));
+  const image = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]).toString("base64");
+  await assert.rejects(service.changeWorkoutCover("bob", workout.id, { image }));
+  await assert.rejects(service.changeWorkoutCover("alice", "../bad", { image }));
+  assert.equal(uploads.length, 0);
+  assert.deepEqual(await service.workout("alice", workout.id), workout);
+});
+
+test("exercise bookmarks persist, support retries, and stay isolated by user", async () => {
+  const { service } = setup();
+  const id = DEFAULT_EXERCISES[0].id;
+  assert.deepEqual(await service.bookmarks("alice"), []);
+  await service.saveBookmark("alice", id);
+  await service.saveBookmark("alice", id);
+  assert.deepEqual(await service.bookmarks("alice"), [id]);
+  assert.deepEqual(await service.bookmarks("bob"), []);
+  await service.deleteBookmark("bob", id);
+  assert.deepEqual(await service.bookmarks("alice"), [id]);
+  await assert.rejects(service.saveBookmark("alice", "unknown-exercise"));
+  await assert.rejects(service.deleteBookmark("alice", "../other"));
+  await service.deleteBookmark("alice", id);
+  await service.deleteBookmark("alice", id);
+  assert.deepEqual(await service.bookmarks("alice"), []);
+});
+
+test("daily reminder settings validate time and survive other profile updates", async () => {
+  const { service } = setup();
+  const user = { uid: "alice", email: "alice@example.com", roles: [] };
+  const profile = { gender: "female", experience: "beginner", goal: "maintain" };
+  const reminder = { enabled: true, hour: 18, minute: 30 };
+  await service.saveProfile(user, { ...profile, reminder });
+  await service.saveProfile(user, { ...profile, weightUnit: "lb" });
+  assert.deepEqual((await service.profile(user))?.reminder, reminder);
+  for (const change of [{ hour: 24 }, { minute: -1 }, { minute: 0.5 }, { enabled: "true" }])
+    await assert.rejects(service.saveProfile(user, { ...profile, reminder: { ...reminder, ...change } }));
+  assert.deepEqual((await service.profile(user))?.reminder, reminder);
+});
+
+test("session API rejects non-canonical weight units", async () => {
+  const { service } = setup();
+  const workout = await service.createWorkout("alice", workoutBody());
+  await assert.rejects(service.createSession("alice", { ...sessionBody(workout.id), weightUnit: "lb" }));
+  const result = await service.createSession("alice", { ...sessionBody(workout.id), weightUnit: "kg" });
+  assert.ok(result.id);
 });
 
 test("catalogue seeds once into Firestore and search returns the existing exercises", async () => {
@@ -344,7 +445,7 @@ test("shared gender is returned even before this app has a profile", async () =>
   );
 });
 
-test("SSO userinfo exposes current shared gender only with profile scope", async () => {
+test("SSO userinfo returns fresh shared name, picture and gender with profile scope", async () => {
   const { firebase, records } = database();
   const oauth = Object.create(OAuthService.prototype) as OAuthService;
   let scope = "openid profile email";
@@ -355,19 +456,21 @@ test("SSO userinfo exposes current shared gender only with profile scope", async
       sub: "alice",
       email: "alice@example.com",
       app: "liftwise",
+      name: "Old token name",
       scope,
     }),
-    getUserInfoProfile: async () => ({
-      expiresAt: Date.now() + 30_000,
-      picture: "https://example.com/avatar.jpg",
-    }),
   });
-  records.set("users/alice@example.com", { gender: "female" });
+  records.set("users/alice@example.com", { gender: "female", fullname: "Current Name", profilePicture: "https://example.com/current.jpg" });
+  assert.equal((await oauth.userinfo("Bearer token")).name, "Current Name");
+  assert.equal((await oauth.userinfo("Bearer token")).picture, "https://example.com/current.jpg");
   assert.equal((await oauth.userinfo("Bearer token")).gender, "female");
-  records.set("users/alice@example.com", { gender: "non-binary" });
+  records.set("users/alice@example.com", { gender: "non-binary", fullname: "Updated Name", profilePicture: "https://example.com/updated.jpg" });
+  assert.equal((await oauth.userinfo("Bearer token")).name, "Updated Name");
+  assert.equal((await oauth.userinfo("Bearer token")).picture, "https://example.com/updated.jpg");
   assert.equal((await oauth.userinfo("Bearer token")).gender, "non-binary");
   scope = "openid email";
   assert.equal((await oauth.userinfo("Bearer token")).gender, undefined);
+  assert.equal((await oauth.userinfo("Bearer token")).picture, undefined);
 });
 
 test("profile access requires an authenticated email and rejects document paths", async () => {

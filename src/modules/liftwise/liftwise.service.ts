@@ -67,6 +67,12 @@ export class LiftWiseService {
     const body = validate.object(payload);
     if (body.weightUnit !== undefined && !["kg", "lb"].includes(body.weightUnit as string))
       throw new BadRequestException("Invalid weight unit.");
+    let reminder: { enabled: boolean; hour: number; minute: number } | undefined;
+    if (body.reminder !== undefined) {
+      const value = validate.object(body.reminder);
+      if (typeof value.enabled !== "boolean") throw new BadRequestException("Invalid reminder setting.");
+      reminder = { enabled: value.enabled, hour: validate.number(value.hour, "reminder hour", 0, 23), minute: validate.number(value.minute, "reminder minute", 0, 59) };
+    }
     if (
       !["build-muscle", "lose-fat", "maintain"].includes(body.goal as string) ||
       !["beginner", "intermediate", "advanced"].includes(
@@ -95,6 +101,7 @@ export class LiftWiseService {
         goal: body.goal,
         experience: body.experience,
         weightUnit: body.weightUnit ?? preferences.weightUnit ?? "kg",
+        ...(reminder ? { reminder } : {}),
       };
       transaction.set(
         app,
@@ -144,6 +151,19 @@ export class LiftWiseService {
     return this.catalog.instructions(exerciseId);
   }
 
+  async bookmarks(uid: string) {
+    const snapshot = await this.owner(uid).collection("exerciseBookmarks").get();
+    return snapshot.docs.map((doc) => doc.id);
+  }
+  async saveBookmark(uid: string, exerciseId: string) {
+    const exercise = await this.catalog.get(exerciseId);
+    await this.owner(uid).collection("exerciseBookmarks").doc(exercise.id).set({ exerciseId: exercise.id, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    return { success: true };
+  }
+  async deleteBookmark(uid: string, exerciseId: string) {
+    await this.owner(uid).collection("exerciseBookmarks").doc(validate.id(exerciseId)).delete();
+    return { success: true };
+  }
   async workouts(uid: string, limitValue?: string) {
     let query = this.owner(uid)
       .collection("workouts")
@@ -173,6 +193,38 @@ export class LiftWiseService {
       .get();
     if (!snapshot.exists) throw new NotFoundException("Workout not found.");
     return { ...snapshot.data(), id: snapshot.id } as Workout;
+  }
+  async reorderExercises(uid: string, workoutId: string, payload: unknown) {
+    const body = validate.object(payload);
+    if (!Array.isArray(body.exerciseIds) || body.exerciseIds.length < 1 || body.exerciseIds.length > 10)
+      throw new BadRequestException("Invalid exercise order.");
+    const ids = body.exerciseIds.map(validate.id);
+    const ref = this.owner(uid).collection("workouts").doc(validate.id(workoutId));
+    await this.firebase.db().runTransaction(async (transaction) => {
+      const [snapshot] = await transaction.getAll(ref);
+      if (!snapshot.exists) throw new NotFoundException("Workout not found.");
+      const workout = snapshot.data() as Workout;
+      const exercises = new Map(workout.exercises.map((exercise) => [exercise.id, exercise]));
+      if (ids.length !== workout.exercises.length || new Set(ids).size !== ids.length || ids.some((id) => !exercises.has(id)))
+        throw new BadRequestException("The exercise list changed. Reload the workout and try again.");
+      transaction.set(ref, { exercises: ids.map((id) => exercises.get(id)!) }, { merge: true });
+    });
+    return { success: true };
+  }
+  async changeWorkoutCover(uid: string, workoutId: string, payload: unknown) {
+    const body = validate.object(payload);
+    await this.workout(uid, workoutId);
+    if (typeof body.image !== "string" || !body.image.trim())
+      throw new BadRequestException("Please choose a cover image.");
+    // A new asset keeps covers in completed sessions and copied routines intact.
+    const image = await this.uploadCover(uid, `${workoutId}_${randomUUID()}`, body.image);
+    const ref = this.owner(uid).collection("workouts").doc(workoutId);
+    await this.firebase.db().runTransaction(async (transaction) => {
+      const [snapshot] = await transaction.getAll(ref);
+      if (!snapshot.exists) throw new NotFoundException("Workout not found.");
+      transaction.set(ref, { image }, { merge: true });
+    });
+    return { image };
   }
   async duplicateWorkout(uid: string, workoutId: string): Promise<Workout> {
     const source = await this.workout(uid, workoutId);
@@ -277,6 +329,8 @@ export class LiftWiseService {
   async createSession(uid: string, payload: unknown) {
     const body = validate.object(payload);
     const workoutId = validate.id(body.workoutId);
+    if (body.weightUnit !== undefined && body.weightUnit !== "kg")
+      throw new BadRequestException("Session weights must be supplied in kilograms.");
     const startedAt = validate.date(body.startedAt),
       completedAt = validate.date(body.completedAt);
     const durationSeconds = validate.number(
