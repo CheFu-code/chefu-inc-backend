@@ -87,35 +87,6 @@ On the frontend host, set:
 
 - `NEXT_PUBLIC_API_BASE_URL=https://api.chefu.co.za`
 
-## Nook Explore Search
-
-Explore post search uses Firestore cursor pagination and indexed caption tokens;
-people search uses username-prefix queries and cursor pagination. The Nook
-conversation list also uses indexed cursor pagination to bound each inbox read.
-Before shipping the matching Nook app version:
-
-1. Deploy the required composite indexes from `firestore.indexes.json` and wait
-   until they are ready. This includes the `nookSocialPosts` search indexes and
-   the `nookConversations` participant-and-last-message index.
-2. Deploy the backend, which writes search tokens on newly published posts.
-3. Run `npm run backfill:nook-post-search` from a trusted environment configured
-   with production Firebase Admin credentials. This is a one-time migration for
-   existing posts; do not run it against an unintended Firebase project.
-4. Release the Nook app after the backfill completes.
-
-Post search matches caption words (including hashtag text), not arbitrary
-substrings. People search matches username prefixes. The post index stores up
-to 30 distinct tokens per post to bound index growth.
-
-## Nook Message Notifications
-
-Nook stores Expo push tokens in Firestore and sends a push after a new message is
-committed. Configure Android FCM and iOS APNs credentials for the EAS project
-before expecting device delivery. The app requests notification permission on a
-physical device and registers/removes its token through authenticated Nook API
-routes. Foreground notification content is shown as an in-app banner; background
-notifications are displayed by the operating system.
-
 ## Routes
 
 - `GET /health`
@@ -140,7 +111,6 @@ notifications are displayed by the operating system.
 - `POST /api/keys/report-leak`
 - `GET /auth/me`
 - `DELETE /auth/session`
-- `POST /nook/messages/:conversationId/messages`
 - `POST /ai/generate`
 - `POST /email/password-changed`
 - `GET /flow/access/session`

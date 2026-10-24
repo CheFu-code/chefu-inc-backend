@@ -74,11 +74,6 @@ export const CHEFU_APPS: ChefuApp[] = [
         origins: ["https://cloudence.chefu.co.za"],
     },
     {
-        id: "nook",
-        name: "Nook",
-        origins: [],
-    },
-    {
         id: "liftwise",
         name: "LiftWise",
         origins: ["https://liftwise.chefu.co.za"],
@@ -158,13 +153,6 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         name: "Quantum Mobile",
         redirectUris: ["quantum://auth"],
         scopes: ["openid", "profile", "email", "quantum:chat", "quantum:read"],
-    },
-    {
-        id: "nook-mobile",
-        appId: "nook",
-        name: "Nook Mobile",
-        redirectUris: ["nook://sso-callback"],
-        scopes: ["openid", "profile", "email"],
     },
     {
         id: "liftwise-mobile",

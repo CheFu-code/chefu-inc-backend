@@ -12,7 +12,6 @@ import { FirebaseAdminModule } from './modules/firebase-admin/firebase-admin.mod
 import { FlowModule } from './modules/flow/flow.module';
 import { HealthController } from './modules/health/health.controller';
 import { LogixModule } from './modules/logix/logix.module';
-import { NookMessagingModule } from './modules/nook-messaging/nook-messaging.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { QuantumModule } from './modules/quantum/quantum.module';
 import { ProductsModule } from './modules/products/products.module';
@@ -39,7 +38,6 @@ const productModules = [
   CoursesModule,
   FlowModule,
   LogixModule,
-  NookMessagingModule,
   QuantumModule,
   ProductsModule,
   SubmissionsModule,

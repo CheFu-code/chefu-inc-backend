@@ -7,7 +7,6 @@ export type ChefuAppId =
     | "logix-dash"
     | "merchant"
     | "cloudence"
-    | "nook"
     | "liftwise"
     | "root";
     

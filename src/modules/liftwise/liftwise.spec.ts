@@ -567,7 +567,7 @@ test("invalid workout inputs, ID paths, limits, images and date ranges are rejec
 test("guard rejects absent credentials and tokens for another app or token type", async () => {
   for (const claims of [
     null,
-    { app: "nook", typ: "access_token", sub: "alice" },
+    { app: "quantum", typ: "access_token", sub: "alice" },
     { app: "liftwise", typ: "id_token", sub: "alice" },
   ]) {
     const request = {

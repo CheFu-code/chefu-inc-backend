@@ -181,7 +181,7 @@ type NodeJsonWebKey = JsonWebKey & {
 @Injectable()
 export class OAuthService {
   private readonly mobileRefreshTokenTtlMs = 15 * 24 * 60 * 60 * 1000;
-  private readonly persistentMobileClientIds = new Set(['nook-mobile', 'quantum-mobile', 'liftwise-mobile']);
+  private readonly persistentMobileClientIds = new Set(['quantum-mobile', 'liftwise-mobile']);
   private readonly logger = new Logger(OAuthService.name);
   private readonly issuer = this.cleanUrl(
     process.env.OAUTH_ISSUER ||

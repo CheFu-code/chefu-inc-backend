@@ -3,8 +3,8 @@
 Quantum uses the existing `quantum-mobile` public OAuth client with the exact
 `quantum://auth` callback. CheFu Account already permits that client and callback.
 The `quantum-web` client retains `https://quantum.chefu.co.za/auth/callback`.
-Native Quantum now receives rotating refresh tokens with the same 15-day absolute
-lifetime as Nook. Other clients retain their existing refresh policy.
+Native Quantum receives rotating refresh tokens with a 15-day absolute lifetime.
+Other clients retain their existing refresh policy.
 
 All mobile data routes are under `/quantum/agent` and use the existing `AuthGuard`.
 The backend derives ownership from `request.user.uid`; request bodies cannot choose
