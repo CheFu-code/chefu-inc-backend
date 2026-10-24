@@ -6,6 +6,7 @@ import { LiftWiseAuthGuard } from "./liftwise-auth.guard";
 import { LiftWiseService } from "./liftwise.service";
 import { LiftWiseCatalogService } from "./liftwise-catalog.service";
 import { DEFAULT_EXERCISES } from "./liftwise-exercises.data";
+import { LiftWiseReadCache } from "./liftwise-read-cache";
 import type { FirebaseAdminService } from "../firebase-admin/firebase-admin.service";
 import { OAuthService } from "../auth/oauth.service";
 import type { CloudinaryStorageService } from "../../common/cloudinary-storage.service";
@@ -13,23 +14,75 @@ import type { CloudinaryStorageService } from "../../common/cloudinary-storage.s
 // Isolated Firestore adapter: exercises the real service's paths, queries and writes.
 function database() {
   const records = new Map<string, Record<string, unknown>>();
-  const snapshot = (key: string) => ({
+  const stats = {
+    documentReads: 0,
+    queryReads: 0,
+    documentsRead: 0,
+    writes: 0,
+    aggregations: 0,
+  };
+  const snapshot = (key: string, fields?: string[]) => ({
     id: key.split("/").at(-1)!,
     exists: records.has(key),
-    data: () => structuredClone(records.get(key)),
+    data: () => {
+      const value = records.get(key);
+      return value
+        ? structuredClone(
+            fields
+              ? Object.fromEntries(
+                  Object.entries(value).filter(([field]) =>
+                    fields.includes(field),
+                  ),
+                )
+              : value,
+          )
+        : undefined;
+    },
     get: (field: string) => records.get(key)?.[field],
   });
+  function set(key: string, value: Record<string, unknown>) {
+    stats.writes++;
+    const resolved = Object.fromEntries(
+      Object.entries(value).map(([field, item]) => {
+        const union = item as { elements?: unknown[] } | null;
+        return [
+          field,
+          union && Array.isArray(union.elements)
+            ? [
+                ...new Set([
+                  ...((records.get(key)?.[field] as unknown[]) ?? []),
+                  ...union.elements,
+                ]),
+              ]
+            : structuredClone(item),
+        ];
+      }),
+    );
+    records.set(key, { ...records.get(key), ...resolved });
+  }
   function doc(key: string) {
     return {
       key,
-      get: async () => snapshot(key),
-      delete: async () => { records.delete(key); },
+      get: async () => {
+        stats.documentReads++;
+        stats.documentsRead++;
+        return snapshot(key);
+      },
+      delete: async () => {
+        stats.writes++;
+        records.delete(key);
+      },
       create: async (value: Record<string, unknown>) => {
         assert.equal(records.has(key), false);
-        records.set(key, structuredClone(value));
+        set(key, value);
       },
       set: async (value: Record<string, unknown>) => {
-        records.set(key, { ...records.get(key), ...structuredClone(value) });
+        set(key, value);
+      },
+      update: async (value: Record<string, unknown>) => {
+        if (!records.has(key))
+          throw Object.assign(new Error("Not found"), { code: 5 });
+        set(key, value);
       },
       collection: (name: string) => collection(`${key}/${name}`),
     };
@@ -37,15 +90,61 @@ function database() {
   function collection(
     key: string,
     filters: ((value: Record<string, unknown>) => boolean)[] = [],
-    sorting?: { field: string; direction: string },
+    sorting: { field: string; direction: string }[] = [],
     cap?: number,
+    cursor?: string[],
+    fields?: string[],
   ) {
+    function keys() {
+      let result = [...records.keys()].filter(
+        (name) =>
+          name.startsWith(`${key}/`) &&
+          !name.slice(key.length + 1).includes("/") &&
+          filters.every((filter) => filter(records.get(name)!)),
+      );
+      const values = (name: string) =>
+        sorting.map(({ field }) =>
+          field === "__name__"
+            ? name.split("/").at(-1)!
+            : String(records.get(name)![field]),
+        );
+      const compare = (left: string[], right: string[]) => {
+        for (let i = 0; i < sorting.length; i++) {
+          const value =
+            left[i].localeCompare(right[i]) *
+            (sorting[i].direction === "desc" ? -1 : 1);
+          if (value) return value;
+        }
+        return 0;
+      };
+      if (sorting.length) result.sort((a, b) => compare(values(a), values(b)));
+      if (cursor)
+        result = result.filter((name) => compare(values(name), cursor) > 0);
+      return cap === undefined ? result : result.slice(0, cap);
+    }
     return {
       doc: (name: string) => doc(`${key}/${name}`),
-      orderBy: (field: string, direction = "asc") =>
-        collection(key, filters, { field, direction }, cap),
-      limit: (count: number) => collection(key, filters, sorting, count),
-      select: () => collection(key, filters, sorting, cap),
+      orderBy: (field: unknown, direction = "asc") =>
+        collection(
+          key,
+          filters,
+          [
+            ...sorting,
+            {
+              field: typeof field === "string" ? field : "__name__",
+              direction,
+            },
+          ],
+          cap,
+          cursor,
+          fields,
+        ),
+      limit: (count: number) =>
+        collection(key, filters, sorting, count, cursor, fields),
+      startAfter: (...values: string[]) =>
+        collection(key, filters, sorting, cap, values, fields),
+      select: (...selected: string[]) =>
+        collection(key, filters, sorting, cap, cursor, selected),
       where: (field: string, op: string, expected: string) =>
         collection(
           key,
@@ -58,50 +157,79 @@ function database() {
           ],
           sorting,
           cap,
+          cursor,
+          fields,
         ),
+      aggregate: () => ({
+        get: async () => {
+          stats.aggregations++;
+          const found = keys();
+          return {
+            data: () => ({
+              workouts: found.length,
+              totalTimeSeconds: found.reduce(
+                (sum, name) =>
+                  sum + Number(records.get(name)?.durationSeconds ?? 0),
+                0,
+              ),
+            }),
+          };
+        },
+      }),
       get: async () => {
-        let keys = [...records.keys()].filter(
-          (name) =>
-            name.startsWith(`${key}/`) &&
-            !name.slice(key.length + 1).includes("/") &&
-            filters.every((filter) => filter(records.get(name)!)),
-        );
-        if (sorting)
-          keys.sort(
-            (a, b) =>
-              String(records.get(a)![sorting.field]).localeCompare(
-                String(records.get(b)![sorting.field]),
-              ) * (sorting.direction === "desc" ? -1 : 1),
-          );
-        if (cap !== undefined) keys = keys.slice(0, cap);
-        return { empty: keys.length === 0, docs: keys.map(snapshot) };
+        stats.queryReads++;
+        const found = keys();
+        stats.documentsRead += Math.max(1, found.length);
+        return {
+          empty: found.length === 0,
+          docs: found.map((name) => snapshot(name, fields)),
+        };
       },
     };
   }
   const db = {
     collection,
-    runTransaction: async (callback: (transaction: unknown) => Promise<void>) =>
-      callback({
-        getAll: async (...refs: ReturnType<typeof doc>[]) =>
-          refs.map((ref) => snapshot(ref.key)),
-        set: (ref: ReturnType<typeof doc>, value: Record<string, unknown>) => {
-          void ref.set(value);
-        },
+    batch: () => {
+      const operations: (() => void)[] = [];
+      return {
         create: (
           ref: ReturnType<typeof doc>,
           value: Record<string, unknown>,
         ) => {
-          records.set(ref.key, structuredClone(value));
+          operations.push(() => {
+            assert.equal(records.has(ref.key), false);
+            set(ref.key, value);
+          });
         },
+        set: (ref: ReturnType<typeof doc>, value: Record<string, unknown>) => {
+          operations.push(() => set(ref.key, value));
+        },
+        commit: async () => {
+          operations.forEach((operation) => operation());
+        },
+      };
+    },
+    runTransaction: async (callback: (transaction: unknown) => Promise<void>) =>
+      callback({
+        getAll: async (...refs: ReturnType<typeof doc>[]) => {
+          stats.documentReads += refs.length;
+          stats.documentsRead += refs.length;
+          return refs.map((ref) => snapshot(ref.key));
+        },
+        set: (ref: ReturnType<typeof doc>, value: Record<string, unknown>) =>
+          set(ref.key, value),
+        create: (ref: ReturnType<typeof doc>, value: Record<string, unknown>) =>
+          set(ref.key, value),
       }),
   };
   return {
     firebase: { db: () => db } as unknown as FirebaseAdminService,
     records,
+    stats,
   };
 }
 function setup() {
-  const { firebase, records } = database();
+  const { firebase, records, stats } = database();
   const catalog = new LiftWiseCatalogService(firebase);
   const uploads: Record<string, unknown>[] = [];
   const storage = {
@@ -115,8 +243,160 @@ function setup() {
     catalog,
     records,
     uploads,
+    stats,
   };
 }
+
+test("history pages are bounded, have stable timestamp ties, and compute totals without downloading all sessions", async () => {
+  const { service, records, stats } = setup();
+  for (let index = 0; index < 47; index++) {
+    records.set(
+      `liftwise_users/alice/sessions/session-${String(index).padStart(3, "0")}`,
+      {
+        completedAt: "2026-10-24T10:00:00.000Z",
+        startedAt: "2026-10-24T09:00:00.000Z",
+        workoutId: "workout",
+        workoutName: "Workout",
+        durationSeconds: 600,
+        sets: [],
+        image: null,
+        exercises: [],
+      },
+    );
+  }
+  records.set("liftwise_users/bob/sessions/private", {
+    completedAt: "2026-10-24T10:00:00.000Z",
+    durationSeconds: 99,
+    sets: [],
+  });
+  const first = await service.sessionPage("alice", "20");
+  assert.equal(first.items.length, 20);
+  assert.equal(stats.documentsRead, 21);
+  assert.equal(stats.aggregations, 1);
+  assert.deepEqual(first.summary, { workouts: 47, totalTimeSeconds: 47 * 600 });
+  await service.sessionPage("alice", "20");
+  assert.equal(
+    stats.documentsRead,
+    21,
+    "the same page is served from the bounded cache",
+  );
+  const second = await service.sessionPage("alice", "20", first.nextCursor!);
+  const third = await service.sessionPage("alice", "20", second.nextCursor!);
+  assert.equal(third.nextCursor, null);
+  assert.equal(stats.aggregations, 1, "later pages do not recalculate totals");
+  const ids = [...first.items, ...second.items, ...third.items].map(
+    (item) => item.id,
+  );
+  assert.equal(new Set(ids).size, 47);
+  assert.equal(ids.includes("private"), false);
+  const datePage = await service.sessionPage(
+    "alice",
+    "20",
+    undefined,
+    "2026-10-23T00:00:00Z",
+    "2026-10-24T00:00:00Z",
+  );
+  assert.deepEqual(datePage.items, []);
+  assert.equal(datePage.summary?.workouts, 0);
+  await assert.rejects(service.sessionPage("alice", "101"));
+  await assert.rejects(service.sessionPage("alice", "20", "invalid"));
+  await assert.rejects(
+    service.sessionPage(
+      "alice",
+      "20",
+      undefined,
+      "2026-10-01T00:00:00Z",
+      "2026-11-01T00:00:00Z",
+    ),
+  );
+});
+
+test("preference patches read only the app profile and unchanged values produce no writes", async () => {
+  const { service, records, stats } = setup();
+  const user = { uid: "alice", email: "alice@example.com", roles: [] };
+  await service.saveProfile(user, {
+    gender: "female",
+    goal: "maintain",
+    experience: "beginner",
+    weightUnit: "kg",
+  });
+  const beforeReads = stats.documentReads;
+  const beforeWrites = stats.writes;
+  await service.patchProfile(user, { weightUnit: "lb" });
+  assert.equal(stats.documentReads - beforeReads, 1);
+  assert.equal(stats.writes - beforeWrites, 1);
+  assert.equal(records.get("users/alice@example.com")?.gender, "female");
+  await service.patchProfile(user, { weightUnit: "lb" });
+  assert.equal(stats.writes - beforeWrites, 1);
+  await service.patchProfile(user, {});
+  assert.equal(stats.documentReads - beforeReads, 2);
+  await assert.rejects(service.patchProfile(user, { gender: "male" }));
+  await assert.rejects(
+    service.patchProfile(user, {
+      reminder: { enabled: true, hour: 24, minute: 0 },
+    }),
+  );
+});
+
+test("streak backfill preserves timestamps; later cold reads use year summaries and new sessions update them atomically", async () => {
+  const { firebase, records, stats } = database();
+  const catalog = new LiftWiseCatalogService(firebase);
+  const storage = {} as CloudinaryStorageService;
+  const service = new LiftWiseService(firebase, catalog, storage);
+  for (let index = 0; index < 90; index++) {
+    records.set(`liftwise_users/alice/sessions/old-${index}`, {
+      startedAt: new Date(Date.UTC(2025, 0, index + 1)).toISOString(),
+    });
+  }
+  assert.equal((await service.streak("alice")).workoutDates.length, 90);
+  const before = stats.documentsRead;
+  const cold = new LiftWiseService(firebase, catalog, storage);
+  assert.equal((await cold.streak("alice")).workoutDates.length, 90);
+  assert.equal(
+    stats.documentsRead - before,
+    2,
+    "only metadata and one year document are read",
+  );
+  const workout = await cold.createWorkout("alice", workoutBody());
+  const writes = stats.writes;
+  await cold.createSession("alice", sessionBody(workout.id));
+  assert.equal(
+    stats.writes - writes,
+    2,
+    "session and year summary commit in the same batch",
+  );
+  assert.equal((await cold.streak("alice")).workoutDates.length, 91);
+});
+
+test("read cache coalesces requests, expires, retries failures, and invalidates only the changed resource and user", async () => {
+  const cache = new LiftWiseReadCache();
+  const key = JSON.stringify(["alice", "workouts"]);
+  let loads = 0;
+  const load = async () => ++loads;
+  assert.deepEqual(
+    await Promise.all([cache.get(key, load), cache.get(key, load)]),
+    [1, 1],
+  );
+  cache.invalidateUser("bob");
+  cache.invalidateUser("alice", ["bookmarks"]);
+  assert.equal(await cache.get(key, load), 1);
+  cache.invalidateUser("alice", ["workouts"]);
+  assert.equal(await cache.get(key, load), 2);
+  const clock = Date.now;
+  try {
+    Date.now = () => clock() + 60_000;
+    assert.equal(await cache.get(key, load), 3);
+  } finally {
+    Date.now = clock;
+  }
+  const failing = JSON.stringify(["alice", "failure"]);
+  await assert.rejects(
+    cache.get(failing, async () => {
+      throw new Error("Offline");
+    }),
+  );
+  assert.equal(await cache.get(failing, async () => "recovered"), "recovered");
+});
 const workoutBody = () => ({
   name: "Push day",
   exercises: [{ id: DEFAULT_EXERCISES[0].id, reps: 10, rest: 60, sets: 3 }],
@@ -134,7 +414,15 @@ const sessionBody = (workoutId: string) => ({
 test("support reports use verified ownership, retain diagnostics, and retry without duplicates", async () => {
   const { service, records } = setup();
   const user = { uid: "alice", email: "alice@example.com", roles: [] };
-  const body = { requestId: "report-123", description: "  Workout fails to save after finishing.  ", appVersion: "1.0.0", platform: "android", userId: "bob", status: "closed", email: "bob@example.com" };
+  const body = {
+    requestId: "report-123",
+    description: "  Workout fails to save after finishing.  ",
+    appVersion: "1.0.0",
+    platform: "android",
+    userId: "bob",
+    status: "closed",
+    email: "bob@example.com",
+  };
   const response = await service.submitSupportReport(user, body);
   assert.deepEqual(response, { id: "report-123", success: true });
   const report = records.get("liftwise_users/alice/supportReports/report-123")!;
@@ -147,28 +435,55 @@ test("support reports use verified ownership, retain diagnostics, and retry with
   assert.ok(report.createdAt);
   await service.submitSupportReport(user, body);
   assert.equal(records.size, 1);
-  await assert.rejects(service.submitSupportReport(user, { ...body, description: "A different problem happened." }));
-  await service.submitSupportReport({ uid: "bob", email: "bob@example.com", roles: [] }, body);
+  await assert.rejects(
+    service.submitSupportReport(user, {
+      ...body,
+      description: "A different problem happened.",
+    }),
+  );
+  await service.submitSupportReport(
+    { uid: "bob", email: "bob@example.com", roles: [] },
+    body,
+  );
   assert.equal(records.size, 2);
 });
 
 test("invalid support reports are rejected without storing data", async () => {
   const { service, records } = setup();
   const user = { uid: "alice", email: "alice@example.com", roles: [] };
-  const body = { requestId: "report-123", description: "Workout fails to save.", appVersion: "1.0.0", platform: "ios" };
+  const body = {
+    requestId: "report-123",
+    description: "Workout fails to save.",
+    appVersion: "1.0.0",
+    platform: "ios",
+  };
   for (const change of [
-    { description: "short" }, { description: " ".repeat(20) },
-    { description: "x".repeat(3001) }, { platform: "unknown" },
-    { appVersion: "x".repeat(41) }, { requestId: "../bob" },
-  ]) await assert.rejects(service.submitSupportReport(user, { ...body, ...change }));
+    { description: "short" },
+    { description: " ".repeat(20) },
+    { description: "x".repeat(3001) },
+    { platform: "unknown" },
+    { appVersion: "x".repeat(41) },
+    { requestId: "../bob" },
+  ])
+    await assert.rejects(
+      service.submitSupportReport(user, { ...body, ...change }),
+    );
   assert.equal(records.size, 0);
 });
 
 test("duplicating a workout preserves its details and stays within the owner account", async () => {
   const { service, records } = setup();
   const body = workoutBody();
-  const source = await service.createWorkout("alice", { ...body, name: "x".repeat(80), description: "Original plan", exercises: [{ ...body.exercises[0], targetWeight: 50 }] });
-  const original = { ...source, image: "https://images.example/shared-cover.jpg" };
+  const source = await service.createWorkout("alice", {
+    ...body,
+    name: "x".repeat(80),
+    description: "Original plan",
+    exercises: [{ ...body.exercises[0], targetWeight: 50 }],
+  });
+  const original = {
+    ...source,
+    image: "https://images.example/shared-cover.jpg",
+  };
   records.set(`liftwise_users/alice/workouts/${source.id}`, original);
   const copy = await service.duplicateWorkout("alice", source.id);
   assert.notEqual(copy.id, source.id);
@@ -193,22 +508,44 @@ test("deleting a workout preserves history and other users' data and supports re
   await service.deleteWorkout("alice", workout.id);
   await assert.rejects(service.workout("alice", workout.id));
   assert.deepEqual(await service.session("alice", session.id), before);
-  assert.deepEqual(await service.deleteWorkout("alice", workout.id), { success: true });
+  assert.deepEqual(await service.deleteWorkout("alice", workout.id), {
+    success: true,
+  });
   await assert.rejects(service.deleteWorkout("alice", "../other"));
 });
 
 test("exercise order persists without changing exercise targets or completed history", async () => {
   const { service } = setup();
-  const workout = await service.createWorkout("alice", { ...workoutBody(), exercises: [
-    { id: DEFAULT_EXERCISES[0].id, reps: 10, sets: 3, rest: 60, targetWeight: 40 },
-    { id: DEFAULT_EXERCISES[1].id, reps: 8, sets: 4, rest: 90, targetWeight: 25 },
-  ] });
+  const workout = await service.createWorkout("alice", {
+    ...workoutBody(),
+    exercises: [
+      {
+        id: DEFAULT_EXERCISES[0].id,
+        reps: 10,
+        sets: 3,
+        rest: 60,
+        targetWeight: 40,
+      },
+      {
+        id: DEFAULT_EXERCISES[1].id,
+        reps: 8,
+        sets: 4,
+        rest: 90,
+        targetWeight: 25,
+      },
+    ],
+  });
   const session = await service.createSession("alice", sessionBody(workout.id));
   const history = await service.session("alice", session.id);
-  const exerciseIds = workout.exercises.map((exercise) => exercise.id).reverse();
+  const exerciseIds = workout.exercises
+    .map((exercise) => exercise.id)
+    .reverse();
   await service.reorderExercises("alice", workout.id, { exerciseIds });
   const result = await service.workout("alice", workout.id);
-  assert.deepEqual(result, { ...workout, exercises: [...workout.exercises].reverse() });
+  assert.deepEqual(result, {
+    ...workout,
+    exercises: [...workout.exercises].reverse(),
+  });
   assert.deepEqual(await service.session("alice", session.id), history);
   await service.reorderExercises("alice", workout.id, { exerciseIds });
   assert.deepEqual(await service.workout("alice", workout.id), result);
@@ -218,12 +555,25 @@ test("invalid orders and other users cannot modify a workout", async () => {
   const { service } = setup();
   const workout = await service.createWorkout("alice", workoutBody());
   const first = workout.exercises[0].id;
-  for (const exerciseIds of [[], [first, first], [DEFAULT_EXERCISES[1].id], ["../bad"], "bad", Array(11).fill(first)]) {
-    await assert.rejects(service.reorderExercises("alice", workout.id, { exerciseIds }));
+  for (const exerciseIds of [
+    [],
+    [first, first],
+    [DEFAULT_EXERCISES[1].id],
+    ["../bad"],
+    "bad",
+    Array(11).fill(first),
+  ]) {
+    await assert.rejects(
+      service.reorderExercises("alice", workout.id, { exerciseIds }),
+    );
     assert.deepEqual(await service.workout("alice", workout.id), workout);
   }
-  await assert.rejects(service.reorderExercises("bob", workout.id, { exerciseIds: [first] }));
-  await assert.rejects(service.reorderExercises("alice", "../bad", { exerciseIds: [first] }));
+  await assert.rejects(
+    service.reorderExercises("bob", workout.id, { exerciseIds: [first] }),
+  );
+  await assert.rejects(
+    service.reorderExercises("alice", "../bad", { exerciseIds: [first] }),
+  );
   assert.deepEqual(await service.workout("alice", workout.id), workout);
 });
 
@@ -234,11 +584,21 @@ test("changing a cover preserves workout details, copied covers, and historical 
   records.set(`liftwise_users/alice/workouts/${workout.id}`, original);
   const copy = await service.duplicateWorkout("alice", workout.id);
   const session = await service.createSession("alice", sessionBody(workout.id));
-  const image = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]).toString("base64");
-  const result = await service.changeWorkoutCover("alice", workout.id, { image });
-  assert.deepEqual(await service.workout("alice", workout.id), { ...original, image: result.image });
+  const image = Buffer.from([
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0,
+  ]).toString("base64");
+  const result = await service.changeWorkoutCover("alice", workout.id, {
+    image,
+  });
+  assert.deepEqual(await service.workout("alice", workout.id), {
+    ...original,
+    image: result.image,
+  });
   assert.equal((await service.workout("alice", copy.id)).image, original.image);
-  assert.equal((await service.session("alice", session.id)).image, original.image);
+  assert.equal(
+    (await service.session("alice", session.id)).image,
+    original.image,
+  );
   assert.equal(uploads[0].folder, "liftwise/alice");
   assert.ok(String(uploads[0].public_id).startsWith(`${workout.id}_`));
   await service.changeWorkoutCover("alice", workout.id, { image });
@@ -249,10 +609,18 @@ test("cover changes reject invalid images and unauthorized workouts before uploa
   const { service, uploads } = setup();
   const workout = await service.createWorkout("alice", workoutBody());
   for (const image of [undefined, "", "bad", "x".repeat(2_800_001)])
-    await assert.rejects(service.changeWorkoutCover("alice", workout.id, { image }));
-  const image = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]).toString("base64");
-  await assert.rejects(service.changeWorkoutCover("bob", workout.id, { image }));
-  await assert.rejects(service.changeWorkoutCover("alice", "../bad", { image }));
+    await assert.rejects(
+      service.changeWorkoutCover("alice", workout.id, { image }),
+    );
+  const image = Buffer.from([
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0,
+  ]).toString("base64");
+  await assert.rejects(
+    service.changeWorkoutCover("bob", workout.id, { image }),
+  );
+  await assert.rejects(
+    service.changeWorkoutCover("alice", "../bad", { image }),
+  );
   assert.equal(uploads.length, 0);
   assert.deepEqual(await service.workout("alice", workout.id), workout);
 });
@@ -277,21 +645,43 @@ test("exercise bookmarks persist, support retries, and stay isolated by user", a
 test("daily reminder settings validate time and survive other profile updates", async () => {
   const { service } = setup();
   const user = { uid: "alice", email: "alice@example.com", roles: [] };
-  const profile = { gender: "female", experience: "beginner", goal: "maintain" };
+  const profile = {
+    gender: "female",
+    experience: "beginner",
+    goal: "maintain",
+  };
   const reminder = { enabled: true, hour: 18, minute: 30 };
   await service.saveProfile(user, { ...profile, reminder });
   await service.saveProfile(user, { ...profile, weightUnit: "lb" });
   assert.deepEqual((await service.profile(user))?.reminder, reminder);
-  for (const change of [{ hour: 24 }, { minute: -1 }, { minute: 0.5 }, { enabled: "true" }])
-    await assert.rejects(service.saveProfile(user, { ...profile, reminder: { ...reminder, ...change } }));
+  for (const change of [
+    { hour: 24 },
+    { minute: -1 },
+    { minute: 0.5 },
+    { enabled: "true" },
+  ])
+    await assert.rejects(
+      service.saveProfile(user, {
+        ...profile,
+        reminder: { ...reminder, ...change },
+      }),
+    );
   assert.deepEqual((await service.profile(user))?.reminder, reminder);
 });
 
 test("session API rejects non-canonical weight units", async () => {
   const { service } = setup();
   const workout = await service.createWorkout("alice", workoutBody());
-  await assert.rejects(service.createSession("alice", { ...sessionBody(workout.id), weightUnit: "lb" }));
-  const result = await service.createSession("alice", { ...sessionBody(workout.id), weightUnit: "kg" });
+  await assert.rejects(
+    service.createSession("alice", {
+      ...sessionBody(workout.id),
+      weightUnit: "lb",
+    }),
+  );
+  const result = await service.createSession("alice", {
+    ...sessionBody(workout.id),
+    weightUnit: "kg",
+  });
   assert.ok(result.id);
 });
 
@@ -390,12 +780,18 @@ test("onboarding preferences attach to the SSO account without overwriting share
 test("weight units persist, survive onboarding updates, and reject invalid values", async () => {
   const { service } = setup();
   const user = { uid: "alice", email: "alice@example.com", roles: [] };
-  const profile = { gender: "female", goal: "maintain", experience: "beginner" };
+  const profile = {
+    gender: "female",
+    goal: "maintain",
+    experience: "beginner",
+  };
   await service.saveProfile(user, { ...profile, weightUnit: "lb" });
   assert.equal((await service.profile(user))?.weightUnit, "lb");
   await service.saveProfile(user, profile);
   assert.equal((await service.profile(user))?.weightUnit, "lb");
-  await assert.rejects(service.saveProfile(user, { ...profile, weightUnit: "oz" }));
+  await assert.rejects(
+    service.saveProfile(user, { ...profile, weightUnit: "oz" }),
+  );
   assert.equal((await service.profile(user))?.weightUnit, "lb");
   await service.saveProfile(user, { ...profile, weightUnit: "kg" });
   assert.equal((await service.profile(user))?.weightUnit, "kg");
@@ -460,13 +856,27 @@ test("SSO userinfo returns fresh shared name, picture and gender with profile sc
       scope,
     }),
   });
-  records.set("users/alice@example.com", { gender: "female", fullname: "Current Name", profilePicture: "https://example.com/current.jpg" });
+  records.set("users/alice@example.com", {
+    gender: "female",
+    fullname: "Current Name",
+    profilePicture: "https://example.com/current.jpg",
+  });
   assert.equal((await oauth.userinfo("Bearer token")).name, "Current Name");
-  assert.equal((await oauth.userinfo("Bearer token")).picture, "https://example.com/current.jpg");
+  assert.equal(
+    (await oauth.userinfo("Bearer token")).picture,
+    "https://example.com/current.jpg",
+  );
   assert.equal((await oauth.userinfo("Bearer token")).gender, "female");
-  records.set("users/alice@example.com", { gender: "non-binary", fullname: "Updated Name", profilePicture: "https://example.com/updated.jpg" });
+  records.set("users/alice@example.com", {
+    gender: "non-binary",
+    fullname: "Updated Name",
+    profilePicture: "https://example.com/updated.jpg",
+  });
   assert.equal((await oauth.userinfo("Bearer token")).name, "Updated Name");
-  assert.equal((await oauth.userinfo("Bearer token")).picture, "https://example.com/updated.jpg");
+  assert.equal(
+    (await oauth.userinfo("Bearer token")).picture,
+    "https://example.com/updated.jpg",
+  );
   assert.equal((await oauth.userinfo("Bearer token")).gender, "non-binary");
   scope = "openid email";
   assert.equal((await oauth.userinfo("Bearer token")).gender, undefined);

@@ -29,6 +29,10 @@ export class LiftWiseController {
   saveProfile(@Req() request: LiftWiseRequest, @Body() body: unknown) {
     return this.liftwise.saveProfile(request.user, body);
   }
+  @Patch("profile")
+  patchProfile(@Req() request: LiftWiseRequest, @Body() body: unknown) {
+    return this.liftwise.patchProfile(request.user, body);
+  }
   @Post("support-reports")
   supportReport(@Req() request: LiftWiseRequest, @Body() body: unknown) {
     return this.liftwise.submitSupportReport(request.user, body);
@@ -70,11 +74,19 @@ export class LiftWiseController {
     return this.liftwise.workout(request.user.uid, id);
   }
   @Patch("workouts/:id/exercise-order")
-  reorderExercises(@Req() request: LiftWiseRequest, @Param("id") id: string, @Body() body: unknown) {
+  reorderExercises(
+    @Req() request: LiftWiseRequest,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
     return this.liftwise.reorderExercises(request.user.uid, id, body);
   }
   @Patch("workouts/:id/cover")
-  changeWorkoutCover(@Req() request: LiftWiseRequest, @Param("id") id: string, @Body() body: unknown) {
+  changeWorkoutCover(
+    @Req() request: LiftWiseRequest,
+    @Param("id") id: string,
+    @Body() body: unknown,
+  ) {
     return this.liftwise.changeWorkoutCover(request.user.uid, id, body);
   }
   @Post("workouts/:id/duplicate")
@@ -96,6 +108,22 @@ export class LiftWiseController {
   @Get("workout-sessions/streak")
   streak(@Req() request: LiftWiseRequest) {
     return this.liftwise.streak(request.user.uid);
+  }
+  @Get("workout-sessions/page")
+  sessionPage(
+    @Req() request: LiftWiseRequest,
+    @Query("limit") limit?: string,
+    @Query("cursor") cursor?: string,
+    @Query("start") start?: string,
+    @Query("end") end?: string,
+  ) {
+    return this.liftwise.sessionPage(
+      request.user.uid,
+      limit,
+      cursor,
+      start,
+      end,
+    );
   }
   @Get("workout-sessions")
   sessions(@Req() request: LiftWiseRequest, @Query("limit") limit?: string) {

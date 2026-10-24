@@ -2,30 +2,32 @@
 
 `LiftWiseModule` is registered in `AppModule`. All routes below require a verified CheFu OAuth bearer access token with `app=liftwise`. Ownership is derived from the token subject and never from request bodies.
 
-| Route | Purpose |
-| --- | --- |
-| GET /liftwise/profile | Workout preferences |
-| POST /liftwise/profile | Save onboarding preferences |
-| POST /liftwise/support-reports | Submit an authenticated problem report |
-| GET /liftwise/exercises?search= | Shared exercise catalogue |
-| GET /liftwise/exercises/:id | Exercise details |
-| GET /liftwise/exercises/:id/instructions | AI Coach with source instruction fallback |
-| GET /liftwise/exercise-bookmarks | Saved exercise IDs for the signed-in user |
-| PUT /liftwise/exercise-bookmarks/:id | Save an exercise |
-| DELETE /liftwise/exercise-bookmarks/:id | Remove a saved exercise |
-| GET /liftwise/workouts?limit= | Own workouts |
-| POST /liftwise/workouts | Create workout, optionally upload cover |
-| GET /liftwise/workouts/:id | Own workout with exercise targets |
-| PATCH /liftwise/workouts/:id/exercise-order | Save an exact permutation of the owned workout's exercise IDs |
-| PATCH /liftwise/workouts/:id/cover | Replace an owned workout's cover with a validated image upload |
-| POST /liftwise/workouts/:id/duplicate | Copy an owned workout with a new ID |
-| DELETE /liftwise/workouts/:id | Remove an owned routine, preserving completed sessions |
-| GET /liftwise/workout-sessions?limit= | Own completed workout history |
-| POST /liftwise/workout-sessions | Save completed sets atomically |
-| GET /liftwise/workout-sessions/:id | Own history details and volume |
-| GET /liftwise/workout-sessions/calendar?start=&end= | Workout dates in a range |
-| GET /liftwise/workout-sessions/streak | Dates used to compute streaks |
-| GET /liftwise/home-stats?start=&end= | Daily workout count and duration |
+| Route                                                          | Purpose                                                            |
+| -------------------------------------------------------------- | ------------------------------------------------------------------ |
+| GET /liftwise/profile                                          | Workout preferences                                                |
+| POST /liftwise/profile                                         | Save onboarding preferences                                        |
+| PATCH /liftwise/profile                                        | Save only changed app preference fields; shared gender is excluded |
+| POST /liftwise/support-reports                                 | Submit an authenticated problem report                             |
+| GET /liftwise/exercises?search=                                | Shared exercise catalogue                                          |
+| GET /liftwise/exercises/:id                                    | Exercise details                                                   |
+| GET /liftwise/exercises/:id/instructions                       | AI Coach with source instruction fallback                          |
+| GET /liftwise/exercise-bookmarks                               | Saved exercise IDs for the signed-in user                          |
+| PUT /liftwise/exercise-bookmarks/:id                           | Save an exercise                                                   |
+| DELETE /liftwise/exercise-bookmarks/:id                        | Remove a saved exercise                                            |
+| GET /liftwise/workouts?limit=                                  | Own workouts                                                       |
+| POST /liftwise/workouts                                        | Create workout, optionally upload cover                            |
+| GET /liftwise/workouts/:id                                     | Own workout with exercise targets                                  |
+| PATCH /liftwise/workouts/:id/exercise-order                    | Save an exact permutation of the owned workout's exercise IDs      |
+| PATCH /liftwise/workouts/:id/cover                             | Replace an owned workout's cover with a validated image upload     |
+| POST /liftwise/workouts/:id/duplicate                          | Copy an owned workout with a new ID                                |
+| DELETE /liftwise/workouts/:id                                  | Remove an owned routine, preserving completed sessions             |
+| GET /liftwise/workout-sessions?limit=                          | Own completed workout history                                      |
+| GET /liftwise/workout-sessions/page?limit=&cursor=&start=&end= | Cursor-paginated history, with optional local-day bounds           |
+| POST /liftwise/workout-sessions                                | Save completed sets atomically                                     |
+| GET /liftwise/workout-sessions/:id                             | Own history details and volume                                     |
+| GET /liftwise/workout-sessions/calendar?start=&end=            | Workout dates in a range                                           |
+| GET /liftwise/workout-sessions/streak                          | Dates used to compute streaks                                      |
+| GET /liftwise/home-stats?start=&end=                           | Daily workout count and duration                                   |
 
 Gender is shared account data at `users/{email}.gender`. Goal, experience, and weight unit live in the `profile` field of `users/{email}/appProfiles/liftwise`. The email comes from verified token claims and is normalized to lowercase. Saving onboarding atomically fills a missing shared gender and saves LiftWise preferences; existing shared answers and account/app metadata are preserved. Gender is not duplicated in the app profile. The profile endpoint combines the shared answer with app preferences. Shared auth profile responses include gender, and authenticated `PATCH /auth/profile` accepts explicit gender edits. OAuth `/oauth/userinfo` exposes current shared name, picture, and gender to apps with the `profile` scope, reading the account directly so edits appear on refresh.
 

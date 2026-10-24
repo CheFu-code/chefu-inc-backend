@@ -6,7 +6,14 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
-import { FieldValue } from "firebase-admin/firestore";
+import { isDeepStrictEqual } from "node:util";
+import {
+  AggregateField,
+  FieldPath,
+  FieldValue,
+} from "firebase-admin/firestore";
+import { LiftWiseReadCache } from "./liftwise-read-cache";
+import { decodeCursor, encodeCursor } from "./liftwise.pagination";
 import type { AuthenticatedUser } from "../auth/authenticated-user";
 import { sharedGender } from "../auth/shared-profile";
 import { FirebaseAdminService } from "../firebase-admin/firebase-admin.service";
@@ -22,6 +29,7 @@ import * as validate from "./liftwise.validation";
 
 @Injectable()
 export class LiftWiseService {
+  private readonly reads = new LiftWiseReadCache();
   constructor(
     @Inject(FirebaseAdminService)
     private readonly firebase: FirebaseAdminService,
@@ -65,13 +73,22 @@ export class LiftWiseService {
   }
   async saveProfile(user: AuthenticatedUser, payload: unknown) {
     const body = validate.object(payload);
-    if (body.weightUnit !== undefined && !["kg", "lb"].includes(body.weightUnit as string))
+    if (
+      body.weightUnit !== undefined &&
+      !["kg", "lb"].includes(body.weightUnit as string)
+    )
       throw new BadRequestException("Invalid weight unit.");
-    let reminder: { enabled: boolean; hour: number; minute: number } | undefined;
+    let reminder:
+      { enabled: boolean; hour: number; minute: number } | undefined;
     if (body.reminder !== undefined) {
       const value = validate.object(body.reminder);
-      if (typeof value.enabled !== "boolean") throw new BadRequestException("Invalid reminder setting.");
-      reminder = { enabled: value.enabled, hour: validate.number(value.hour, "reminder hour", 0, 23), minute: validate.number(value.minute, "reminder minute", 0, 59) };
+      if (typeof value.enabled !== "boolean")
+        throw new BadRequestException("Invalid reminder setting.");
+      reminder = {
+        enabled: value.enabled,
+        hour: validate.number(value.hour, "reminder hour", 0, 23),
+        minute: validate.number(value.minute, "reminder minute", 0, 59),
+      };
     }
     if (
       !["build-muscle", "lose-fat", "maintain"].includes(body.goal as string) ||
@@ -103,6 +120,7 @@ export class LiftWiseService {
         weightUnit: body.weightUnit ?? preferences.weightUnit ?? "kg",
         ...(reminder ? { reminder } : {}),
       };
+      if (isDeepStrictEqual(existingApp.data()?.profile, profile)) return;
       transaction.set(
         app,
         { appId: "liftwise", profile, updatedAt: FieldValue.serverTimestamp() },
@@ -111,21 +129,88 @@ export class LiftWiseService {
     });
     return { success: true };
   }
+  async patchProfile(user: AuthenticatedUser, payload: unknown) {
+    const body = validate.object(payload);
+    const allowed = ["goal", "experience", "weightUnit", "reminder"];
+    if (Object.keys(body).some((key) => !allowed.includes(key)))
+      throw new BadRequestException("Invalid preference field.");
+    if (
+      body.goal !== undefined &&
+      !["build-muscle", "lose-fat", "maintain"].includes(body.goal as string)
+    )
+      throw new BadRequestException("Invalid goal.");
+    if (
+      body.experience !== undefined &&
+      !["beginner", "intermediate", "advanced"].includes(
+        body.experience as string,
+      )
+    )
+      throw new BadRequestException("Invalid experience.");
+    if (
+      body.weightUnit !== undefined &&
+      !["kg", "lb"].includes(body.weightUnit as string)
+    )
+      throw new BadRequestException("Invalid weight unit.");
+    if (body.reminder !== undefined) {
+      const reminder = validate.object(body.reminder);
+      if (typeof reminder.enabled !== "boolean")
+        throw new BadRequestException("Invalid reminder setting.");
+      body.reminder = {
+        enabled: reminder.enabled,
+        hour: validate.number(reminder.hour, "reminder hour", 0, 23),
+        minute: validate.number(reminder.minute, "reminder minute", 0, 59),
+      };
+    }
+    if (!Object.keys(body).length) return { success: true };
+    const app = this.account(user).collection("appProfiles").doc("liftwise");
+    await this.firebase.db().runTransaction(async (transaction) => {
+      const [snapshot] = await transaction.getAll(app);
+      const existing = snapshot.data()?.profile;
+      if (!existing?.goal || !existing?.experience)
+        throw new BadRequestException("Complete onboarding first.");
+      const changes = Object.fromEntries(
+        Object.entries(body).filter(
+          ([key, value]) => !isDeepStrictEqual(value, existing[key]),
+        ),
+      );
+      if (!Object.keys(changes).length) return;
+      const { gender: legacyGender, ...preferences } = existing;
+      transaction.set(
+        app,
+        {
+          profile: { ...preferences, ...changes },
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { mergeFields: ["profile", "updatedAt"] },
+      );
+    });
+    return { success: true };
+  }
   async submitSupportReport(user: AuthenticatedUser, payload: unknown) {
     const body = validate.object(payload);
     const requestId = validate.id(body.requestId);
-    const description = validate.text(body.description, "problem description", 3000);
+    const description = validate.text(
+      body.description,
+      "problem description",
+      3000,
+    );
     if (description.length < 10)
-      throw new BadRequestException("Please describe the problem in at least 10 characters.");
+      throw new BadRequestException(
+        "Please describe the problem in at least 10 characters.",
+      );
     const appVersion = validate.text(body.appVersion, "app version", 40);
     if (!["android", "ios", "web"].includes(body.platform as string))
       throw new BadRequestException("Invalid platform.");
-    const report = this.owner(user.uid).collection("supportReports").doc(requestId);
+    const report = this.owner(user.uid)
+      .collection("supportReports")
+      .doc(requestId);
     await this.firebase.db().runTransaction(async (transaction) => {
       const [existing] = await transaction.getAll(report);
       if (existing.exists) {
         if (existing.data()?.description !== description)
-          throw new BadRequestException("Please submit the updated report with a new request ID.");
+          throw new BadRequestException(
+            "Please submit the updated report with a new request ID.",
+          );
         return;
       }
       transaction.create(report, {
@@ -152,39 +237,60 @@ export class LiftWiseService {
   }
 
   async bookmarks(uid: string) {
-    const snapshot = await this.owner(uid).collection("exerciseBookmarks").get();
-    return snapshot.docs.map((doc) => doc.id);
+    return this.reads.get(JSON.stringify([uid, "bookmarks"]), async () => {
+      const snapshot = await this.owner(uid)
+        .collection("exerciseBookmarks")
+        .get();
+      return snapshot.docs.map((doc) => doc.id);
+    });
   }
   async saveBookmark(uid: string, exerciseId: string) {
     const exercise = await this.catalog.get(exerciseId);
-    await this.owner(uid).collection("exerciseBookmarks").doc(exercise.id).set({ exerciseId: exercise.id, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    await this.owner(uid)
+      .collection("exerciseBookmarks")
+      .doc(exercise.id)
+      .set(
+        { exerciseId: exercise.id, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true },
+      );
+    this.reads.invalidateUser(uid, ["bookmarks"]);
     return { success: true };
   }
   async deleteBookmark(uid: string, exerciseId: string) {
-    await this.owner(uid).collection("exerciseBookmarks").doc(validate.id(exerciseId)).delete();
+    await this.owner(uid)
+      .collection("exerciseBookmarks")
+      .doc(validate.id(exerciseId))
+      .delete();
+    this.reads.invalidateUser(uid, ["bookmarks"]);
     return { success: true };
   }
   async workouts(uid: string, limitValue?: string) {
-    let query = this.owner(uid)
-      .collection("workouts")
-      .orderBy("createdAt", "desc");
     const limit = validate.limit(limitValue);
-    if (limit !== undefined) query = query.limit(limit);
-    const snapshot = await query.get();
-    return snapshot.docs.map((record) => {
-      const workout = record.data() as Workout;
-      return {
-        id: record.id,
-        name: workout.name,
-        image: workout.image,
-        muscles: workout.muscles,
-        exerciseCount: workout.exercises.length,
-        totalSets: workout.exercises.reduce(
-          (sum, exercise) => sum + exercise.sets,
-          0,
-        ),
-      };
-    });
+    return this.reads.get(
+      JSON.stringify([uid, "workouts", limit]),
+      async () => {
+        let query = this.owner(uid)
+          .collection("workouts")
+          .orderBy("createdAt", "desc")
+          .select("name", "image", "muscles", "exercises");
+        if (limit !== undefined) query = query.limit(limit);
+        const snapshot = await query.get();
+        return snapshot.docs.map((record) => {
+          const workout = record.data() as Workout;
+          return {
+            id: record.id,
+            name: workout.name,
+            image: workout.image,
+            muscles: workout.muscles,
+            exerciseCount: workout.exercises.length,
+            totalSets: workout.exercises.reduce(
+              (sum, exercise) => sum + exercise.sets,
+              0,
+            ),
+          };
+        });
+      },
+    );
   }
   async workout(uid: string, workoutId: string): Promise<Workout> {
     const snapshot = await this.owner(uid)
@@ -196,34 +302,62 @@ export class LiftWiseService {
   }
   async reorderExercises(uid: string, workoutId: string, payload: unknown) {
     const body = validate.object(payload);
-    if (!Array.isArray(body.exerciseIds) || body.exerciseIds.length < 1 || body.exerciseIds.length > 10)
+    if (
+      !Array.isArray(body.exerciseIds) ||
+      body.exerciseIds.length < 1 ||
+      body.exerciseIds.length > 10
+    )
       throw new BadRequestException("Invalid exercise order.");
     const ids = body.exerciseIds.map(validate.id);
-    const ref = this.owner(uid).collection("workouts").doc(validate.id(workoutId));
+    const ref = this.owner(uid)
+      .collection("workouts")
+      .doc(validate.id(workoutId));
     await this.firebase.db().runTransaction(async (transaction) => {
       const [snapshot] = await transaction.getAll(ref);
       if (!snapshot.exists) throw new NotFoundException("Workout not found.");
       const workout = snapshot.data() as Workout;
-      const exercises = new Map(workout.exercises.map((exercise) => [exercise.id, exercise]));
-      if (ids.length !== workout.exercises.length || new Set(ids).size !== ids.length || ids.some((id) => !exercises.has(id)))
-        throw new BadRequestException("The exercise list changed. Reload the workout and try again.");
-      transaction.set(ref, { exercises: ids.map((id) => exercises.get(id)!) }, { merge: true });
+      const exercises = new Map(
+        workout.exercises.map((exercise) => [exercise.id, exercise]),
+      );
+      if (
+        ids.length !== workout.exercises.length ||
+        new Set(ids).size !== ids.length ||
+        ids.some((id) => !exercises.has(id))
+      )
+        throw new BadRequestException(
+          "The exercise list changed. Reload the workout and try again.",
+        );
+      if (ids.every((id, index) => id === workout.exercises[index].id)) return;
+      transaction.set(
+        ref,
+        { exercises: ids.map((id) => exercises.get(id)!) },
+        { merge: true },
+      );
     });
+    this.reads.invalidateUser(uid, ["workouts"]);
     return { success: true };
   }
   async changeWorkoutCover(uid: string, workoutId: string, payload: unknown) {
     const body = validate.object(payload);
-    await this.workout(uid, workoutId);
     if (typeof body.image !== "string" || !body.image.trim())
       throw new BadRequestException("Please choose a cover image.");
+    await this.workout(uid, workoutId);
     // A new asset keeps covers in completed sessions and copied routines intact.
-    const image = await this.uploadCover(uid, `${workoutId}_${randomUUID()}`, body.image);
+    const image = await this.uploadCover(
+      uid,
+      `${workoutId}_${randomUUID()}`,
+      body.image,
+    );
     const ref = this.owner(uid).collection("workouts").doc(workoutId);
-    await this.firebase.db().runTransaction(async (transaction) => {
-      const [snapshot] = await transaction.getAll(ref);
-      if (!snapshot.exists) throw new NotFoundException("Workout not found.");
-      transaction.set(ref, { image }, { merge: true });
-    });
+    // update() enforces existence without a second transaction read.
+    try {
+      await ref.update({ image });
+    } catch (error) {
+      if ((error as { code?: number }).code === 5)
+        throw new NotFoundException("Workout not found.");
+      throw error;
+    }
+    this.reads.invalidateUser(uid, ["workouts"]);
     return { image };
   }
   async duplicateWorkout(uid: string, workoutId: string): Promise<Workout> {
@@ -235,11 +369,16 @@ export class LiftWiseService {
       createdAt: new Date().toISOString(),
     };
     await this.owner(uid).collection("workouts").doc(copy.id).create(copy);
+    this.reads.invalidateUser(uid, ["workouts"]);
     return copy;
   }
   async deleteWorkout(uid: string, workoutId: string) {
     // Sessions keep their own workout snapshot; shared cover URLs remain valid.
-    await this.owner(uid).collection("workouts").doc(validate.id(workoutId)).delete();
+    await this.owner(uid)
+      .collection("workouts")
+      .doc(validate.id(workoutId))
+      .delete();
+    this.reads.invalidateUser(uid, ["workouts"]);
     return { success: true };
   }
   async createWorkout(uid: string, payload: unknown) {
@@ -296,6 +435,7 @@ export class LiftWiseService {
       createdAt: new Date().toISOString(),
     };
     await this.owner(uid).collection("workouts").doc(workoutId).create(workout);
+    this.reads.invalidateUser(uid, ["workouts"]);
     return workout;
   }
 
@@ -330,7 +470,9 @@ export class LiftWiseService {
     const body = validate.object(payload);
     const workoutId = validate.id(body.workoutId);
     if (body.weightUnit !== undefined && body.weightUnit !== "kg")
-      throw new BadRequestException("Session weights must be supplied in kilograms.");
+      throw new BadRequestException(
+        "Session weights must be supplied in kilograms.",
+      );
     const startedAt = validate.date(body.startedAt),
       completedAt = validate.date(body.completedAt);
     const durationSeconds = validate.number(
@@ -386,8 +528,22 @@ export class LiftWiseService {
       sets,
       exercises: workout.exercises,
     };
-    // Store the session and all its sets in one atomic document write.
-    await this.owner(uid).collection("sessions").doc(sessionId).create(session);
+    // One compact yearly summary write replaces rereading every historical session for streaks.
+    const owner = this.owner(uid);
+    const batch = this.firebase.db().batch();
+    batch.create(owner.collection("sessions").doc(sessionId), session);
+    batch.set(
+      owner.collection("liftwiseActivityYears").doc(startedAt.slice(0, 4)),
+      { startedAt: FieldValue.arrayUnion(startedAt) },
+      { merge: true },
+    );
+    await batch.commit();
+    this.reads.invalidateUser(uid, [
+      "sessions",
+      "session-page",
+      "calendar",
+      "streak",
+    ]);
     return { message: "Workout session created", id: sessionId };
   }
   private sessionSummary(session: WorkoutSession) {
@@ -403,17 +559,95 @@ export class LiftWiseService {
     };
   }
   async sessions(uid: string, limitValue?: string) {
-    let query = this.owner(uid)
-      .collection("sessions")
-      .orderBy("completedAt", "desc");
-    const limit = validate.limit(limitValue);
-    if (limit !== undefined) query = query.limit(limit);
-    const snapshot = await query.get();
-    return snapshot.docs.map((record) =>
-      this.sessionSummary({
-        ...record.data(),
-        id: record.id,
-      } as WorkoutSession),
+    const limit = validate.limit(limitValue) ?? 20;
+    return this.reads.get(
+      JSON.stringify([uid, "sessions", limit]),
+      async () => {
+        let query = this.owner(uid)
+          .collection("sessions")
+          .orderBy("completedAt", "desc")
+          .select(
+            "workoutId",
+            "workoutName",
+            "image",
+            "completedAt",
+            "durationSeconds",
+            "sets",
+          )
+          .limit(limit);
+        const snapshot = await query.get();
+        return snapshot.docs.map((record) =>
+          this.sessionSummary({
+            ...record.data(),
+            id: record.id,
+          } as WorkoutSession),
+        );
+      },
+    );
+  }
+  async sessionPage(
+    uid: string,
+    limitValue?: string,
+    cursorValue?: string,
+    start?: string,
+    end?: string,
+  ) {
+    const limit = validate.limit(limitValue) ?? 20;
+    const cursor = decodeCursor(cursorValue);
+    const interval =
+      start !== undefined || end !== undefined
+        ? validate.range(start, end, 1)
+        : undefined;
+    return this.reads.get(
+      JSON.stringify([uid, "session-page", limit, cursor, interval]),
+      async () => {
+        const collection = this.owner(uid).collection("sessions");
+        const summaryQuery = interval
+          ? collection
+              .where("completedAt", ">=", interval.start)
+              .where("completedAt", "<", interval.end)
+          : collection;
+        let query = summaryQuery
+          .orderBy("completedAt", "desc")
+          .orderBy(FieldPath.documentId(), "desc");
+        if (cursor) query = query.startAfter(cursor[0], cursor[1]);
+        const [snapshot, summary] = await Promise.all([
+          query
+            .select(
+              "workoutId",
+              "workoutName",
+              "image",
+              "completedAt",
+              "durationSeconds",
+              "sets",
+            )
+            .limit(limit + 1)
+            .get(),
+          cursor
+            ? Promise.resolve(undefined)
+            : summaryQuery
+                .aggregate({
+                  workouts: AggregateField.count(),
+                  totalTimeSeconds: AggregateField.sum("durationSeconds"),
+                })
+                .get(),
+        ]);
+        const records = snapshot.docs.slice(0, limit);
+        const last = records.at(-1);
+        return {
+          items: records.map((record) =>
+            this.sessionSummary({
+              ...record.data(),
+              id: record.id,
+            } as WorkoutSession),
+          ),
+          nextCursor:
+            snapshot.docs.length > limit && last
+              ? encodeCursor(last.get("completedAt") as string, last.id)
+              : null,
+          ...(summary ? { summary: summary.data() } : {}),
+        };
+      },
     );
   }
   async session(uid: string, sessionId: string) {
@@ -458,6 +692,7 @@ export class LiftWiseService {
       .collection("sessions")
       .where("startedAt", ">=", interval.start)
       .where("startedAt", "<", interval.end)
+      .select("startedAt", "completedAt", "durationSeconds")
       .get();
     return snapshot.docs.map((record) => record.data() as WorkoutSession);
   }
@@ -476,21 +711,74 @@ export class LiftWiseService {
     };
   }
   async calendar(uid: string, start: string, end: string) {
-    return {
-      workoutDates: (await this.sessionsInRange(uid, start, end, 32)).map(
-        (session) => session.startedAt,
-      ),
-    };
+    const interval = validate.range(start, end, 32);
+    return this.reads.get(
+      JSON.stringify([uid, "calendar", interval]),
+      async () => {
+        const sessions = await this.sessionsInRange(
+          uid,
+          interval.start,
+          interval.end,
+          32,
+        );
+        return {
+          workoutDates: sessions.map((session) => session.startedAt),
+          sessions: sessions.map(
+            ({ startedAt, completedAt, durationSeconds }) => ({
+              startedAt,
+              completedAt,
+              durationSeconds,
+            }),
+          ),
+        };
+      },
+    );
   }
   async streak(uid: string) {
-    const snapshot = await this.owner(uid)
-      .collection("sessions")
-      .select("startedAt")
-      .get();
-    return {
-      workoutDates: snapshot.docs.map(
-        (record) => record.get("startedAt") as string,
-      ),
-    };
+    return this.reads.get(
+      JSON.stringify([uid, "streak"]),
+      async () => {
+        const owner = this.owner(uid);
+        const metadata = owner.collection("metadata").doc("activity");
+        if ((await metadata.get()).data()?.streakVersion !== 1) {
+          // One-time lazy backfill preserves existing history. arrayUnion also preserves
+          // sessions created concurrently while this snapshot is being processed.
+          const old = await owner
+            .collection("sessions")
+            .select("startedAt")
+            .get();
+          const years = new Map<string, string[]>();
+          for (const record of old.docs) {
+            const value = record.get("startedAt") as string;
+            const year = value.slice(0, 4);
+            const dates = years.get(year) ?? [];
+            dates.push(value);
+            years.set(year, dates);
+          }
+          const entries = [...years];
+          for (let index = 0; index < entries.length; index += 400) {
+            const batch = this.firebase.db().batch();
+            for (const [year, dates] of entries.slice(index, index + 400))
+              batch.set(
+                owner.collection("liftwiseActivityYears").doc(year),
+                { startedAt: FieldValue.arrayUnion(...new Set(dates)) },
+                { merge: true },
+              );
+            await batch.commit();
+          }
+          await metadata.set({ streakVersion: 1 }, { merge: true });
+        }
+        const years = await owner
+          .collection("liftwiseActivityYears")
+          .select("startedAt")
+          .get();
+        return {
+          workoutDates: years.docs.flatMap(
+            (record) => (record.get("startedAt") as string[]) ?? [],
+          ),
+        };
+      },
+      60_000,
+    );
   }
 }

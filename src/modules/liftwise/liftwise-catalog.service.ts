@@ -41,7 +41,7 @@ export class LiftWiseCatalogService {
       const records = snapshot.docs.map(
         (record) => ({ ...record.data(), id: record.id }) as LiftWiseExercise,
       );
-      this.cache = { until: Date.now() + 30_000, records };
+      this.cache = { until: Date.now() + 15 * 60_000, records };
       return records;
     })();
     try {

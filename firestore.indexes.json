@@ -1,6 +1,14 @@
 {
   "indexes": [
     {
+      "collectionGroup": "sessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "completedAt", "order": "ASCENDING" },
+        { "fieldPath": "durationSeconds", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "quantum_agent_schedules",
       "queryScope": "COLLECTION",
       "fields": [
@@ -121,5 +129,11 @@
       ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "liftwiseActivityYears",
+      "fieldPath": "startedAt",
+      "indexes": []
+    }
+  ]
 }
