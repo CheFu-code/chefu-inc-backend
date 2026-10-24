@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Inject,
   Injectable,
   NotFoundException,
@@ -468,6 +469,7 @@ export class LiftWiseService {
 
   async createSession(uid: string, payload: unknown) {
     const body = validate.object(payload);
+    const requestId = body.requestId === undefined ? randomUUID() : validate.id(body.requestId);
     const workoutId = validate.id(body.workoutId);
     if (body.weightUnit !== undefined && body.weightUnit !== "kg")
       throw new BadRequestException(
@@ -503,6 +505,19 @@ export class LiftWiseService {
     const keys = sets.map((set) => `${set.exerciseId}:${set.setNumber}`);
     if (new Set(keys).size !== keys.length)
       throw new BadRequestException("Duplicate completed set.");
+    // Stable client identifiers make retries safe, including a lost HTTP response.
+    const owner = this.owner(uid);
+    const sessionRef = owner.collection("sessions").doc(requestId);
+    const matches = (record: Record<string, unknown>) =>
+      isDeepStrictEqual(
+        [record.workoutId, record.startedAt, record.completedAt, record.durationSeconds, record.sets],
+        [workoutId, startedAt, completedAt, durationSeconds, sets],
+      );
+    const previous = await sessionRef.get();
+    if (previous.exists) {
+      if (!matches(previous.data()!)) throw new ConflictException("This completion ID has already been used.");
+      return { message: "Workout session created", id: requestId };
+    }
     const workout = await this.workout(uid, workoutId);
     if (
       sets.some(
@@ -516,7 +531,7 @@ export class LiftWiseService {
       throw new BadRequestException(
         "Completed sets must belong to this workout.",
       );
-    const sessionId = randomUUID();
+    const sessionId = requestId;
     const session: WorkoutSession = {
       id: sessionId,
       workoutId,
@@ -529,7 +544,6 @@ export class LiftWiseService {
       exercises: workout.exercises,
     };
     // One compact yearly summary write replaces rereading every historical session for streaks.
-    const owner = this.owner(uid);
     const batch = this.firebase.db().batch();
     batch.create(owner.collection("sessions").doc(sessionId), session);
     batch.set(
@@ -537,7 +551,16 @@ export class LiftWiseService {
       { startedAt: FieldValue.arrayUnion(startedAt) },
       { merge: true },
     );
-    await batch.commit();
+    try {
+      await batch.commit();
+    } catch (error) {
+      // Firestore create() and the activity update commit atomically. A competing
+      // retry cannot write a second session or update derived data a second time.
+      if ((error as { code?: number }).code !== 6) throw error;
+      const existing = await sessionRef.get();
+      if (!existing.exists || !matches(existing.data()!))
+        throw new ConflictException("This completion ID has already been used.");
+    }
     this.reads.invalidateUser(uid, [
       "sessions",
       "session-page",
