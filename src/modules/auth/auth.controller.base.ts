@@ -241,7 +241,19 @@ export class AuthControllerBase {
       throw new UnauthorizedException('The shared session could not be verified.');
     }
 
+    // Check the existing Firebase boundary before moving it for logout. This
+    // must happen first: a prior password reset must not be mistaken for logout.
+    await this.revokeTrustedDevicesInvalidatedByCredentialChange(decoded.uid);
     await this.firebaseAdmin.auth().revokeRefreshTokens(decoded.uid);
+    const signedOutUser = await this.firebaseAdmin.auth().getUser(decoded.uid);
+    const sessionOnlyValidAfterMs = Date.parse(signedOutUser.tokensValidAfterTime || '');
+    if (Number.isFinite(sessionOnlyValidAfterMs)) {
+      await this.firebaseAdmin.db().collection('auth_trusted_device_state')
+        .doc(decoded.uid).set({
+          sessionOnlyValidAfterMs,
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+    }
     await this.recordSessionRevocation(decoded.email, decoded.uid);
     await this.securityEvents.publishSubjectRevocation({
       actor: decoded.uid,
@@ -312,6 +324,12 @@ export class AuthControllerBase {
     const authUser = await this.firebaseAdmin.auth().getUser(uid);
     const validAfterMs = Date.parse(authUser.tokensValidAfterTime || '');
     if (!Number.isFinite(validAfterMs)) return;
+
+    const state = await this.firebaseAdmin.db()
+      .collection('auth_trusted_device_state').doc(uid).get();
+    // Trust survives a known session-only logout boundary. Any different
+    // Firebase boundary (including external password resets) still fails closed.
+    if (state.data()?.sessionOnlyValidAfterMs === validAfterMs) return;
 
     const collection = this.firebaseAdmin.db().collection('auth_trusted_devices');
     const snapshot = await collection.where('uid', '==', uid).get();

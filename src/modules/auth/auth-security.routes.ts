@@ -568,6 +568,7 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
       db.collection('auth_account_deletion_send_limits').doc(uid).delete(),
       db.collection('auth_trusted_device_challenges').doc(uid).delete(),
       db.collection('auth_trusted_device_send_limits').doc(uid).delete(),
+      db.collection('auth_trusted_device_state').doc(uid).delete(),
     ]);
   }
 
