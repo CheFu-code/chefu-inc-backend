@@ -18,6 +18,8 @@ export type WorkoutExercise = LiftWiseExercise & {
   targetWeight: number | null;
 };
 export type Workout = {
+  exerciseCount?: number;
+  totalSets?: number;
   id: string;
   name: string;
   description: string | null;

@@ -14,6 +14,7 @@
     "release:prod": "node scripts/production-release.mjs",
     "test:cloudence-migration": "node --import tsx --test scripts/migrate-cloudence-private.spec.ts scripts/production-release.spec.mjs",
     "test:liftwise": "node --import tsx --test src/modules/liftwise/liftwise.spec.ts",
+    "test:liftwise:emulator": "node --import tsx --test src/modules/liftwise/liftwise-emulator.spec.ts",
     "test:quantum": "node --import tsx --test src/modules/quantum/agent/*.spec.ts",
     "dev": "tsx watch --env-file=.env src/main.ts",
     "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.migrations.json",

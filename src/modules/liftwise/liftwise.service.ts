@@ -12,6 +12,7 @@ import {
   AggregateField,
   FieldPath,
   FieldValue,
+  type QueryDocumentSnapshot,
 } from "firebase-admin/firestore";
 import { LiftWiseReadCache } from "./liftwise-read-cache";
 import { decodeCursor, encodeCursor } from "./liftwise.pagination";
@@ -233,8 +234,8 @@ export class LiftWiseService {
   exercise(exerciseId: string) {
     return this.catalog.get(exerciseId);
   }
-  async instructions(exerciseId: string) {
-    return this.catalog.instructions(exerciseId);
+  async instructions(exerciseId: string, uid?: string) {
+    return this.catalog.instructions(exerciseId, uid);
   }
 
   async bookmarks(uid: string) {
@@ -266,32 +267,49 @@ export class LiftWiseService {
     return { success: true };
   }
   async workouts(uid: string, limitValue?: string) {
-    const limit = validate.limit(limitValue);
+    const limit = validate.limit(limitValue) ?? 20;
     return this.reads.get(
       JSON.stringify([uid, "workouts", limit]),
       async () => {
         let query = this.owner(uid)
           .collection("workouts")
           .orderBy("createdAt", "desc")
-          .select("name", "image", "muscles", "exercises");
+          .select("name", "image", "muscles", "exerciseCount", "totalSets");
         if (limit !== undefined) query = query.limit(limit);
         const snapshot = await query.get();
-        return snapshot.docs.map((record) => {
-          const workout = record.data() as Workout;
-          return {
-            id: record.id,
-            name: workout.name,
-            image: workout.image,
-            muscles: workout.muscles,
-            exerciseCount: workout.exercises.length,
-            totalSets: workout.exercises.reduce(
-              (sum, exercise) => sum + exercise.sets,
-              0,
-            ),
-          };
-        });
+        return this.workoutSummaries(uid, snapshot.docs);
       },
     );
+  }
+  async workoutPage(uid: string, limitValue?: string, cursorValue?: string) {
+    const limit = validate.limit(limitValue) ?? 20;
+    const cursor = decodeCursor(cursorValue);
+    return this.reads.get(JSON.stringify([uid, "workouts", "page", limit, cursor]), async () => {
+      let query = this.owner(uid).collection("workouts")
+        .orderBy("createdAt", "desc").orderBy(FieldPath.documentId(), "desc")
+        .select("name", "image", "muscles", "exerciseCount", "totalSets", "createdAt");
+      if (cursor) query = query.startAfter(...cursor);
+      const snapshot = await query.limit(limit + 1).get();
+      const docs = snapshot.docs.slice(0, limit);
+      return {
+        items: await this.workoutSummaries(uid, docs),
+        nextCursor: snapshot.docs.length > limit ? encodeCursor(docs.at(-1)!.get("createdAt"), docs.at(-1)!.id) : null,
+      };
+    });
+  }
+  private async workoutSummaries(uid: string, docs: QueryDocumentSnapshot[]) {
+    const missing = docs.filter((doc) => typeof doc.get("exerciseCount") !== "number" || typeof doc.get("totalSets") !== "number");
+    // Compatibility for older records: one bounded getAll RPC, rather than an
+    // N+1 loop. Newly created templates need no exercise payload or extra read.
+    const legacy = missing.length ? await this.firebase.db().getAll(...missing.map((doc) => this.owner(uid).collection("workouts").doc(doc.id))) : [];
+    const old = new Map(legacy.map((doc) => [doc.id, doc.data() as Workout | undefined]));
+    return docs.map((record) => {
+      const workout = record.data() as Workout;
+      const exercises = old.get(record.id)?.exercises ?? [];
+      return { id: record.id, name: workout.name, image: workout.image, muscles: workout.muscles,
+        exerciseCount: workout.exerciseCount ?? exercises.length,
+        totalSets: workout.totalSets ?? exercises.reduce((sum, exercise) => sum + exercise.sets, 0) };
+    });
   }
   async workout(uid: string, workoutId: string): Promise<Workout> {
     const snapshot = await this.owner(uid)
@@ -365,6 +383,8 @@ export class LiftWiseService {
     const source = await this.workout(uid, workoutId);
     const copy: Workout = {
       ...source,
+      exerciseCount: source.exercises.length,
+      totalSets: source.exercises.reduce((sum, exercise) => sum + exercise.sets, 0),
       id: randomUUID(),
       name: `${source.name.slice(0, 73)} (copy)`,
       createdAt: new Date().toISOString(),
@@ -430,6 +450,8 @@ export class LiftWiseService {
       description,
       image,
       exercises,
+      exerciseCount: exercises.length,
+      totalSets: exercises.reduce((sum, exercise) => sum + exercise.sets, 0),
       muscles: [...new Set(exercises.map((exercise) => exercise.muscles))].join(
         " • ",
       ),
@@ -543,12 +565,13 @@ export class LiftWiseService {
       sets,
       exercises: workout.exercises,
     };
-    // One compact yearly summary write replaces rereading every historical session for streaks.
+    // Minute precision preserves present-day IANA local calendar dates. Each month
+    // has at most 44,640 unique entries, bounded independently of session count.
     const batch = this.firebase.db().batch();
     batch.create(owner.collection("sessions").doc(sessionId), session);
     batch.set(
-      owner.collection("liftwiseActivityYears").doc(startedAt.slice(0, 4)),
-      { startedAt: FieldValue.arrayUnion(startedAt) },
+      owner.collection("liftwiseActivityMonths").doc(startedAt.slice(0, 7)),
+      { startedAt: FieldValue.arrayUnion(startedAt.slice(0, 16) + "Z") },
       { merge: true },
     );
     try {
@@ -763,36 +786,40 @@ export class LiftWiseService {
       async () => {
         const owner = this.owner(uid);
         const metadata = owner.collection("metadata").doc("activity");
-        if ((await metadata.get()).data()?.streakVersion !== 1) {
-          // One-time lazy backfill preserves existing history. arrayUnion also preserves
-          // sessions created concurrently while this snapshot is being processed.
-          const old = await owner
-            .collection("sessions")
-            .select("startedAt")
-            .get();
-          const years = new Map<string, string[]>();
-          for (const record of old.docs) {
-            const value = record.get("startedAt") as string;
-            const year = value.slice(0, 4);
-            const dates = years.get(year) ?? [];
-            dates.push(value);
-            years.set(year, dates);
-          }
-          const entries = [...years];
-          for (let index = 0; index < entries.length; index += 400) {
+        const migration = (await metadata.get()).data();
+        if (migration?.streakVersion !== 2) {
+          // Versioned, resumable backfill. Source sessions and v1 summaries remain
+          // intact. Each query and batch is bounded; retries only union entries.
+          let cursor = migration?.streakV2Cursor as [string, string] | undefined;
+          for (;;) {
+            let query = owner.collection("sessions")
+              .orderBy("startedAt", "asc").orderBy(FieldPath.documentId(), "asc")
+              .select("startedAt").limit(200);
+            if (cursor) query = query.startAfter(...cursor);
+            const page = await query.get();
+            const months = new Map<string, Set<string>>();
+            for (const record of page.docs) {
+              const startedAt = record.get("startedAt") as string;
+              const month = startedAt.slice(0, 7);
+              const values = months.get(month) ?? new Set<string>();
+              values.add(startedAt.slice(0, 16) + "Z");
+              months.set(month, values);
+            }
             const batch = this.firebase.db().batch();
-            for (const [year, dates] of entries.slice(index, index + 400))
-              batch.set(
-                owner.collection("liftwiseActivityYears").doc(year),
-                { startedAt: FieldValue.arrayUnion(...new Set(dates)) },
-                { merge: true },
-              );
+            for (const [month, dates] of months) batch.set(
+              owner.collection("liftwiseActivityMonths").doc(month),
+              { startedAt: FieldValue.arrayUnion(...dates) }, { merge: true },
+            );
+            const last = page.docs.at(-1);
+            if (last) cursor = [last.get("startedAt"), last.id];
+            const complete = page.docs.length < 200;
+            batch.set(metadata, { ...(cursor ? { streakV2Cursor: cursor } : {}), ...(complete ? { streakVersion: 2 } : {}) }, { merge: true });
             await batch.commit();
+            if (complete) break;
           }
-          await metadata.set({ streakVersion: 1 }, { merge: true });
         }
         const years = await owner
-          .collection("liftwiseActivityYears")
+          .collection("liftwiseActivityMonths")
           .select("startedAt")
           .get();
         return {

@@ -48,3 +48,14 @@ Optional daily reminder preferences (`reminder: { enabled, hour, minute }`) are 
 The profile screen refreshes the account on focus and when returning from the browser. OAuth userinfo reads current shared name, picture, and gender directly for the `profile` scope. Failed home stats, recent workouts, calendar activity, saved exercises, and streak requests expose retry states instead of presenting a failed request as empty data.
 
 Help & Support provides quick answers and a problem-report form. Reports are saved under `liftwise_users/{uid}/supportReports/{requestId}` with verified user ID/email, description (10â€“3000 trimmed characters), app version, platform, server timestamp, and `status: open`. The client retains a request ID for retries so a lost response does not duplicate a report. Reports can be reviewed in Firestore (including a `supportReports` collection-group query); no email notifications or support dashboard are configured by this feature.
+
+## October 2026 performance follow-up
+
+- `GET /liftwise/workouts` now defaults to 20 records (1–100), with Home using limit=4.
+- `GET /liftwise/workouts/page?limit=20&cursor=...` returns `{items,nextCursor}` ordered by createdAt and document ID. Cursor pagination is used by the workout library.
+- Newly stored/copied workouts include exerciseCount and totalSets for lightweight list projections; older records remain readable through a bounded fallback.
+- `POST /liftwise/workout-sessions` accepts optional `requestId`. New mobile clients send stable IDs. Identical replays return the original ID; conflicting bodies return 409. Do not enable mobile offline retries before deploying this backend contract.
+- Exercise-list responses support content-based ETag / If-None-Match revalidation; LiftWise responses are private/no-store so shared proxies cannot cache user records. CORS permits If-None-Match.
+- Streak summary version 2 uses `liftwiseActivityMonths/{YYYY-MM}` with distinct UTC-minute timestamps, while exact timestamps remain in immutable session records. Resumable backfill queries 200 sessions at a time and never deletes the old data. Deploy the monthly array index exemption before release. Rollback must preserve idempotency and either retain the v2 reader or rebuild old summaries from source sessions.
+- General Gemini guidance has content/model/version cache keys, a 768-token output cap, 15-second timeout, four in-flight generations, and RuntimeLimitService budgets of 20 fresh generations/user/day and 500 total/day. Limits are per process unless the existing Firestore-backed runtime limit store is enabled; that mode adds transactions and requires TTL cleanup.
+- See `../liftwise/docs/optimization-audit-2026-10.md` in the sibling app for the full audit, measured test assertions, manual configuration and limitations. Emulator test: `npm run test:liftwise:emulator` with an active loopback demo-liftwise emulator; Java 21+ is required by the current Firebase CLI.

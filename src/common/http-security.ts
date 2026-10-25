@@ -45,6 +45,7 @@ export function configureCors(
     allowedHeaders: [
       'Content-Type',
       'Authorization',
+      'If-None-Match',
       CHEFU_APP_HEADER,
       'x-api-key',
       'x-flow-api-key',

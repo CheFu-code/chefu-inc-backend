@@ -189,6 +189,11 @@ function database() {
   }
   const db = {
     collection,
+    getAll: async (...refs: ReturnType<typeof doc>[]) => {
+      stats.documentsRead += refs.length;
+      stats.documentReads += refs.length;
+      return refs.map((ref) => snapshot(ref.key));
+    },
     batch: () => {
       const operations: (() => void)[] = [];
       return {
@@ -338,7 +343,7 @@ test("preference patches read only the app profile and unchanged values produce 
   );
 });
 
-test("streak backfill preserves timestamps; later cold reads use year summaries and new sessions update them atomically", async () => {
+test("streak v2 backfill preserves activity dates; cold reads use bounded month summaries and new sessions update them atomically", async () => {
   const { firebase, records, stats } = database();
   const catalog = new LiftWiseCatalogService(firebase);
   const storage = {} as CloudinaryStorageService;
@@ -354,8 +359,8 @@ test("streak backfill preserves timestamps; later cold reads use year summaries 
   assert.equal((await cold.streak("alice")).workoutDates.length, 90);
   assert.equal(
     stats.documentsRead - before,
-    2,
-    "only metadata and one year document are read",
+    4,
+    "only metadata and three month documents are read",
   );
   const workout = await cold.createWorkout("alice", workoutBody());
   const writes = stats.writes;
@@ -363,7 +368,7 @@ test("streak backfill preserves timestamps; later cold reads use year summaries 
   assert.equal(
     stats.writes - writes,
     2,
-    "session and year summary commit in the same batch",
+    "session and month summary commit in the same batch",
   );
   assert.equal((await cold.streak("alice")).workoutDates.length, 91);
 });
@@ -1012,4 +1017,82 @@ test("guard derives user identity from verified token claims", async () => {
   } as unknown as ExecutionContext;
   assert.equal(await guard.canActivate(context), true);
   assert.equal(request.user?.uid, "alice");
+});
+
+test("completion IDs make lost-response retries idempotent and reject payload reuse across operations", async () => {
+  const { service, records, stats } = setup();
+  const workout = await service.createWorkout("alice", workoutBody());
+  const body = { ...sessionBody(workout.id), requestId: "stable-completion-id" };
+  const before = stats.writes;
+  const first = await service.createSession("alice", body);
+  const retry = await service.createSession("alice", body);
+  assert.deepEqual(retry, first);
+  assert.equal(stats.writes - before, 2, "retry adds no session or summary write");
+  await assert.rejects(service.createSession("alice", { ...body, durationSeconds: 601 }), /already been used/);
+  assert.equal(stats.writes - before, 2);
+  await assert.rejects(service.createSession("bob", body), /not found/);
+  assert.equal(records.has("liftwise_users/bob/sessions/stable-completion-id"), false);
+  await service.deleteWorkout("alice", workout.id);
+  assert.deepEqual(await service.createSession("alice", body), first, "a confirmed completion can be retried even after its template is deleted");
+});
+
+test("workout pages bound reads, resolve timestamp ties and keep legacy list requests bounded", async () => {
+  const { service, records, stats } = setup();
+  for (let index = 0; index < 47; index++) records.set(`liftwise_users/alice/workouts/workout-${String(index).padStart(3,"0")}`, {name:"Workout",image:null,muscles:"back",exerciseCount:0,totalSets:0,exercises:[],createdAt:"2026-10-24T10:00:00.000Z"});
+  assert.equal((await service.workouts("alice")).length,20);
+  const before=stats.documentsRead;
+  const first=await service.workoutPage("alice","20");
+  assert.equal(stats.documentsRead-before,21);
+  const second=await service.workoutPage("alice","20",first.nextCursor!);
+  const third=await service.workoutPage("alice","20",second.nextCursor!);
+  assert.equal(new Set([...first.items,...second.items,...third.items].map(item=>item.id)).size,47);
+  assert.equal(third.nextCursor,null);
+  await assert.rejects(service.workoutPage("alice","101"));
+  await assert.rejects(service.workoutPage("alice","20","invalid"));
+});
+
+test("streak v2 backfill spans pages, preserves minute-offset local dates and does not grow for repeated sessions in one minute", async () => {
+  const {service,records}=setup();
+  const times=["2026-10-24T18:14:59.999Z","2026-10-24T18:15:00.001Z","2026-10-24T23:59:59.999Z"];
+  for(let index=0;index<405;index++) records.set(`liftwise_users/alice/sessions/old-${String(index).padStart(3,"0")}`,{startedAt:times[index%times.length]});
+  const result=await service.streak("alice");
+  assert.equal(result.workoutDates.length,3);
+  assert.equal(records.get("liftwise_users/alice/metadata/activity")?.streakVersion,2);
+  for(const zone of ["Asia/Kathmandu","Pacific/Chatham","America/St_Johns","Africa/Johannesburg"]){
+    const format=new Intl.DateTimeFormat("en-CA",{timeZone:zone});
+    assert.deepEqual(new Set(result.workoutDates.map(value=>format.format(new Date(value)))),new Set(times.map(value=>format.format(new Date(value)))));
+  }
+  assert.equal([...records.keys()].filter(key=>key.includes("/sessions/")).length,405,"source history is untouched");
+});
+
+test("catalogue HTTP validators skip unchanged payloads and change with content",async()=>{
+  const {LiftWiseController}=await import("./liftwise.controller");
+  let records=[{id:"curl",name:"Curl"}];
+  const controller=new LiftWiseController({exercises:async()=>records} as unknown as LiftWiseService);
+  const headers:Record<string,string>={};let status=200;
+  const response={setHeader:(key:string,value:string)=>{headers[key]=value;},vary:()=>{},status:(value:number)=>{status=value;}} as any;
+  const request={headers:{}} as any;
+  assert.deepEqual(await controller.exercises(request,response),records);
+  request.headers["if-none-match"]=headers.ETag;
+  assert.equal(await controller.exercises(request,response),undefined);
+  assert.equal(status,304);
+  records=[{id:"curl",name:"Updated Curl"}];status=200;
+  assert.deepEqual(await controller.exercises(request,response),records);
+  assert.equal(status,200);
+});
+
+test("AI guidance uses existing source content when its fresh-generation budget is exhausted and caches the fallback", async () => {
+  const {firebase}=database();
+  let calls=0;
+  const limits={reserve:async()=>{calls++;return {limited:true};}};
+  const catalog=new LiftWiseCatalogService(firebase,limits as any);
+  const old=process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY="test-placeholder-never-sent";
+  try{
+    const exercise=(await catalog.all())[0];
+    const first=await catalog.instructions(exercise.id,"alice");
+    assert.deepEqual(first.instructions,exercise.instructions);
+    assert.deepEqual(await catalog.instructions(exercise.id,"alice"),first);
+    assert.equal(calls,1,"cached source guidance does not reserve another model request");
+  }finally{if(old===undefined)delete process.env.GEMINI_API_KEY;else process.env.GEMINI_API_KEY=old;}
 });

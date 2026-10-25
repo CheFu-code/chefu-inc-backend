@@ -130,6 +130,10 @@
     }
   ],
   "fieldOverrides": [
+    { "collectionGroup": "liftwiseActivityMonths", "fieldPath": "startedAt", "indexes": [] },
+    { "collectionGroup": "sessions", "fieldPath": "sets", "indexes": [] },
+    { "collectionGroup": "sessions", "fieldPath": "exercises", "indexes": [] },
+    { "collectionGroup": "workouts", "fieldPath": "exercises", "indexes": [] },
     {
       "collectionGroup": "liftwiseActivityYears",
       "fieldPath": "startedAt",

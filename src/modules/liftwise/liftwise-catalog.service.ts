@@ -1,4 +1,7 @@
-import { Inject, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { Inject, Injectable, Logger, NotFoundException, Optional } from "@nestjs/common";
+import { createHash } from "node:crypto";
+import { RuntimeLimitService } from "../../common/runtime-limit.service";
+import { LiftWiseReadCache } from "./liftwise-read-cache";
 import { FirebaseAdminService } from "../firebase-admin/firebase-admin.service";
 import { DEFAULT_EXERCISES } from "./liftwise-exercises.data";
 import type { LiftWiseExercise } from "./liftwise.types";
@@ -9,14 +12,13 @@ export class LiftWiseCatalogService {
     constructor(
         @Inject(FirebaseAdminService)
         private readonly firebase: FirebaseAdminService,
+    @Optional() @Inject(RuntimeLimitService) private readonly limits?: RuntimeLimitService,
     ) { }
     private cache: { until: number; records: LiftWiseExercise[] } | null = null;
     private loading: Promise<LiftWiseExercise[]> | null = null;
     private readonly logger = new Logger(LiftWiseCatalogService.name);
-    private readonly guidance = new Map<
-        string,
-        Promise<{ instructions: string[] }>
-    >();
+  private readonly guidance = new LiftWiseReadCache();
+  private aiInFlight = 0;
 
     async all(): Promise<LiftWiseExercise[]> {
         if (this.cache && this.cache.until > Date.now()) return this.cache.records;
@@ -68,20 +70,29 @@ export class LiftWiseCatalogService {
         return exercise;
     }
 
-    async instructions(exerciseId: string) {
+  async instructions(exerciseId: string, uid?: string) {
         const exercise = await this.get(exerciseId);
         const apiKey = process.env.GEMINI_API_KEY?.trim();
         if (!apiKey) return { instructions: exercise.instructions || [] };
-        const existing = this.guidance.get(exercise.id);
-        if (existing) return existing;
-        const pending = (async () => {
+    const model = process.env.GEMINI_GENERATE_MODEL || "gemini-2.5-flash";
+    const key = createHash("sha256").update(JSON.stringify(["guidance-v2", model, exercise.name, exercise.description, exercise.instructions])).digest("hex");
+    return this.guidance.get(key, async () => {
+      const fallback = { instructions: exercise.instructions || [] };
+      // A local concurrency ceiling also protects model calls while the shared
+      // runtime limiter is being checked. Never accept client-provided prompts.
+      if (!uid || !this.limits || this.aiInFlight >= 4) return fallback;
+      this.aiInFlight++;
             try {
+        const limit = await this.limits.reserve({ collection: "runtime_liftwise_ai_limits", key: JSON.stringify(["user", uid]), limit: 20, windowMs: 86_400_000 });
+        if (limit.limited) return fallback;
+        const budget = await this.limits.reserve({ collection: "runtime_liftwise_ai_limits", key: JSON.stringify(["global"]), limit: 500, windowMs: 86_400_000 });
+        if (budget.limited) return fallback;
                 const { GoogleGenAI } = await import("@google/genai");
                 const response = await new GoogleGenAI({
                     apiKey,
                 }).models.generateContent({
-                    model: process.env.GEMINI_GENERATE_MODEL || "gemini-2.5-flash",
-                    config: { responseMimeType: "application/json" },
+          model,
+          config: { responseMimeType: "application/json", maxOutputTokens: 768, httpOptions: { timeout: 15_000 } },
                     contents: `Return JSON with an instructions array containing 4–5 concise steps for performing this exercise with proper form. Exercise: ${exercise.name}. Description: ${exercise.description}. Source guidance: ${JSON.stringify(exercise.instructions)}`,
                 });
                 const parsed: unknown = JSON.parse(response.text || "{}");
@@ -99,15 +110,12 @@ export class LiftWiseCatalogService {
                     )
                 )
                     return { instructions: instructions as string[] };
-            } catch {
+      } catch {
                 this.logger.warn(
                     "LiftWise AI guidance unavailable; using catalogue instructions.",
                 );
-            }
-            this.guidance.delete(exercise.id);
-            return { instructions: exercise.instructions || [] };
-        })();
-        this.guidance.set(exercise.id, pending);
-        return pending;
+      } finally { this.aiInFlight--; }
+      return fallback;
+    }, 24 * 60 * 60_000);
     }
 }
