@@ -90,8 +90,17 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
   @HttpCode(200)
   @Header('Cache-Control', 'private, no-store')
   @Header('Vary', 'Cookie')
-  async getTrustedBrowserStatus(@Req() request: Request, @Body() body: { email?: unknown } | null) {
-    return trustedBrowserStatus(this.firebaseAdmin, request, TRUSTED_DEVICE_COOKIE_NAME, body?.email);
+  async getTrustedBrowserStatus(@Req() request: Request, @Body() body: { email?: unknown } | null, @Res({ passthrough: true }) response: Response) {
+    try {
+      return await trustedBrowserStatus(this.firebaseAdmin, request, TRUSTED_DEVICE_COOKIE_NAME, body?.email);
+    } catch (error) {
+      if (!(error instanceof HttpException) || error.getStatus() !== 429) throw error;
+      const payload = error.getResponse() as { retryAfterSeconds: number };
+      response.setHeader('Retry-After', String(payload.retryAfterSeconds));
+      response.status(429);
+      // Expected throttling must not flood the global error/Sentry logs.
+      return { trusted: false, retryAfterSeconds: payload.retryAfterSeconds };
+    }
   }
 
   @Get('security')

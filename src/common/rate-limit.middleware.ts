@@ -2,6 +2,7 @@ import { Injectable, Logger, NestMiddleware } from '@nestjs/common';
 import { NextFunction, Request, Response } from 'express';
 import { auditRequestContext, getClientIp } from './security-audit';
 import { RuntimeLimitService } from './runtime-limit.service';
+import { isTrustedBrowserStatusRequest, reserveTrustedBrowserRequest } from '../modules/auth/trusted-browser-limits';
 
 @Injectable()
 export class RateLimitMiddleware implements NestMiddleware {
@@ -12,6 +13,19 @@ export class RateLimitMiddleware implements NestMiddleware {
   constructor(private readonly runtimeLimits: RuntimeLimitService) {}
 
   async use(request: Request, response: Response, next: NextFunction) {
+    if (isTrustedBrowserStatusRequest(request)) {
+      try {
+        reserveTrustedBrowserRequest(request);
+      } catch (error) {
+        const retry = (error as { getResponse: () => { retryAfterSeconds: number } }).getResponse().retryAfterSeconds;
+        response.setHeader('Cache-Control', 'private, no-store');
+        response.setHeader('Retry-After', String(retry));
+        response.status(429).json({ trusted: false, retryAfterSeconds: retry });
+        return;
+      }
+      next();
+      return;
+    }
     if (request.method === 'OPTIONS' || request.path === '/health') {
       next();
       return;
