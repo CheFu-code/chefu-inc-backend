@@ -6,6 +6,7 @@ import { Timestamp } from 'firebase-admin/firestore';
 import { AuthSessionRoutes } from './auth-session.routes';
 import { TRUSTED_DEVICE_COOKIE_NAME } from './auth.controller.base';
 import { SESSION_COOKIE_NAME } from './session.constants';
+import { trustedBrowserStatus } from './trusted-browser-status';
 
 // Exercise the real session and device-trust methods, replacing only external
 // Firebase/email dependencies. No emails or production requests are issued.
@@ -41,7 +42,7 @@ function setup() {
     verifyIdToken: async () => ({ uid, email: 'alice@example.test', email_verified: true, auth_time: Math.floor(Date.now() / 1000) }),
     createSessionCookie: async () => 'test-session',
     revokeRefreshTokens: async () => { revocations++; boundary += 10_000; },
-    getUser: async () => ({ tokensValidAfterTime: new Date(boundary).toISOString() }),
+    getUser: async () => ({ email: "alice@example.test", emailVerified: true, disabled: false, tokensValidAfterTime: new Date(boundary).toISOString() }),
   };
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   Object.assign(controller, {
@@ -109,5 +110,44 @@ test('missing, expired, revoked and another account\'s device cookies never supp
     if (kind === 'wrong-user') state.records.get(state.deviceKey)!.uid = 'bob';
     await state.signIn();
     assert.equal(state.counts().alerts, 1, kind);
+  }
+});
+
+
+test('pre-sign-in trust status is read-only, account-aware and returns no account details', async () => {
+  const state = setup();
+  const before = JSON.stringify([...state.records]);
+  const check = (email?: unknown) => trustedBrowserStatus(state.controller.firebaseAdmin, state.request, TRUSTED_DEVICE_COOKIE_NAME, email);
+  assert.deepEqual(await check(), { trusted: true });
+  assert.deepEqual(await check(' Alice@Example.Test '), { trusted: true });
+  assert.deepEqual(await check('bob@example.test'), { trusted: false });
+  assert.deepEqual(await check('invalid-email'), { trusted: false });
+  assert.deepEqual(await check({ email: 'alice@example.test' }), { trusted: false });
+  assert.equal(JSON.stringify([...state.records]), before, 'status must not renew trust, touch lastSeenAt or create records');
+});
+
+test('trust status recognizes a known logout but rejects a later password reset', async () => {
+  const state = setup();
+  await state.controller.revokeCurrentSession(state.request);
+  const check = () => trustedBrowserStatus(state.controller.firebaseAdmin, state.request, TRUSTED_DEVICE_COOKIE_NAME, 'alice@example.test');
+  assert.deepEqual(await check(), { trusted: true });
+  state.changeCredentials();
+  assert.deepEqual(await check(), { trusted: false });
+  assert.equal(state.records.get(state.deviceKey)?.revokedAt, null, 'the UI check is read-only; actual sign-in enforces revocation');
+});
+
+test('trust status rejects missing, malformed, expired and revoked cookies and disabled accounts', async () => {
+  for (const kind of ['missing', 'malformed', 'expired', 'revoked', 'disabled', 'unverified']) {
+    const state = setup();
+    if (kind === 'missing') delete state.request.cookies[TRUSTED_DEVICE_COOKIE_NAME];
+    if (kind === 'malformed') state.request.cookies[TRUSTED_DEVICE_COOKIE_NAME] = 'x'.repeat(1000);
+    if (kind === 'expired') state.records.get(state.deviceKey)!.expiresAt = Timestamp.fromMillis(1);
+    if (kind === 'revoked') state.records.get(state.deviceKey)!.revokedAt = Timestamp.now();
+    if (kind === 'disabled' || kind === 'unverified') {
+      const auth = state.controller.firebaseAdmin.auth();
+      const original = auth.getUser;
+      auth.getUser = async () => ({ ...await original(), disabled: kind === 'disabled', emailVerified: kind !== 'unverified' });
+    }
+    assert.deepEqual(await trustedBrowserStatus(state.controller.firebaseAdmin, state.request, TRUSTED_DEVICE_COOKIE_NAME), { trusted: false }, kind);
   }
 });

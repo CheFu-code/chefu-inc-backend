@@ -9,6 +9,7 @@ import {
   ForbiddenException,
   Get,
   Headers,
+  Header,
   HttpCode,
   HttpException,
   Inject,
@@ -76,6 +77,7 @@ import {
 import { FirebaseDecodedToken, ProfileUpdateBody,AcademyProfileUpdate,ProfilePictureUpdate,SignInAlertDecision } from './auth-controller.types';
 import { TRUSTED_DEVICE_COOKIE_NAME, TRUSTED_DEVICE_CHALLENGE_COOKIE_NAME, TRUSTED_DEVICE_TTL_MS, TRUSTED_DEVICE_CHALLENGE_TTL_MS, TRUSTED_DEVICE_CODE_MAX_ATTEMPTS } from './auth.controller.base';
 import { AuthSessionRoutes } from './auth-session.routes';
+import { trustedBrowserStatus } from './trusted-browser-status';
 
 const ACCOUNT_DELETION_CODE_TTL_MS = 10 * 60_000;
 const ACCOUNT_DELETION_PROOF_TTL_MS = 20 * 60_000;
@@ -84,6 +86,14 @@ const ACCOUNT_DELETION_MAX_EMAILS_PER_DAY = 4;
 const ACCOUNT_DELETION_CHALLENGE_COOKIE_NAME = 'chefu_account_deletion_challenge';
 
 export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
+  @Post('trusted-devices/status')
+  @HttpCode(200)
+  @Header('Cache-Control', 'private, no-store')
+  @Header('Vary', 'Cookie')
+  async getTrustedBrowserStatus(@Req() request: Request, @Body() body: { email?: unknown } | null) {
+    return trustedBrowserStatus(this.firebaseAdmin, request, TRUSTED_DEVICE_COOKIE_NAME, body?.email);
+  }
+
   @Get('security')
   @UseGuards(AuthGuard)
   async getSecuritySummary(
