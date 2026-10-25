@@ -1096,3 +1096,20 @@ test("AI guidance uses existing source content when its fresh-generation budget 
     assert.equal(calls,1,"cached source guidance does not reserve another model request");
   }finally{if(old===undefined)delete process.env.GEMINI_API_KEY;else process.env.GEMINI_API_KEY=old;}
 });
+
+test("training days, rest alerts and sound persist through both profile endpoints and invalid values cannot be saved", async () => {
+  const { service } = setup();
+  const user = { uid: "alice", email: "alice@example.com", roles: [] };
+  const profile = { gender: "female", experience: "beginner", goal: "maintain" };
+  const reminder = { enabled: true, hour: 18, minute: 30, days: [2, 4, 6], sound: false, restAlerts: true };
+  await service.saveProfile(user, { ...profile, reminder });
+  assert.deepEqual((await service.profile(user))?.reminder, reminder);
+  const changed = { ...reminder, days: [3, 5], sound: true };
+  await service.patchProfile(user, { reminder: changed });
+  assert.deepEqual((await service.profile(user))?.reminder, changed);
+  for (const change of [{ days: [] }, { days: [0] }, { days: [8] }, { days: [2, 2] }, { days: [2.5] }, { sound: "silent" }, { restAlerts: 1 }]) {
+    await assert.rejects(service.patchProfile(user, { reminder: { ...changed, ...change } }));
+    await assert.rejects(service.saveProfile(user, { ...profile, reminder: { ...changed, ...change } }));
+  }
+  assert.deepEqual((await service.profile(user))?.reminder, changed);
+});

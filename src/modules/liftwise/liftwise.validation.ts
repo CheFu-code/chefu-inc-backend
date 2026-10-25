@@ -79,3 +79,26 @@ export function limit(value?: string): number | undefined {
   if (!/^\d+$/.test(value)) throw new BadRequestException("Invalid limit.");
   return number(Number(value), "limit", 1, 100);
 }
+
+export function reminder(value: unknown) {
+  const input = object(value);
+  if (typeof input.enabled !== "boolean") throw new BadRequestException("Invalid reminder setting.");
+  const output: { enabled: boolean; hour: number; minute: number; days?: number[]; sound?: boolean; restAlerts?: boolean } = {
+    enabled: input.enabled,
+    hour: number(input.hour, "reminder hour", 0, 23),
+    minute: number(input.minute, "reminder minute", 0, 59),
+  };
+  if (input.days !== undefined) {
+    if (!Array.isArray(input.days) || input.days.length > 7 || (input.enabled && input.days.length === 0)) throw new BadRequestException("Choose at least one training day.");
+    const days = input.days.map(day => number(day, "training day", 1, 7));
+    if (new Set(days).size !== days.length) throw new BadRequestException("Duplicate training day.");
+    output.days = days.sort((a, b) => a - b);
+  }
+  for (const key of ["sound", "restAlerts"] as const) {
+    if (input[key] !== undefined) {
+      if (typeof input[key] !== "boolean") throw new BadRequestException("Invalid notification preference.");
+      output[key] = input[key];
+    }
+  }
+  return output;
+}

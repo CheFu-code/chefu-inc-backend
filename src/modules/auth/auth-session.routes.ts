@@ -1,3 +1,4 @@
+import { authStage } from './auth-performance';
 import {
   BadGatewayException,
   BadRequestException,
@@ -43,6 +44,40 @@ import {
 } from './session.constants';
 
 export abstract class AuthSessionRoutes extends AuthControllerBase {
+  // Lightweight, read-only SSO probe. Do not call /me here: it synchronizes
+  // profile data and is unnecessarily expensive just to skip a login form.
+  @Get('session/status')
+  async getSessionStatus(
+    @Headers(CHEFU_APP_HEADER) chefuApp: string | undefined,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    response.setHeader('Cache-Control', 'private, no-store');
+    const cookie = request.cookies?.[SESSION_COOKIE_NAME];
+    if (typeof cookie !== 'string' || !cookie) return { authenticated: false };
+
+    let decoded: FirebaseDecodedToken;
+    try {
+      decoded = await this.firebaseAdmin.auth().verifySessionCookie(cookie, true);
+    } catch {
+      return { authenticated: false };
+    }
+    if (!decoded.uid || !decoded.email || decoded.email_verified !== true) {
+      return { authenticated: false };
+    }
+    const appId = this.resolveSessionAppId(chefuApp, undefined);
+    if (appId === 'admin') {
+      const profile = await this.getUserProfile(decoded.email);
+      if (!profile.roles.some(role => role.trim().toLowerCase() === ADMIN_ROLE)) {
+        return { authenticated: false };
+      }
+    }
+    if (appId === 'flow' && !(await this.isFlowSessionAllowed(decoded.email))) {
+      return { authenticated: false };
+    }
+    return { authenticated: true };
+  }
+
   @Get('me')
   @UseGuards(AuthGuard)
   async getCurrentUser(@Req() request: Request & { user?: AuthenticatedUser }) {
@@ -80,6 +115,14 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
   async login(
     @Body() body: { email?: string; password?: string },
     @Req() request: Request,
+  ) {
+    return this.authenticatePassword(body, request, true);
+  }
+
+  private async authenticatePassword(
+    body: { email?: string; password?: string },
+    request: Request,
+    includeCustomToken: boolean,
   ) {
     const email = String(body.email || '').trim().toLowerCase();
     const password = String(body.password || '').trim();
@@ -227,9 +270,11 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
         'The authentication service returned an unexpected response. Please try again later.',
       );
     }
-    const customToken = await this.firebaseAdmin.auth().createCustomToken(uid, {
-      chefu_auth_provider: 'password',
-    });
+    const customToken = includeCustomToken
+      ? await this.firebaseAdmin.auth().createCustomToken(uid, {
+          chefu_auth_provider: 'password',
+        })
+      : undefined;
     void this.inspectPasswordForBreach(payload.email || email, password);
 
     return {
@@ -313,7 +358,11 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const authResult = await this.login(body, request);
+    // Browser sessions consume the ID token directly. Keep custom-token minting
+    // only for legacy /login clients that actually consume that response field.
+    const authResult = await authStage(response, 'password', () =>
+      this.authenticatePassword(body, request, false),
+    );
     return this.createSession(
       `Bearer ${authResult.idToken}`,
       chefuApp,
@@ -480,7 +529,9 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     let sessionCookie: string;
 
     try {
-      decodedToken = await this.firebaseAdmin.auth().verifyIdToken(idToken, true);
+      decodedToken = await authStage(response, 'verify_token', () =>
+        this.firebaseAdmin.auth().verifyIdToken(idToken, true),
+      );
       this.assertRecentFirebaseSignIn(decodedToken.auth_time);
     } catch (error) {
       this.logger.error(
@@ -518,31 +569,32 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       throw new ForbiddenException(FLOW_ACCESS_DENIED_MESSAGE);
     }
 
-    const profileForAccess = await this.getUserProfile(decodedToken.email);
-    if (
-      sessionAppId === 'admin' &&
-      !profileForAccess.roles.some(
-        role => role.trim().toLowerCase() === ADMIN_ROLE,
-      )
-    ) {
-      this.clearSessionCookies(response);
-      this.logger.warn(
-        JSON.stringify({
-          event: 'admin_session_denied',
-          uidHash: hashForAudit(decodedToken.uid),
-          emailHash: hashForAudit(decodedToken.email),
-          roles: profileForAccess.roles,
-          ...auditRequestContext(request),
-        }),
-      );
-      throw new ForbiddenException('Admin access required.');
+    if (sessionAppId === 'admin') {
+      const profileForAccess = await this.getUserProfile(decodedToken.email);
+      if (
+        !profileForAccess.roles.some(
+          role => role.trim().toLowerCase() === ADMIN_ROLE,
+        )
+      ) {
+        this.clearSessionCookies(response);
+        this.logger.warn(
+          JSON.stringify({
+            event: 'admin_session_denied',
+            uidHash: hashForAudit(decodedToken.uid),
+            emailHash: hashForAudit(decodedToken.email),
+            roles: profileForAccess.roles,
+            ...auditRequestContext(request),
+          }),
+        );
+        throw new ForbiddenException('Admin access required.');
+      }
     }
 
     try {
       const expiresIn = SESSION_MAX_AGE_SECONDS * 1000;
-      sessionCookie = await this.firebaseAdmin
-        .auth()
-        .createSessionCookie(idToken, { expiresIn });
+      sessionCookie = await authStage(response, 'session_cookie', () =>
+        this.firebaseAdmin.auth().createSessionCookie(idToken, { expiresIn }),
+      );
     } catch (error) {
       this.logger.error(
         JSON.stringify({
@@ -560,12 +612,16 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       throw new UnauthorizedException('Unable to verify your session. Please sign in again.');
     }
 
-    await this.ensureUserProfile(decodedToken, sessionAppId, request);
+    await authStage(response, 'profile_sync', () =>
+      this.ensureUserProfile(decodedToken, sessionAppId, request),
+    );
     const signupAlertSuppressed = decodedToken.email
       ? await this.consumeSignupSignInAlertSuppression(decodedToken.email)
       : false;
     const isSignupSession = signupSession || signupAlertSuppressed;
-    const wasTrustedDevice = await this.isTrustedAuthDevice(decodedToken.uid, request);
+    const wasTrustedDevice = await authStage(response, 'trusted_device', () =>
+      this.isTrustedAuthDevice(decodedToken.uid, request),
+    );
     let trustDeviceVerificationRequired = false;
     let trustDeviceResendCooldownSeconds = 0;
     let trustDeviceResendsRemaining = 0;
@@ -617,7 +673,9 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
         });
       }
     }
-    const userProfile = await this.getUserProfile(decodedToken.email);
+    const userProfile = await authStage(response, 'profile_read', () =>
+      this.getUserProfile(decodedToken.email),
+    );
     const meta = this.buildSessionMeta({
       email: decodedToken.email || '',
       name:

@@ -322,9 +322,11 @@ export class ResendService {
         const year = new Date().getUTCFullYear().toString();
         const response = await fetch(this.RESEND_API_URL, {
             method: "POST",
+            signal: AbortSignal.timeout(10_000),
             headers: {
                 Authorization: `Bearer ${apiKey}`,
                 "Content-Type": "application/json",
+                "Idempotency-Key": `signup-welcome/${createHash("sha256").update(data.userId || data.email.trim().toLowerCase()).digest("hex")}`,
             },
             body: JSON.stringify({
                 from: this.formatVerificationSender(appName),

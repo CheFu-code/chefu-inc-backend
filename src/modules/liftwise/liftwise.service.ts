@@ -80,18 +80,7 @@ export class LiftWiseService {
       !["kg", "lb"].includes(body.weightUnit as string)
     )
       throw new BadRequestException("Invalid weight unit.");
-    let reminder:
-      { enabled: boolean; hour: number; minute: number } | undefined;
-    if (body.reminder !== undefined) {
-      const value = validate.object(body.reminder);
-      if (typeof value.enabled !== "boolean")
-        throw new BadRequestException("Invalid reminder setting.");
-      reminder = {
-        enabled: value.enabled,
-        hour: validate.number(value.hour, "reminder hour", 0, 23),
-        minute: validate.number(value.minute, "reminder minute", 0, 59),
-      };
-    }
+    const reminder = body.reminder === undefined ? undefined : validate.reminder(body.reminder);
     if (
       !["build-muscle", "lose-fat", "maintain"].includes(body.goal as string) ||
       !["beginner", "intermediate", "advanced"].includes(
@@ -153,16 +142,7 @@ export class LiftWiseService {
       !["kg", "lb"].includes(body.weightUnit as string)
     )
       throw new BadRequestException("Invalid weight unit.");
-    if (body.reminder !== undefined) {
-      const reminder = validate.object(body.reminder);
-      if (typeof reminder.enabled !== "boolean")
-        throw new BadRequestException("Invalid reminder setting.");
-      body.reminder = {
-        enabled: reminder.enabled,
-        hour: validate.number(reminder.hour, "reminder hour", 0, 23),
-        minute: validate.number(reminder.minute, "reminder minute", 0, 59),
-      };
-    }
+    if (body.reminder !== undefined) body.reminder = validate.reminder(body.reminder);
     if (!Object.keys(body).length) return { success: true };
     const app = this.account(user).collection("appProfiles").doc("liftwise");
     await this.firebase.db().runTransaction(async (transaction) => {

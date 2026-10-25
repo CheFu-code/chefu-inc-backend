@@ -60,6 +60,7 @@ export interface EmailVerificationData {
 }
 
 export interface SignupWelcomeData {
+    userId?: string;
     email: string;
     userName?: string;
     appName?: string;

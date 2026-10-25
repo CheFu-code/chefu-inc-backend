@@ -1,3 +1,4 @@
+import { afterSuccessfulAuthResponse } from './auth-performance';
 import {
   BadGatewayException,
   BadRequestException,
@@ -862,23 +863,6 @@ export abstract class AuthOnboardingRoutes extends AuthSecurityRoutes {
       true,
       true,
     );
-
-    try {
-      await this.resendService.sendSignupWelcomeEmail({
-        email,
-        userName: claimResult.userName,
-        appName: claimResult.appName,
-      });
-    } catch (error) {
-      this.logger.error(
-        JSON.stringify({
-          event: 'signup_welcome_email_failed',
-          emailHash: hashForAudit(email),
-          reason: error instanceof Error ? error.message : 'unknown',
-        }),
-      );
-    }
-
     try {
       await this.firebaseAdmin.db().runTransaction(async transaction => {
         const current = await transaction.get(ref);
@@ -899,6 +883,24 @@ export abstract class AuthOnboardingRoutes extends AuthSecurityRoutes {
       createdUid,
       email,
       'email_verified',
+    );
+    afterSuccessfulAuthResponse(
+      response,
+      () => this.resendService.sendSignupWelcomeEmail({
+        userId: createdUid,
+        email,
+        userName: claimResult.userName,
+        appName: claimResult.appName,
+      }),
+      error => {
+        this.logger.error(
+          JSON.stringify({
+            event: 'signup_welcome_email_failed',
+            emailHash: hashForAudit(email),
+            reason: error instanceof Error ? error.message : 'unknown',
+          }),
+        );
+      },
     );
     return {
       success: true,

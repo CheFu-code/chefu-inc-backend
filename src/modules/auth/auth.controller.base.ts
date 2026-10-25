@@ -1270,7 +1270,9 @@ export class AuthControllerBase {
     const shouldSeedProfilePicture =
       firebaseProfilePicture && !this.stringValue(existingUser?.profilePicture);
 
-    await userRef.set(
+    const batch = db.batch();
+    batch.set(
+      userRef,
       {
         createdAt,
         uid: decodedToken.uid,
@@ -1314,7 +1316,8 @@ export class AuthControllerBase {
       { merge: true },
     );
 
-    await appProfileRef.set(
+    batch.set(
+      appProfileRef,
       {
         ...(!appProfileSnapshot.exists ? { createdAt: now } : {}),
         appId,
@@ -1324,6 +1327,7 @@ export class AuthControllerBase {
       },
       { merge: true },
     );
+    await batch.commit();
     try {
       await this.securityEvents.recordAccountActivity({
         uid: decodedToken.uid,
