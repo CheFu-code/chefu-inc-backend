@@ -794,6 +794,7 @@ export class ResendService {
             admin: "Chefu Admin",
             flow: "Flow Mail",
             quantum: "Quantum",
+            liftwise: "LiftWise",
         };
 
         return labels[normalized] || "Chefu Technologies";
