@@ -330,27 +330,44 @@ test('country updates only on a location change or after one day', () => {
   assert.equal(shouldRefreshDetectedCountry('ZA', 'ZA', null, now), true);
 });
 
-test('/auth/me overlaps independent profile and Firebase user reads', async () => {
-  const state: string[] = [];
-  let completeProfile!: (value: any) => void;
-  let completeAuth!: (value: any) => void;
+test('/auth/me skips Firebase Auth lookup when the profile already has a phone', async () => {
+  let lookups = 0;
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   Object.assign(controller, {
-    getUserProfile: async () => { state.push('profile_start'); return new Promise(resolve => { completeProfile = resolve; }); },
-    firebaseAdmin: { auth: () => ({ getUser: async () => {
-      state.push('firebase_start'); return new Promise(resolve => { completeAuth = resolve; });
-    } }) },
+    getUserProfile: async () => ({
+      phone: '+27111111111', fullname: 'Alice',
+      detectedCountryCode: 'ZA', detectedCountryUpdatedAt: new Date().toISOString(),
+    }),
+    firebaseAdmin: { auth: () => ({ getUser: async () => { lookups++; throw new Error('unexpected lookup'); } }) },
     getDetectedCountry: () => null,
   });
   const req = { user: { uid: 'uid', email: 'alice@example.test', roles: ['user'] } };
-  const pending = controller.getCurrentUser(req, response());
-  await Promise.resolve();
-  assert.deepEqual(state, ['profile_start', 'firebase_start']);
-  completeProfile({ phone: '123', fullname: 'Alice', detectedCountryCode: 'ZA', detectedCountryUpdatedAt: new Date().toISOString() });
-  completeAuth({ phoneNumber: '123' });
-  const result = await pending;
-  assert.equal(result.profile.fullname, 'Alice');
+  const result = await controller.getCurrentUser(req, response());
+  assert.equal(result.profile.phone, '+27111111111');
   assert.equal(result.user.uid, 'uid');
+  assert.equal(lookups, 0);
+});
+
+test('/auth/me still fetches Firebase user and synchronizes a missing phone', async () => {
+  const writes: unknown[] = [];
+  let lookups = 0;
+  const controller: any = Object.create(AuthSessionRoutes.prototype);
+  Object.assign(controller, {
+    getUserProfile: async () => ({
+      phone: '', fullname: 'Alice',
+      detectedCountryCode: 'ZA', detectedCountryUpdatedAt: new Date().toISOString(),
+    }),
+    firebaseAdmin: {
+      auth: () => ({ getUser: async () => { lookups++; return { phoneNumber: '+27123456789' }; } }),
+      db: () => ({ collection: () => ({ doc: () => ({ set: async (value: unknown) => { writes.push(value); } }) }) }),
+    },
+    getDetectedCountry: () => null,
+  });
+  const req = { user: { uid: 'uid', email: 'alice@example.test', roles: ['user'] } };
+  const result = await controller.getCurrentUser(req, response());
+  assert.equal(lookups, 1);
+  assert.equal(result.profile.phone, '+27123456789');
+  assert.deepEqual(writes, [{ phone: '+27123456789' }]);
 });
 
 test('/auth/me skips redundant writes but updates changed country using the existing read', async () => {
