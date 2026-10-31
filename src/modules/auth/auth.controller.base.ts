@@ -383,20 +383,29 @@ export class AuthControllerBase {
         uid?: string;
         expiresAt?: Timestamp;
         revokedAt?: Timestamp | null;
+        lastSeenAt?: Timestamp;
+        lastSeenAtMs?: number;
       } | undefined;
+      const now = Date.now();
       if (
         !snapshot.exists ||
         device?.uid !== uid ||
         device.revokedAt ||
-        this.timestampToMillis(device.expiresAt) <= Date.now()
+        this.timestampToMillis(device.expiresAt) <= now
       ) {
         return false;
       }
 
-      transaction.update(ref, {
-        lastSeenAt: FieldValue.serverTimestamp(),
-        lastSeenAtMs: Date.now(),
-      });
+      // Trust and revocation checks ALWAYS run. Only informational activity
+      // timestamps are coalesced, reducing Firestore writes on repeat logins.
+      const lastSeenMs = Number(device.lastSeenAtMs) ||
+        this.timestampToMillis(device.lastSeenAt);
+      if (!Number.isFinite(lastSeenMs) || now - lastSeenMs >= 15 * 60_000) {
+        transaction.update(ref, {
+          lastSeenAt: FieldValue.serverTimestamp(),
+          lastSeenAtMs: now,
+        });
+      }
       return true;
     });
   }
