@@ -49,7 +49,7 @@ export function sanitizeUrlForAudit(value?: string) {
   try {
     const url = new URL(value, 'https://audit.local');
     return url.pathname
-      .replace(/\\/[A-Za-z0-9_-]{40,}(?=\\/|$)/g, '/[opaque-id]')
+      .replace(/\/[A-Za-z0-9_-]{40,}(?=\/|$)/g, '/[opaque-id]')
       .slice(0, 512);
   } catch {
     return '[unparseable]';
