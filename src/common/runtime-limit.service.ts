@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import Redis from 'ioredis';
 import { createHash } from 'crypto';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { FirebaseAdminService } from '../modules/firebase-admin/firebase-admin.service';
@@ -25,11 +26,84 @@ export class RuntimeLimitService {
     { count: number; resetAt: number }
   >();
   private readonly localReplayBuckets = new Map<string, number>();
-  private readonly useFirestore =
-    process.env.RUNTIME_LIMIT_STORE === 'firestore' &&
-    process.env.NODE_ENV !== 'test';
+  private readonly store: 'memory' | 'firestore' | 'redis' =
+    process.env.NODE_ENV === 'test' ? 'memory'
+      : process.env.RUNTIME_LIMIT_STORE === 'firestore' ? 'firestore'
+        : process.env.RUNTIME_LIMIT_STORE === 'redis' ? 'redis' : 'memory';
+  private readonly redis: Redis | null;
+  private redisConnection: Promise<void> | null = null;
 
-  constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
+  constructor(private readonly firebaseAdmin: FirebaseAdminService) {
+    this.redis = this.store === 'redis' ? this.createRedisClient() : null;
+    if (process.env.NODE_ENV === 'production' && this.store === 'memory') {
+      this.logger.warn('Runtime limits are process-local. Set RUNTIME_LIMIT_STORE=redis or firestore before scaling to multiple instances.');
+    }
+  }
+
+  private createRedisClient(): Redis {
+    const connectionOptions = {
+      lazyConnect: true,
+      connectTimeout: 1500,
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
+      retryStrategy: () => null,
+    } as const;
+    const url = process.env.RUNTIME_LIMIT_REDIS_URL || process.env.REDIS_URL;
+    let client: Redis;
+    if (url) {
+      if (!/^rediss?:\\/\\//.test(url)) {
+        throw new Error('RUNTIME_LIMIT_REDIS_URL must use redis:// or rediss://');
+      }
+      client = new Redis(url, connectionOptions);
+    } else {
+      if (!process.env.REDIS_HOST) {
+        throw new Error('RUNTIME_LIMIT_STORE=redis requires REDIS_HOST or RUNTIME_LIMIT_REDIS_URL');
+      }
+      client = new Redis({
+        ...connectionOptions,
+        host: process.env.REDIS_HOST,
+        port: Number(process.env.REDIS_PORT || 6379),
+        password: process.env.REDIS_PASSWORD || undefined,
+        db: Number(process.env.REDIS_DB || 0),
+      });
+    }
+    client.on('error', error => {
+      this.logger.warn(JSON.stringify({
+        event: 'runtime_limit_redis_error',
+        errorName: error.name,
+      }));
+    });
+    return client;
+  }
+
+  private async connectedRedis(): Promise<Redis> {
+    const client = this.redis;
+    if (!client) throw new Error('Distributed runtime limit storage is unavailable.');
+    if (client.status === 'wait') {
+      if (!this.redisConnection) {
+        const pending = client.connect();
+        this.redisConnection = pending.finally(() => { this.redisConnection = null; });
+      }
+      await this.redisConnection;
+    }
+    if (client.status !== 'ready') {
+      throw new Error('Distributed runtime limit storage is not connected.');
+    }
+    return client;
+  }
+
+  private handleStoreError(operation: string, error: unknown) {
+    this.logger.error(JSON.stringify({
+      event: 'runtime_limit_store_unavailable',
+      operation,
+      store: this.store,
+      errorName: error instanceof Error ? error.name : 'unknown',
+    }));
+    if (process.env.NODE_ENV === 'production') {
+      // Never silently weaken a configured distributed security boundary.
+      throw new ServiceUnavailableException('Security checks temporarily unavailable.');
+    }
+  }
 
   async reserve(options: LimitOptions): Promise<LimitResult> {
     const safeLimit = Math.max(1, Math.floor(options.limit));
@@ -41,19 +115,13 @@ export class RuntimeLimitService {
       windowMs: safeWindowMs,
     };
 
-    if (!this.useFirestore) {
-      return this.reserveLocal(normalizedOptions);
-    }
-
+    if (this.store === 'memory') return this.reserveLocal(normalizedOptions);
     try {
-      return await this.reserveFirestore(normalizedOptions);
+      return this.store === 'redis'
+        ? await this.reserveRedis(normalizedOptions)
+        : await this.reserveFirestore(normalizedOptions);
     } catch (error) {
-      this.logger.warn(
-        JSON.stringify({
-          event: 'runtime_limit_store_fallback',
-          reason: error instanceof Error ? error.message : 'unknown',
-        }),
-      );
+      this.handleStoreError('reserve', error);
       return this.reserveLocal(normalizedOptions);
     }
   }
@@ -61,21 +129,50 @@ export class RuntimeLimitService {
   async assertNotReplay(key: string, ttlSeconds: number) {
     const safeTtlSeconds = Math.max(1, Math.floor(ttlSeconds));
 
-    if (!this.useFirestore) {
-      return this.assertNotReplayLocal(key, safeTtlSeconds);
-    }
-
+    if (this.store === 'memory') return this.assertNotReplayLocal(key, safeTtlSeconds);
     try {
-      return await this.assertNotReplayFirestore(key, safeTtlSeconds);
+      return this.store === 'redis'
+        ? await this.assertNotReplayRedis(key, safeTtlSeconds)
+        : await this.assertNotReplayFirestore(key, safeTtlSeconds);
     } catch (error) {
-      this.logger.warn(
-        JSON.stringify({
-          event: 'runtime_replay_store_fallback',
-          reason: error instanceof Error ? error.message : 'unknown',
-        }),
-      );
+      this.handleStoreError('replay', error);
       return this.assertNotReplayLocal(key, safeTtlSeconds);
     }
+  }
+
+  // Atomic fixed-window counter. One Redis round trip, bounded storage lifetime,
+  // and no per-request Firestore transaction or hot-spot document.
+  private async reserveRedis(options: Required<LimitOptions>): Promise<LimitResult> {
+    const client = await this.connectedRedis();
+    const key = `chefu:limits:${options.collection}:${this.keyHash(options.key)}`;
+    const result = await client.eval(
+      "local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('PEXPIRE',KEYS[1],ARGV[1]); end; return {n,redis.call('PTTL',KEYS[1])}",
+      1, key, String(options.windowMs),
+    );
+    if (!Array.isArray(result) || result.length !== 2) {
+      throw new Error('Unexpected distributed limit response.');
+    }
+    const count = Number(result[0]);
+    const ttlMs = Number(result[1]);
+    if (!Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(ttlMs) || ttlMs < 1) {
+      throw new Error('Invalid distributed limit response.');
+    }
+    const resetAt = Date.now() + ttlMs;
+    return {
+      limited: count > options.limit,
+      remaining: Math.max(0, options.limit - count),
+      resetAt,
+      retryAfterSeconds: Math.max(1, Math.ceil(ttlMs / 1000)),
+    };
+  }
+
+  private async assertNotReplayRedis(key: string, ttlSeconds: number): Promise<boolean> {
+    const client = await this.connectedRedis();
+    const result = await client.set(
+      `chefu:replay:${this.keyHash(key)}`,
+      '1', 'EX', ttlSeconds, 'NX',
+    );
+    return result === 'OK';
   }
 
   private async reserveFirestore(options: Required<LimitOptions>) {
