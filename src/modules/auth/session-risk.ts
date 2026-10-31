@@ -25,7 +25,7 @@ export function assessSessionRisk(input: {
   if (!userAgent) {
     score += 20;
     reasons.push('missing_user_agent');
-  } else if (/\\b(?:curl|wget|python-requests|httpie)\\b/i.test(userAgent)) {
+  } else if (/\b(?:curl|wget|python-requests|httpie)\b/i.test(userAgent)) {
     score += 35;
     reasons.push('automation_user_agent');
   }
