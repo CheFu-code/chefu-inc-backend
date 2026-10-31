@@ -366,7 +366,7 @@ test('owners and shared recipients can read protected files but revoked, expired
   const f = fixture([protectedFile]);
   const requested: RequestInit[] = [];
   t.mock.method(cloudinary, 'url', (_id: string, options?: { type?: string; format?: string }) => {
-    assert.equal(options.type, 'authenticated');
+    assert.equal(options?.type, 'authenticated');
     return 'https://res.cloudinary.com/test/image/authenticated/internal-signature/file.png';
   });
   t.mock.method(global, 'fetch', async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -392,7 +392,7 @@ test('owners and shared recipients can read protected files but revoked, expired
 test('byte ranges are forwarded only after authorization and raw asset extensions are not duplicated', async (t) => {
   const f = fixture([{ ...file('raw'), deliveryType: 'authenticated', publicId: 'chefu/cloudence/viewer/file.txt' }]);
   t.mock.method(cloudinary, 'url', (_id: string, options?: { type?: string; format?: string }) => {
-    assert.equal(options.format, undefined);
+    assert.equal(options?.format, undefined);
     return 'https://res.cloudinary.com/test/raw/authenticated/internal/file.txt';
   });
   t.mock.method(global, 'fetch', async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
