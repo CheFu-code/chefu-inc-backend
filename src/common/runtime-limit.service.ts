@@ -99,8 +99,10 @@ export class RuntimeLimitService {
       store: this.store,
       errorName: error instanceof Error ? error.name : 'unknown',
     }));
-    if (process.env.NODE_ENV === 'production') {
-      // Never silently weaken a configured distributed security boundary.
+    // Fail closed whenever distributed storage was explicitly requested.
+    // A server-local fallback would allow cross-instance rate-limit/replay bypass.
+    if (process.env.RUNTIME_LIMIT_ALLOW_LOCAL_FALLBACK !== 'true' ||
+        process.env.NODE_ENV === 'production') {
       throw new ServiceUnavailableException('Security checks temporarily unavailable.');
     }
   }
