@@ -2,19 +2,6 @@ import { createHash } from 'crypto';
 import { Request } from 'express';
 import { getRequestId } from './request-context';
 
-const SENSITIVE_QUERY_PARAMS = new Set([
-  'access_token',
-  'code',
-  'code_challenge',
-  'code_verifier',
-  'id_token',
-  'nonce',
-  'refresh_token',
-  'returnTo',
-  'state',
-  'token',
-]);
-
 export function hashForAudit(value?: string | null) {
   const normalized = value?.trim();
   if (!normalized) return null;
@@ -51,20 +38,19 @@ export function auditRequestContext(request?: Request) {
   };
 }
 
+/**
+ * Audit URL paths only. Query strings routinely contain tokens, email addresses,
+ * redirect state and unexpected PII. Logging them is unnecessary for routing
+ * diagnostics and increases both disclosure risk and log bandwidth.
+ */
 export function sanitizeUrlForAudit(value?: string) {
   if (!value) return null;
 
   try {
     const url = new URL(value, 'https://audit.local');
-
-    for (const key of Array.from(url.searchParams.keys())) {
-      if (SENSITIVE_QUERY_PARAMS.has(key)) {
-        url.searchParams.set(key, '[redacted]');
-      }
-    }
-
-    const query = url.searchParams.toString();
-    return query ? `${url.pathname}?${query}` : url.pathname;
+    return url.pathname
+      .replace(/\\/[A-Za-z0-9_-]{40,}(?=\\/|$)/g, '/[opaque-id]')
+      .slice(0, 512);
   } catch {
     return '[unparseable]';
   }
