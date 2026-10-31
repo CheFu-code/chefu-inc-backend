@@ -51,7 +51,7 @@ export class RuntimeLimitService {
     const url = process.env.RUNTIME_LIMIT_REDIS_URL || process.env.REDIS_URL;
     let client: Redis;
     if (url) {
-      if (!/^rediss?:\\/\\//.test(url)) {
+      if (!['redis:', 'rediss:'].includes(new URL(url).protocol)) {
         throw new Error('RUNTIME_LIMIT_REDIS_URL must use redis:// or rediss://');
       }
       client = new Redis(url, connectionOptions);
