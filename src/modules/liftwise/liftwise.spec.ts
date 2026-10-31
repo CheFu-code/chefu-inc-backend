@@ -1066,7 +1066,7 @@ test("streak v2 backfill spans pages, preserves minute-offset local dates and do
 });
 
 test("catalogue HTTP validators skip unchanged payloads and change with content",async()=>{
-  const {LiftWiseController}=await import("./liftwise.controller");
+  const { LiftWiseController } = require('./liftwise.controller');
   let records=[{id:"curl",name:"Curl"}];
   const controller=new LiftWiseController({exercises:async()=>records} as unknown as LiftWiseService);
   const headers:Record<string,string>={};let status=200;
