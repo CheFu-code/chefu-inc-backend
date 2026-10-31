@@ -8,11 +8,12 @@ import { check, sleep } from 'k6';
 
 const baseUrl = __ENV.AUTH_LOAD_BASE_URL;
 if (!baseUrl) throw new Error('AUTH_LOAD_BASE_URL is required.');
-const parsed = new URL(baseUrl);
-if (parsed.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(parsed.hostname)) {
+const httpsHost = /^https:\/\/([^/:?#]+)/.exec(baseUrl)?.[1];
+const localHost = /^http:\/\/(localhost|127\\.0\\.0\\.1)(?::[0-9]+)?(?:\/|$)/.test(baseUrl);
+if (!httpsHost && !localHost) {
   throw new Error('Load tests require HTTPS outside localhost.');
 }
-if (parsed.hostname === 'api.chefu.co.za' || parsed.hostname === 'myaccount.chefu.co.za') {
+if (httpsHost === 'api.chefu.co.za' || httpsHost === 'myaccount.chefu.co.za') {
   throw new Error('Production hosts are intentionally blocked; test against staging only.');
 }
 
@@ -27,13 +28,22 @@ if (mode === 'login' && (!Array.isArray(users) || users.length === 0)) {
 }
 
 export const options = {
-  scenarios: {
-    steady: {
-      executor: 'constant-vus',
-      vus: Number(__ENV.AUTH_LOAD_VUS || 10),
-      duration: __ENV.AUTH_LOAD_DURATION || '1m',
+  scenarios: mode === 'login'
+    ? {
+      burst: {
+        executor: 'per-vu-iterations',
+        vus: Number(__ENV.AUTH_LOAD_VUS || 10),
+        iterations: 1,
+        maxDuration: __ENV.AUTH_LOAD_DURATION || '5m',
+      },
+    }
+    : {
+      steady: {
+        executor: 'constant-vus',
+        vus: Number(__ENV.AUTH_LOAD_VUS || 10),
+        duration: __ENV.AUTH_LOAD_DURATION || '1m',
+      },
     },
-  },
   thresholds: {
     http_req_failed: ['rate<0.01'],
     http_req_duration: ['p(95)<2000'],
