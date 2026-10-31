@@ -90,11 +90,13 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     }
 
     const startedAt = performance.now();
-    // Both reads are independent and use existing revocation-checked auth.
-    const [profile, authUser] = await Promise.all([
-      this.getUserProfile(request.user.email),
-      this.firebaseAdmin.auth().getUser(request.user.uid),
-    ]);
+    // The Firebase Auth lookup is only used to backfill a missing phone.
+    // Existing phone values already bypass synchronization, so avoid an
+    // unnecessary upstream API call on every account-page visit.
+    const profile = await this.getUserProfile(request.user.email);
+    const authUser = !profile.phone
+      ? await this.firebaseAdmin.auth().getUser(request.user.uid)
+      : null;
     const profileReadDuration = performance.now() - startedAt;
     const detected = this.getDetectedCountry(request);
     const needsCountryUpdate = shouldRefreshDetectedCountry(
@@ -102,7 +104,7 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       profile.detectedCountryCode,
       profile.detectedCountryUpdatedAt,
     );
-    const firebasePhone = authUser.phoneNumber || null;
+    const firebasePhone = authUser?.phoneNumber || null;
     const needsPhoneSync = !profile.phone && Boolean(firebasePhone);
     // Independent merge writes can overlap. Neither is skipped when required.
     const [countrySaved] = await Promise.all([
