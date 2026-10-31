@@ -9,7 +9,7 @@ import { OAuthService } from './oauth.service';
 import { AuthOnboardingRoutes } from './auth-onboarding.routes';
 import { AuthControllerBase } from './auth.controller.base';
 import { ResendService } from '../email/resend.service';
-import { afterSuccessfulAuthResponse, authStage } from './auth-performance';
+import { afterSuccessfulAuthResponse, authStage, shouldRefreshDetectedCountry } from './auth-performance';
 
 const logger = { log() {}, warn() {}, error() {} };
 const request: any = { ip: '127.0.0.1', headers: {}, cookies: {}, socket: {} };
@@ -319,4 +319,74 @@ test('signup awaits verification, profile/session creation, challenge cleanup an
   res.emit('finish');
   await Promise.resolve();
   assert.equal(events.at(-1), 'welcome');
+});
+
+test('country updates only on a location change or after one day', () => {
+  const now = Date.parse('2026-10-31T00:00:00Z');
+  assert.equal(shouldRefreshDetectedCountry(null, null, null, now), false);
+  assert.equal(shouldRefreshDetectedCountry('ZA', 'ZA', new Date(now - 1000).toISOString(), now), false);
+  assert.equal(shouldRefreshDetectedCountry('ZA', 'ZA', new Date(now - 86400001).toISOString(), now), true);
+  assert.equal(shouldRefreshDetectedCountry('ZA', 'GB', new Date(now - 1000).toISOString(), now), true);
+  assert.equal(shouldRefreshDetectedCountry('ZA', 'ZA', null, now), true);
+});
+
+test('/auth/me overlaps independent profile and Firebase user reads', async () => {
+  const state: string[] = [];
+  let completeProfile!: (value: any) => void;
+  let completeAuth!: (value: any) => void;
+  const controller: any = Object.create(AuthSessionRoutes.prototype);
+  Object.assign(controller, {
+    getUserProfile: async () => { state.push('profile_start'); return new Promise(resolve => { completeProfile = resolve; }); },
+    firebaseAdmin: { auth: () => ({ getUser: async () => {
+      state.push('firebase_start'); return new Promise(resolve => { completeAuth = resolve; });
+    } }) },
+    getDetectedCountry: () => null,
+  });
+  const req = { user: { uid: 'uid', email: 'alice@example.test', roles: ['user'] } };
+  const pending = controller.getCurrentUser(req, response());
+  await Promise.resolve();
+  assert.deepEqual(state, ['profile_start', 'firebase_start']);
+  completeProfile({ phone: '123', fullname: 'Alice', detectedCountryCode: 'ZA', detectedCountryUpdatedAt: new Date().toISOString() });
+  completeAuth({ phoneNumber: '123' });
+  const result = await pending;
+  assert.equal(result.profile.fullname, 'Alice');
+  assert.equal(result.user.uid, 'uid');
+});
+
+test('/auth/me skips redundant writes but updates changed country using the existing read', async () => {
+  const writes: string[] = [];
+  const profile = { phone: '+27111111111', fullname: 'Alice', detectedCountryCode: 'ZA', detectedCountrySource: 'cloudflare', detectedCountryUpdatedAt: new Date().toISOString() };
+  const controller: any = Object.create(AuthSessionRoutes.prototype);
+  Object.assign(controller, {
+    getUserProfile: async () => ({ ...profile }),
+    firebaseAdmin: { auth: () => ({ getUser: async () => ({ phoneNumber: '+27111111111' }) }) },
+    getDetectedCountry: () => ({ code: 'ZA', source: 'cloudflare' }),
+    recordServerDetectedCountry: async () => { writes.push('country'); return true; },
+  });
+  const req = { user: { uid: 'uid', email: 'alice@example.test', roles: ['user'] } };
+  const unchanged = await controller.getCurrentUser(req, response());
+  assert.equal(unchanged.profile.detectedCountryCode, 'ZA');
+  assert.deepEqual(writes, []);
+  controller.getDetectedCountry = () => ({ code: 'GB', source: 'cloudflare' });
+  const changed = await controller.getCurrentUser(req, response());
+  assert.deepEqual(writes, ['country']);
+  assert.equal(changed.profile.detectedCountryCode, 'GB');
+});
+
+test('trusted-device verification overlaps only the final profile read, never the required profile sync', async () => {
+  const state = sessionSetup();
+  let completeTrust!: (value: boolean) => void;
+  let trustStarted = false;
+  state.controller.isTrustedAuthDevice = async () => {
+    trustStarted = true;
+    return new Promise(resolve => { completeTrust = resolve; });
+  };
+  const pending = state.signIn();
+  for (let i = 0; i < 8 && !trustStarted; i += 1) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(trustStarted, true);
+  assert.deepEqual(state.events, ['verify', 'cookie', 'sync', 'profile']);
+  assert.equal(state.res.cookies.length, 0, 'cookies must not be sent before trust is verified');
+  completeTrust(false);
+  await pending;
+  assert.equal(state.res.cookies.length, 2);
 });
