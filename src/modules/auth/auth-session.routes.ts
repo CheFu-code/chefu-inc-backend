@@ -1,4 +1,4 @@
-import { authStage } from './auth-performance';
+import { authStage, shouldRefreshDetectedCountry } from './auth-performance';
 import {
   BadGatewayException,
   BadRequestException,
@@ -81,22 +81,49 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
 
   @Get('me')
   @UseGuards(AuthGuard)
-  async getCurrentUser(@Req() request: Request & { user?: AuthenticatedUser }) {
+  async getCurrentUser(
+    @Req() request: Request & { user?: AuthenticatedUser },
+    @Res({ passthrough: true }) response?: Response,
+  ) {
     if (!request.user) {
       throw new UnauthorizedException('Authenticated user missing from request.');
     }
 
-    await this.recordServerDetectedCountry(request.user.email, request);
-    const profile = await this.getUserProfile(request.user.email);
-    const authUser = await this.firebaseAdmin.auth().getUser(request.user.uid);
+    const startedAt = performance.now();
+    // Both reads are independent and use existing revocation-checked auth.
+    const [profile, authUser] = await Promise.all([
+      this.getUserProfile(request.user.email),
+      this.firebaseAdmin.auth().getUser(request.user.uid),
+    ]);
+    const profileReadDuration = performance.now() - startedAt;
+    const detected = this.getDetectedCountry(request);
+    const needsCountryUpdate = shouldRefreshDetectedCountry(
+      detected?.code || null,
+      profile.detectedCountryCode,
+      profile.detectedCountryUpdatedAt,
+    );
     const firebasePhone = authUser.phoneNumber || null;
-    if (!profile.phone && firebasePhone) {
-      profile.phone = firebasePhone;
-      await this.firebaseAdmin
-        .db()
-        .collection('users')
-        .doc(request.user.email)
-        .set({ phone: firebasePhone }, { merge: true });
+    const needsPhoneSync = !profile.phone && Boolean(firebasePhone);
+    // Independent merge writes can overlap. Neither is skipped when required.
+    const [countrySaved] = await Promise.all([
+      needsCountryUpdate
+        ? this.recordServerDetectedCountry(request.user.email, request)
+        : Promise.resolve(false),
+      needsPhoneSync
+        ? this.firebaseAdmin.db().collection('users').doc(request.user.email)
+          .set({ phone: firebasePhone }, { merge: true })
+        : Promise.resolve(),
+    ]);
+    if (countrySaved && detected) {
+      profile.detectedCountryCode = detected.code;
+      profile.detectedCountrySource = detected.source;
+      profile.detectedCountryUpdatedAt = new Date().toISOString();
+    }
+    if (needsPhoneSync) profile.phone = firebasePhone || '';
+    if (response && !response.headersSent) {
+      response.setHeader('Server-Timing',
+        `account_profile;dur=${profileReadDuration.toFixed(1)}, account_sync;dur=${(performance.now() - startedAt - profileReadDuration).toFixed(1)}`);
+      response.setHeader('Cache-Control', 'private, no-store');
     }
 
     return {
@@ -620,9 +647,16 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       ? await this.consumeSignupSignInAlertSuppression(decodedToken.email)
       : false;
     const isSignupSession = signupSession || signupAlertSuppressed;
-    const wasTrustedDevice = await authStage(response, 'trusted_device', () =>
-      this.isTrustedAuthDevice(decodedToken.uid, request),
-    );
+    // Profile is already synchronized. Its read is independent from verifying
+    // the existing trusted-device cookie and can overlap the network round trip.
+    const [wasTrustedDevice, userProfile] = await Promise.all([
+      authStage(response, 'trusted_device', () =>
+        this.isTrustedAuthDevice(decodedToken.uid, request),
+      ),
+      authStage(response, 'profile_read', () =>
+        this.getUserProfile(decodedToken.email),
+      ),
+    ]);
     let trustDeviceVerificationRequired = false;
     let trustDeviceResendCooldownSeconds = 0;
     let trustDeviceResendsRemaining = 0;
@@ -674,9 +708,6 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
         });
       }
     }
-    const userProfile = await authStage(response, 'profile_read', () =>
-      this.getUserProfile(decodedToken.email),
-    );
     const meta = this.buildSessionMeta({
       email: decodedToken.email || '',
       name:
