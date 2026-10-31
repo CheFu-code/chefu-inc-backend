@@ -37,6 +37,7 @@ import {
   getPasswordBreachRange,
 } from './password-breach';
 import { ADMIN_ROLE } from './roles';
+import { assessSessionRisk } from './session-risk';
 import {
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE_SECONDS,
@@ -705,6 +706,21 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
         ...auditRequestContext(request),
       }),
     );
+
+    if (!isSignupSession) {
+      const risk = assessSessionRisk({
+        trustedDevice: wasTrustedDevice,
+        userAgent: request.headers['user-agent'],
+        appId: sessionAppId,
+      });
+      this.logger.log(JSON.stringify({
+        event: 'auth_session_risk_assessed',
+        uidHash: hashForAudit(decodedToken.uid),
+        app: sessionAppId,
+        ...risk,
+        ...auditRequestContext(request),
+      }));
+    }
 
     const signInProvider =
       tokenPayload?.chefu_auth_provider ||
