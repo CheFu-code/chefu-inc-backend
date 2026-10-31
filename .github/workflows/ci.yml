@@ -21,3 +21,18 @@ jobs:
     uses: CheFu-code/CheFu-UI/.github/workflows/node-ci.yml@main
     with:
       smoke-command: npm run smoke
+
+  security-tests:
+    name: Security and regression tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:security
+      - run: npm run test:liftwise
+      - run: npm run test:cloudence
