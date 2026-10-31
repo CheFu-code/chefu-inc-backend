@@ -1140,22 +1140,20 @@ export class AuthControllerBase {
     const normalizedEmail = email?.trim().toLowerCase();
     const updates = this.serverDetectedCountryUpdates(request);
 
-    if (!normalizedEmail || Object.keys(updates).length === 0) return;
+    if (!normalizedEmail || Object.keys(updates).length === 0) return false;
 
-    await this.firebaseAdmin
-      .db()
-      .collection('users')
-      .doc(normalizedEmail)
-      .set(updates, { merge: true })
-      .catch(error => {
-        this.logger.warn(
-          JSON.stringify({
-            event: 'auth_detected_country_update_failed',
-            emailHash: hashForAudit(normalizedEmail),
-            reason: error instanceof Error ? error.message : 'unknown',
-          }),
-        );
-      });
+    try {
+      await this.firebaseAdmin.db().collection('users')
+        .doc(normalizedEmail).set(updates, { merge: true });
+      return true;
+    } catch (error) {
+      this.logger.warn(JSON.stringify({
+        event: 'auth_detected_country_update_failed',
+        emailHash: hashForAudit(normalizedEmail),
+        errorName: error instanceof Error ? error.name : 'unknown',
+      }));
+      return false;
+    }
   }
 
   protected serverDetectedCountryUpdates(request?: Request) {
