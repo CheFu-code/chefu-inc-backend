@@ -89,16 +89,38 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
   async listAccounts(
     @Req() request: Request & { user?: AuthenticatedUser },
   ) {
-    const accounts: Array<{ slot: number | null; email: string; active: boolean }> = [];
+    const accounts: Array<{
+      slot: number | null;
+      email: string;
+      fullName?: string;
+      profilePicture?: string;
+      active: boolean;
+    }> = [];
     if (request.user?.email) {
-      accounts.push({ slot: null, email: request.user.email, active: true });
+      const profile = await this.getUserProfile(request.user.email);
+      accounts.push({
+        slot: null,
+        email: request.user.email,
+        fullName: profile.fullname || undefined,
+        profilePicture: profile.profilePicture || undefined,
+        active: true,
+      });
     }
     for (let slot = 0; slot < ACCOUNT_SESSION_SLOT_COUNT; slot++) {
       const cookie = request.cookies?.[accountSessionSlotCookieName(slot)];
       if (!cookie) continue;
       try {
         const decoded = await this.firebaseAdmin.auth().verifySessionCookie(cookie, true);
-        if (decoded.email) accounts.push({ slot, email: decoded.email, active: false });
+        if (decoded.email) {
+          const profile = await this.getUserProfile(decoded.email);
+          accounts.push({
+            slot,
+            email: decoded.email,
+            fullName: profile.fullname || undefined,
+            profilePicture: profile.profilePicture || undefined,
+            active: false,
+          });
+        }
       } catch {
         // Stale slots are ignored.
       }

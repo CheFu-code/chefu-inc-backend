@@ -1311,6 +1311,9 @@ export class AuthControllerBase {
           Array.isArray(existingRoles) && existingRoles.length > 0
             ? existingRoles.map(String)
             : ['user'],
+        ...(!this.stringValue(existingUser?.accountStatus)
+          ? { accountStatus: 'active' }
+          : {}),
         authProvider: decodedToken.firebase?.sign_in_provider || 'unknown',
         ...(shouldSeedProfilePicture
           ? {

@@ -11,7 +11,7 @@ export function accountSessionSlotCookieName(slot: number) {
 export function accountSessionSlotMetaCookieName(slot: number) {
   return `${ACCOUNT_SESSION_SLOT_META_COOKIE_PREFIX}${slot}`;
 }
-export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 5;
+export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 14; // 14 days
 export const SESSION_META_AUDIENCE = 'chefu-account-web';
 export const SESSION_META_ISSUER = 'chefu-api-session';
 
