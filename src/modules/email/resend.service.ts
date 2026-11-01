@@ -17,6 +17,7 @@ export class ResendService {
     private readonly signupEmailTemplateId = "welcome-email-1"
     private readonly accountEmailVerificationTemplateId = "email-verification"
     private readonly careerApplicationTemplateId = "job-application-notification";
+    private readonly careerApplicationConfirmationTemplateId = "application-received"
     private readonly fromAddress =
         this.normalizeFromAddress(
             "Security <security@chefu.co.za>",
@@ -72,6 +73,11 @@ export class ResendService {
     async sendCareerApplicationNotification(data: {
         applicationId: string;
         applicant: Record<string, string | null>;
+        cvAttachment?: {
+            filename: string;
+            content: string;
+            contentType: string;
+        };
     }): Promise<void> {
         const apiKey = this.getApiKey();
         const variables = Object.fromEntries(
@@ -97,6 +103,17 @@ export class ResendService {
                     id: this.careerApplicationTemplateId,
                     variables,
                 },
+                ...(data.cvAttachment
+                    ? {
+                          attachments: [
+                              {
+                                  filename: data.cvAttachment.filename,
+                                  content: data.cvAttachment.content,
+                                  content_type: data.cvAttachment.contentType,
+                              },
+                          ],
+                      }
+                    : {}),
             }),
         });
 
@@ -112,6 +129,46 @@ export class ResendService {
                 templateId: this.careerApplicationTemplateId,
             }),
         );
+    }
+
+    async sendCareerApplicationConfirmation(data: {
+        applicationId: string;
+        email: string;
+        fullName: string;
+        department: string;
+        roleApplyingFor: string;
+    }): Promise<void> {
+        const apiKey = this.getApiKey();
+        const response = await fetch(this.RESEND_API_URL, {
+            method: "POST",
+            headers: {
+                Authorization: `******`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                from: "Career Applications <notifications@chefu.co.za>",
+                to: [data.email],
+                subject: "We received your Chefu Technologies application",
+                template: {
+                    id: this.careerApplicationConfirmationTemplateId,
+                    variables: {
+                        APPLICATION_ID: data.applicationId,
+                        FULL_NAME: data.fullName,
+                        DEPARTMENT: data.department,
+                        ROLE_APPLYING_FOR: data.roleApplyingFor,
+                        SUBMITTED_AT: new Date().toISOString(),
+                        YEAR: new Date().getUTCFullYear().toString(),
+                    },
+                },
+            }),
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(
+                `Resend career confirmation request failed: ${response.status} ${error}`,
+            );
+        }
     }
 
     async sendPasskeyRemovedNotification(

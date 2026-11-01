@@ -10,6 +10,7 @@ import { Request } from 'express';
 import { AuthGuard } from '../auth/auth.guard';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { SubmissionsService } from './submissions.service';
+import { getClientIp } from '../../common/security-audit';
 
 type RequestWithUser = Request & { user?: AuthenticatedUser };
 
@@ -25,7 +26,7 @@ export class SubmissionsController {
   }
 
   @Post('careers')
-  submitCareer(@Body() body: Record<string, unknown>) {
-    return this.submissions.submitCareer(body);
+  submitCareer(@Req() request: Request, @Body() body: Record<string, unknown>) {
+    return this.submissions.submitCareer(body, getClientIp(request));
   }
 }
