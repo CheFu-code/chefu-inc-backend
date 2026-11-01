@@ -54,6 +54,7 @@ test('HTTP file content requires authorization, streams ranges, prevents shared 
   const app = await NestFactory.create<NestExpressApplication>({ module: ContentTestModule, controllers: [CloudenceController], providers: [{ provide: CloudenceService, useValue: service }] }, { logger: false, abortOnError: false });
   await app.listen(0, '127.0.0.1');
   const appAddress = app.getHttpServer().address();
+  if (!appAddress || typeof appAddress === 'string') throw new Error('Test server did not bind');
   const url = `http://127.0.0.1:${appAddress.port}/cloudence/files/file-1/content`;
   try {
     assert.equal((await fetch(url)).status, 401);

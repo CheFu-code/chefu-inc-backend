@@ -383,20 +383,29 @@ export class AuthControllerBase {
         uid?: string;
         expiresAt?: Timestamp;
         revokedAt?: Timestamp | null;
+        lastSeenAt?: Timestamp;
+        lastSeenAtMs?: number;
       } | undefined;
+      const now = Date.now();
       if (
         !snapshot.exists ||
         device?.uid !== uid ||
         device.revokedAt ||
-        this.timestampToMillis(device.expiresAt) <= Date.now()
+        this.timestampToMillis(device.expiresAt) <= now
       ) {
         return false;
       }
 
-      transaction.update(ref, {
-        lastSeenAt: FieldValue.serverTimestamp(),
-        lastSeenAtMs: Date.now(),
-      });
+      // Trust and revocation checks ALWAYS run. Only informational activity
+      // timestamps are coalesced, reducing Firestore writes on repeat logins.
+      const lastSeenMs = Number(device.lastSeenAtMs) ||
+        this.timestampToMillis(device.lastSeenAt);
+      if (!Number.isFinite(lastSeenMs) || now - lastSeenMs >= 15 * 60_000) {
+        transaction.update(ref, {
+          lastSeenAt: FieldValue.serverTimestamp(),
+          lastSeenAtMs: now,
+        });
+      }
       return true;
     });
   }
@@ -1140,22 +1149,20 @@ export class AuthControllerBase {
     const normalizedEmail = email?.trim().toLowerCase();
     const updates = this.serverDetectedCountryUpdates(request);
 
-    if (!normalizedEmail || Object.keys(updates).length === 0) return;
+    if (!normalizedEmail || Object.keys(updates).length === 0) return false;
 
-    await this.firebaseAdmin
-      .db()
-      .collection('users')
-      .doc(normalizedEmail)
-      .set(updates, { merge: true })
-      .catch(error => {
-        this.logger.warn(
-          JSON.stringify({
-            event: 'auth_detected_country_update_failed',
-            emailHash: hashForAudit(normalizedEmail),
-            reason: error instanceof Error ? error.message : 'unknown',
-          }),
-        );
-      });
+    try {
+      await this.firebaseAdmin.db().collection('users')
+        .doc(normalizedEmail).set(updates, { merge: true });
+      return true;
+    } catch (error) {
+      this.logger.warn(JSON.stringify({
+        event: 'auth_detected_country_update_failed',
+        emailHash: hashForAudit(normalizedEmail),
+        errorName: error instanceof Error ? error.name : 'unknown',
+      }));
+      return false;
+    }
   }
 
   protected serverDetectedCountryUpdates(request?: Request) {

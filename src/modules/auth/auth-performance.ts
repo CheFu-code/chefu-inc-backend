@@ -47,3 +47,20 @@ export function afterSuccessfulAuthResponse(
   response.once('finish', finish);
   response.once('close', cancel);
 }
+
+/**
+ * Country metadata is informational, not an authentication decision.
+ * Refresh at most daily for the same country, or immediately on a country change.
+ * No extra Firestore read is required: use the profile already fetched for /auth/me.
+ */
+export function shouldRefreshDetectedCountry(
+  detectedCode: string | null,
+  savedCode: string | null | undefined,
+  savedAt: string | null | undefined,
+  nowMs = Date.now(),
+): boolean {
+  if (!detectedCode) return false;
+  if (detectedCode !== savedCode) return true;
+  const last = savedAt ? Date.parse(savedAt) : NaN;
+  return !Number.isFinite(last) || nowMs - last >= 24 * 60 * 60_000;
+}
