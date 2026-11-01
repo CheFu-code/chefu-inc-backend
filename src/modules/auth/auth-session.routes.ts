@@ -21,6 +21,7 @@ import {
 } from '@nestjs/common';
 import type { AuthenticationResponseJSON } from '@simplewebauthn/server';
 import { Request, Response } from 'express';
+import { FieldValue } from 'firebase-admin/firestore';
 import isEmail from 'validator/lib/isEmail';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { CHEFU_APP_HEADER } from '../apps/app-registry';
@@ -171,9 +172,44 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     if (!Number.isInteger(slot) || slot < 0 || slot >= ACCOUNT_SESSION_SLOT_COUNT) {
       throw new BadRequestException('Invalid account slot.');
     }
+
     response.clearCookie(accountSessionSlotCookieName(slot), this.getCookieOptions());
     response.clearCookie(accountSessionSlotMetaCookieName(slot), this.getCookieOptions());
     return { ok: true };
+  }
+
+  @Delete('connected-apps/:appId')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async revokeConnectedApp(
+    @Param('appId') appId: string,
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
+    const resolvedAppId = this.appsService.resolveId(appId);
+    if (!resolvedAppId) {
+      throw new BadRequestException('Unknown connected app.');
+    }
+    if (!request.user?.email) {
+      throw new UnauthorizedException('Authenticated user missing from request.');
+    }
+
+    await this.firebaseAdmin
+      .db()
+      .collection('users')
+      .doc(request.user.email)
+      .set(
+        {
+          apps: {
+            [resolvedAppId]: {
+              enabled: false,
+              revokedAt: FieldValue.serverTimestamp(),
+            },
+          },
+        },
+        { merge: true },
+      );
+
+    return { ok: true, appId: resolvedAppId };
   }
 
   @Get('me')
