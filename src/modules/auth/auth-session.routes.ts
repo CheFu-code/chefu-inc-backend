@@ -86,16 +86,12 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
 
   @Get('accounts')
   @UseGuards(AuthGuard)
-  async listAccounts(@Req() request: Request) {
+  async listAccounts(
+    @Req() request: Request & { user?: AuthenticatedUser },
+  ) {
     const accounts: Array<{ slot: number | null; email: string; active: boolean }> = [];
-    const activeCookie = request.cookies?.[SESSION_COOKIE_NAME];
-    if (activeCookie) {
-      try {
-        const active = await this.firebaseAdmin.auth().verifySessionCookie(activeCookie, true);
-        if (active.email) accounts.push({ slot: null, email: active.email, active: true });
-      } catch {
-        // A concurrent expiry is handled by the next authenticated request.
-      }
+    if (request.user?.email) {
+      accounts.push({ slot: null, email: request.user.email, active: true });
     }
     for (let slot = 0; slot < ACCOUNT_SESSION_SLOT_COUNT; slot++) {
       const cookie = request.cookies?.[accountSessionSlotCookieName(slot)];
