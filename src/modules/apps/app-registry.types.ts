@@ -3,8 +3,6 @@ export type ChefuAppId =
     | "admin"
     | "flow"
     | "quantum"
-    | "logix"
-    | "logix-dash"
     | "merchant"
     | "cloudence"
     | "liftwise"

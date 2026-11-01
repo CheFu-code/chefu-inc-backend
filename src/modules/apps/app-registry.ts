@@ -54,16 +54,6 @@ export const CHEFU_APPS: ChefuApp[] = [
         origins: ["https://quantum.chefu.co.za"],
     },
     {
-        id: "logix",
-        name: "Logix",
-        origins: ["https://logix.chefu.co.za"],
-    },
-    {
-        id: "logix-dash",
-        name: "Logix Dashboard",
-        origins: ["https://dashboard.logix.chefu.co.za"],
-    },
-    {
         id: "merchant",
         name: "Merchant",
         origins: ["https://merchant.chefu.co.za"],

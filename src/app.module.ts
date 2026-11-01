@@ -11,7 +11,6 @@ import { EmailModule } from './modules/email/email.module';
 import { FirebaseAdminModule } from './modules/firebase-admin/firebase-admin.module';
 import { FlowModule } from './modules/flow/flow.module';
 import { HealthController } from './modules/health/health.controller';
-import { LogixModule } from './modules/logix/logix.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { QuantumModule } from './modules/quantum/quantum.module';
 import { ProductsModule } from './modules/products/products.module';
@@ -37,7 +36,6 @@ const productModules = [
   AcademySdkModule,
   CoursesModule,
   FlowModule,
-  LogixModule,
   QuantumModule,
   ProductsModule,
   SubmissionsModule,
