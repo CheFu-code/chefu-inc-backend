@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from 'crypto';
 import {
   SESSION_META_AUDIENCE,
   SESSION_META_ISSUER,
+  SESSION_MAX_AGE_SECONDS,
   SessionMeta,
 } from './session.constants';
 
@@ -69,7 +70,7 @@ export class SessionSignerService {
 
   private isValidSessionMeta(meta: Partial<SessionMeta>): meta is SessionMeta {
     const now = Math.floor(Date.now() / 1000);
-    const maxAgeSeconds = 60 * 60 * 24 * 7;
+    const maxAgeSeconds = SESSION_MAX_AGE_SECONDS;
     const { exp, iat } = meta;
 
     return (

@@ -98,12 +98,9 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       active: boolean;
     }> = [];
     if (request.user?.email) {
-      const profile = await this.getUserProfile(request.user.email);
       accounts.push({
         slot: null,
         email: request.user.email,
-        fullName: profile.fullname || undefined,
-        profilePicture: profile.profilePicture || undefined,
         active: true,
       });
     }
@@ -113,12 +110,16 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       try {
         const decoded = await this.firebaseAdmin.auth().verifySessionCookie(cookie, true);
         if (decoded.email) {
-          const profile = await this.getUserProfile(decoded.email);
+          const meta = this.sessionSigner.verify(
+            request.cookies?.[accountSessionSlotMetaCookieName(slot)],
+          );
+          const hasMatchingMeta =
+            meta?.uid === decoded.uid && meta.email === decoded.email;
           accounts.push({
             slot,
             email: decoded.email,
-            fullName: profile.fullname || undefined,
-            profilePicture: profile.profilePicture || undefined,
+            fullName: hasMatchingMeta ? meta.name : undefined,
+            profilePicture: hasMatchingMeta ? meta.profilePicture : undefined,
             active: false,
           });
         }
@@ -853,6 +854,7 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
         '',
       roles: userProfile.roles,
       uid: decodedToken.uid,
+      profilePicture: userProfile.profilePicture || undefined,
     });
 
     await this.preserveActiveAccountSession(request, response, decodedToken.uid);

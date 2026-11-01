@@ -20,6 +20,7 @@ export type SessionMeta = {
   uid: string;
   email: string;
   name?: string;
+  profilePicture?: string;
   roles: string[];
   iat: number;
   exp: number;

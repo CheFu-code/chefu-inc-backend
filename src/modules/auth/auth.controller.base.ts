@@ -194,11 +194,13 @@ export class AuthControllerBase {
     name,
     roles,
     uid,
+    profilePicture,
   }: {
     email: string;
     name?: string;
     roles: string[];
     uid: string;
+    profilePicture?: string;
   }): SessionMeta {
     const now = Math.floor(Date.now() / 1000);
 
@@ -207,6 +209,7 @@ export class AuthControllerBase {
       uid,
       email,
       name,
+      profilePicture,
       roles,
       iat: now,
       exp: now + SESSION_MAX_AGE_SECONDS,
