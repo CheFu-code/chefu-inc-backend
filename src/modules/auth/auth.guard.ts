@@ -13,6 +13,9 @@ import { AuthenticatedUser } from './authenticated-user';
 import { HoneytokenService } from './honeytoken.service';
 import { OAuthService } from './oauth.service';
 import {
+  ACCOUNT_SESSION_SLOT_COUNT,
+  accountSessionSlotCookieName,
+  accountSessionSlotMetaCookieName,
   SESSION_COOKIE_NAME,
   SESSION_META_COOKIE_NAME,
 } from './session.constants';
@@ -164,6 +167,43 @@ export class AuthGuard implements CanActivate {
         email,
         roles,
       },
+    };
+  }
+
+  async resolveAccountSlot(
+    request: RequestWithUser,
+    slot: number,
+  ): Promise<{ sessionCookie: string; metaCookie?: string; user: AuthenticatedUser }> {
+    if (!Number.isInteger(slot) || slot < 0 || slot >= ACCOUNT_SESSION_SLOT_COUNT) {
+      throw new UnauthorizedException('Invalid account slot.');
+    }
+    const sessionCookie = request.cookies?.[accountSessionSlotCookieName(slot)];
+    if (!sessionCookie) throw new UnauthorizedException('Account slot is empty.');
+    const resolution = await this.resolveSessionUserWithCookie(
+      sessionCookie,
+      request.cookies?.[accountSessionSlotMetaCookieName(slot)],
+    );
+    return {
+      sessionCookie,
+      metaCookie: request.cookies?.[accountSessionSlotMetaCookieName(slot)],
+      user: resolution.user,
+    };
+  }
+
+  private async resolveSessionUserWithCookie(
+    sessionCookie: string,
+    metaCookie?: string,
+  ): Promise<AuthResolution> {
+    const decoded = await this.firebaseAdmin.auth().verifySessionCookie(sessionCookie, true);
+    const email = decoded.email || '';
+    const meta = this.sessionSigner.verify(metaCookie);
+    const roles =
+      meta?.uid === decoded.uid && meta.email === email
+        ? meta.roles
+        : await this.getUserRoles(email);
+    return {
+      source: 'session_cookie',
+      user: { uid: decoded.uid, email, roles },
     };
   }
 

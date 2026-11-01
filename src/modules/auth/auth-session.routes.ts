@@ -10,6 +10,7 @@ import {
   HttpCode,
   HttpException,
   InternalServerErrorException,
+  Param,
   Post,
   Query,
   Req,
@@ -39,6 +40,9 @@ import {
 import { ADMIN_ROLE } from './roles';
 import { assessSessionRisk } from './session-risk';
 import {
+  ACCOUNT_SESSION_SLOT_COUNT,
+  accountSessionSlotCookieName,
+  accountSessionSlotMetaCookieName,
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE_SECONDS,
   SESSION_META_COOKIE_NAME
@@ -63,6 +67,7 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     } catch {
       return { authenticated: false };
     }
+
     if (!decoded.uid || !decoded.email || decoded.email_verified !== true) {
       return { authenticated: false };
     }
@@ -77,6 +82,80 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       return { authenticated: false };
     }
     return { authenticated: true };
+  }
+
+  @Get('accounts')
+  @UseGuards(AuthGuard)
+  async listAccounts(@Req() request: Request) {
+    const accounts: Array<{ slot: number | null; email: string; active: boolean }> = [];
+    const activeCookie = request.cookies?.[SESSION_COOKIE_NAME];
+    if (activeCookie) {
+      try {
+        const active = await this.firebaseAdmin.auth().verifySessionCookie(activeCookie, true);
+        if (active.email) accounts.push({ slot: null, email: active.email, active: true });
+      } catch {
+        // A concurrent expiry is handled by the next authenticated request.
+      }
+    }
+    for (let slot = 0; slot < ACCOUNT_SESSION_SLOT_COUNT; slot++) {
+      const cookie = request.cookies?.[accountSessionSlotCookieName(slot)];
+      if (!cookie) continue;
+      try {
+        const decoded = await this.firebaseAdmin.auth().verifySessionCookie(cookie, true);
+        if (decoded.email) accounts.push({ slot, email: decoded.email, active: false });
+      } catch {
+        // Stale slots are ignored.
+      }
+    }
+    return { accounts };
+  }
+
+  @Post('accounts/switch')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async switchAccount(
+    @Body() body: { slot?: number },
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const slot = Number(body.slot);
+    if (!Number.isInteger(slot) || slot < 0 || slot >= ACCOUNT_SESSION_SLOT_COUNT) {
+      throw new BadRequestException('Invalid account slot.');
+    }
+    const targetCookie = request.cookies?.[accountSessionSlotCookieName(slot)];
+    if (!targetCookie) throw new BadRequestException('Account slot is empty.');
+    const targetMeta = request.cookies?.[accountSessionSlotMetaCookieName(slot)];
+    const target = await this.firebaseAdmin.auth().verifySessionCookie(targetCookie, true);
+    const currentCookie = request.cookies?.[SESSION_COOKIE_NAME];
+    const currentMeta = request.cookies?.[SESSION_META_COOKIE_NAME];
+    if (currentCookie) {
+      response.cookie(accountSessionSlotCookieName(slot), currentCookie, this.getCookieOptions());
+      if (currentMeta) {
+        response.cookie(accountSessionSlotMetaCookieName(slot), currentMeta, this.getCookieOptions());
+      } else {
+        response.clearCookie(accountSessionSlotMetaCookieName(slot), this.getCookieOptions());
+      }
+    }
+    response.cookie(SESSION_COOKIE_NAME, targetCookie, this.getCookieOptions());
+    if (targetMeta) response.cookie(SESSION_META_COOKIE_NAME, targetMeta, this.getCookieOptions());
+    else response.clearCookie(SESSION_META_COOKIE_NAME, this.getCookieOptions());
+    return { ok: true, email: target.email || '' };
+  }
+
+  @Delete('accounts/:slot')
+  @UseGuards(AuthGuard)
+  @HttpCode(200)
+  async removeAccount(
+    @Param('slot') rawSlot: string,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const slot = Number(rawSlot);
+    if (!Number.isInteger(slot) || slot < 0 || slot >= ACCOUNT_SESSION_SLOT_COUNT) {
+      throw new BadRequestException('Invalid account slot.');
+    }
+    response.clearCookie(accountSessionSlotCookieName(slot), this.getCookieOptions());
+    response.clearCookie(accountSessionSlotMetaCookieName(slot), this.getCookieOptions());
+    return { ok: true };
   }
 
   @Get('me')
@@ -722,6 +801,7 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       uid: decodedToken.uid,
     });
 
+    await this.preserveActiveAccountSession(request, response, decodedToken.uid);
     response.cookie(SESSION_COOKIE_NAME, sessionCookie, this.getCookieOptions());
     response.cookie(
       SESSION_META_COOKIE_NAME,
@@ -783,6 +863,43 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       trustDeviceResendsRemaining,
       trustDeviceRequiresAuthenticator,
     };
+  }
+
+  private async preserveActiveAccountSession(
+    request: Request,
+    response: Response,
+    newUid: string,
+  ) {
+    const currentCookie = request.cookies?.[SESSION_COOKIE_NAME];
+    if (!currentCookie) return;
+    try {
+      const current = await this.firebaseAdmin.auth().verifySessionCookie(currentCookie, true);
+      if (current.uid === newUid) return;
+      for (let slot = 0; slot < ACCOUNT_SESSION_SLOT_COUNT; slot++) {
+        const existing = request.cookies?.[accountSessionSlotCookieName(slot)];
+        if (!existing) continue;
+        try {
+          const decoded = await this.firebaseAdmin.auth().verifySessionCookie(existing, true);
+          if (decoded.uid === current.uid) return;
+        } catch {
+          // Replace expired slots below.
+        }
+      }
+      let targetSlot = 0;
+      for (let slot = 0; slot < ACCOUNT_SESSION_SLOT_COUNT; slot++) {
+        if (!request.cookies?.[accountSessionSlotCookieName(slot)]) {
+          targetSlot = slot;
+          break;
+        }
+      }
+      response.cookie(accountSessionSlotCookieName(targetSlot), currentCookie, this.getCookieOptions());
+      const currentMeta = request.cookies?.[SESSION_META_COOKIE_NAME];
+      if (currentMeta) {
+        response.cookie(accountSessionSlotMetaCookieName(targetSlot), currentMeta, this.getCookieOptions());
+      }
+    } catch {
+      // An expired legacy cookie must not prevent a new login.
+    }
   }
 
   @Post('mfa/backup-code/session')

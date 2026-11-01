@@ -54,6 +54,9 @@ import {
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE_SECONDS,
   SESSION_META_COOKIE_NAME,
+  ACCOUNT_SESSION_SLOT_COUNT,
+  accountSessionSlotCookieName,
+  accountSessionSlotMetaCookieName,
   SessionMeta,
 } from './session.constants';
 import { MfaBackupCodeService } from './mfa-backup-code.service';
@@ -355,6 +358,10 @@ export class AuthControllerBase {
     for (const options of this.getClearCookieOptionsList()) {
       response.clearCookie(SESSION_COOKIE_NAME, options);
       response.clearCookie(SESSION_META_COOKIE_NAME, options);
+      for (let slot = 0; slot < ACCOUNT_SESSION_SLOT_COUNT; slot++) {
+        response.clearCookie(accountSessionSlotCookieName(slot), options);
+        response.clearCookie(accountSessionSlotMetaCookieName(slot), options);
+      }
       response.clearCookie(TRUSTED_DEVICE_CHALLENGE_COOKIE_NAME, options);
       response.cookie(SESSION_COOKIE_NAME, '', {
         ...options,
@@ -366,6 +373,18 @@ export class AuthControllerBase {
         expires: new Date(0),
         maxAge: 0,
       });
+      for (let slot = 0; slot < ACCOUNT_SESSION_SLOT_COUNT; slot++) {
+        response.cookie(accountSessionSlotCookieName(slot), '', {
+          ...options,
+          expires: new Date(0),
+          maxAge: 0,
+        });
+        response.cookie(accountSessionSlotMetaCookieName(slot), '', {
+          ...options,
+          expires: new Date(0),
+          maxAge: 0,
+        });
+      }
     }
   }
 
