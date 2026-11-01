@@ -39,7 +39,8 @@ FROM base
 
 # Install Chromium for Puppeteer to use
 RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y chromium chromium-sandbox clamav clamav-freshclam && \
+    apt-get install --no-install-recommends -y ca-certificates chromium chromium-sandbox clamav clamav-freshclam && \
+    update-ca-certificates && \
     freshclam --quiet && \
     rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
