@@ -1302,7 +1302,25 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
     Object.assign(updates, this.serverDetectedCountryUpdates(request));
 
     if (Object.keys(authUpdates).length > 0) {
-      await this.firebaseAdmin.auth().updateUser(user.uid, authUpdates);
+      try {
+        await this.firebaseAdmin.auth().updateUser(user.uid, authUpdates);
+      } catch (error) {
+        const code =
+          typeof error === 'object' &&
+          error !== null &&
+          'code' in error &&
+          typeof error.code === 'string'
+            ? error.code
+            : '';
+
+        if (code === 'auth/phone-number-already-exists') {
+          throw new ConflictException(
+            'That phone number is already linked to another account.',
+          );
+        }
+
+        throw error;
+      }
     }
 
     await this.firebaseAdmin
