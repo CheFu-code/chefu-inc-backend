@@ -3,6 +3,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { randomUUID } from 'node:crypto';
 import isEmail from 'validator/lib/isEmail';
 import { AuthenticatedUser } from '../auth/authenticated-user';
+import { ResendService } from '../email/resend.service';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 
 const MAX_CV_BYTES = 8 * 1024 * 1024;
@@ -18,7 +19,10 @@ const CAREERS_PRIVACY_NOTICE_VERSION = '2026-10-10';
 export class SubmissionsService {
   private readonly logger = new Logger(SubmissionsService.name);
 
-  constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
+  constructor(
+    private readonly firebaseAdmin: FirebaseAdminService,
+    private readonly resendService: ResendService,
+  ) {}
 
   async submitContact(user: AuthenticatedUser, input: Record<string, unknown>) {
     const data = {
@@ -97,6 +101,48 @@ export class SubmissionsService {
       await file.save(cv.buffer, { metadata: { contentType: cv.contentType }, resumable: false });
       const [cvFileUrl] = await file.getSignedUrl({ action: 'read', expires: retentionExpiresAt });
       await reference.update({ cvFileUrl });
+      record.cvFileUrl = cvFileUrl;
+    }
+
+    try {
+      await this.resendService.sendCareerApplicationNotification({
+        applicationId,
+        applicant: {
+          fullName,
+          email,
+          phone: record.phone,
+          country: record.country,
+          province: record.province,
+          city: record.city,
+          department: record.department,
+          roleApplyingFor: record.roleApplyingFor,
+          skills: record.skills,
+          linkedInLink: record.linkedInLink,
+          experienceLevel: record.experienceLevel,
+          yearsOfExperience: record.yearsOfExperience,
+          preferredWorkMode: record.preferredWorkMode,
+          earliestStartDate: record.earliestStartDate,
+          highestEducation: record.highestEducation,
+          workAuthorization: record.workAuthorization,
+          portfolioLink: record.portfolioLink,
+          musicPortfolioLink: this.string(input.musicPortfolioLink, 500),
+          whyJoin: record.whyJoin,
+          whatMakesYouDifferent: record.whatMakesYouDifferent,
+          hoursPerWeek: record.hoursPerWeek,
+          cvFileName: record.cvFileName,
+          cvFileUrl: record.cvFileUrl,
+        },
+      });
+      await reference.update({ confirmationEmailStatus: 'sent' });
+    } catch (error) {
+      await reference.update({ confirmationEmailStatus: 'failed' });
+      this.logger.error(
+        JSON.stringify({
+          event: 'career_application_notification_failed',
+          applicationId,
+          reason: error instanceof Error ? error.message : 'Unknown email error',
+        }),
+      );
     }
 
     this.logger.log(JSON.stringify({ event: 'career_application_created', applicationId, email }));

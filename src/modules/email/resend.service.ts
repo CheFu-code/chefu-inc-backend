@@ -16,6 +16,7 @@ export class ResendService {
     private readonly emailVerificationTemplateId = "email-verification"
     private readonly signupEmailTemplateId = "welcome-email-1"
     private readonly accountEmailVerificationTemplateId = "email-verification"
+    private readonly careerApplicationTemplateId = "job-application-notification";
     private readonly fromAddress =
         this.normalizeFromAddress(
             "Security <security@chefu.co.za>",
@@ -64,6 +65,51 @@ export class ResendService {
             JSON.stringify({
                 event: "passkey_added_notification_sent",
                 email: data.email,
+            }),
+        );
+    }
+
+    async sendCareerApplicationNotification(data: {
+        applicationId: string;
+        applicant: Record<string, string | null>;
+    }): Promise<void> {
+        const apiKey = this.getApiKey();
+        const variables = Object.fromEntries(
+            Object.entries({
+                APPLICATION_ID: data.applicationId,
+                ...data.applicant,
+                SUBMITTED_AT: new Date().toISOString(),
+                YEAR: new Date().getUTCFullYear().toString(),
+            }).map(([key, value]) => [key, value ?? ""]),
+        );
+
+        const response = await fetch(this.RESEND_API_URL, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                from: "Career Applications <notifications@chefu.co.za>",
+                to: ["hello@chefu.co.za"],
+                subject: `New career application: ${data.applicant.fullName || data.applicationId}`,
+                template: {
+                    id: this.careerApplicationTemplateId,
+                    variables,
+                },
+            }),
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`Resend career application request failed: ${response.status} ${error}`);
+        }
+
+        this.logger.log(
+            JSON.stringify({
+                event: "career_application_notification_sent",
+                applicationId: data.applicationId,
+                templateId: this.careerApplicationTemplateId,
             }),
         );
     }
