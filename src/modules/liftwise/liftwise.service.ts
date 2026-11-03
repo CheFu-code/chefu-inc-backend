@@ -92,7 +92,7 @@ export class LiftWiseService {
       validate.number(body.weight, "weight", 20, 500, false);
     if (
       body.ageRange !== undefined &&
-      !["under-18", "18-24", "25-34", "35-44", "45-54", "55-plus", "prefer-not-to-say"].includes(
+      !["under-18", "18-24", "25-34", "35-44", "45-54", "55-plus"].includes(
         body.ageRange as string,
       )
     )
@@ -198,7 +198,7 @@ export class LiftWiseService {
       validate.number(body.weight, "weight", 20, 500, false);
     if (
       body.ageRange !== undefined &&
-      !["under-18", "18-24", "25-34", "35-44", "45-54", "55-plus", "prefer-not-to-say"].includes(
+      !["under-18", "18-24", "25-34", "35-44", "45-54", "55-plus"].includes(
         body.ageRange as string,
       )
     )
