@@ -48,7 +48,7 @@ export class LiftWiseController {
   @Get("exercises")
   @Header("Cache-Control", "private, no-store")
   async exercises(@Req() request: LiftWiseRequest, @Res({ passthrough: true }) response: Response, @Query("search") search?: string) {
-    const records = await this.liftwise.exercises(search);
+    const records = await this.liftwise.exercises(search, request.user);
     const etag = `"${createHash("sha256").update(JSON.stringify(records)).digest("hex")}"`;
     response.setHeader("ETag", etag);
     response.vary("Authorization");

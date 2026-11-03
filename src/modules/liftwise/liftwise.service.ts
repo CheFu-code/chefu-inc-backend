@@ -27,6 +27,7 @@ import type {
   WorkoutSession,
   SessionSet,
 } from "./liftwise.types";
+import { rankExercises } from "./liftwise-recommendations";
 import * as validate from "./liftwise.validation";
 
 @Injectable()
@@ -275,8 +276,10 @@ export class LiftWiseService {
     });
     return { id: requestId, success: true };
   }
-  exercises(search?: string) {
-    return this.catalog.list(search);
+  async exercises(search?: string, user?: AuthenticatedUser) {
+    const records = await this.catalog.list(search);
+    if (!user) return records;
+    return rankExercises(records, await this.profile(user));
   }
   exercise(exerciseId: string) {
     return this.catalog.get(exerciseId);

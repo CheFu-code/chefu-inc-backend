@@ -7,9 +7,49 @@ import { LiftWiseService } from "./liftwise.service";
 import { LiftWiseCatalogService } from "./liftwise-catalog.service";
 import { DEFAULT_EXERCISES } from "./liftwise-exercises.data";
 import { LiftWiseReadCache } from "./liftwise-read-cache";
+import { rankExercises } from "./liftwise-recommendations";
 import type { FirebaseAdminService } from "../firebase-admin/firebase-admin.service";
 import { OAuthService } from "../auth/oauth.service";
 import type { CloudinaryStorageService } from "../../common/cloudinary-storage.service";
+
+test("exercise ranking prioritizes profile fit and removes explicitly unsafe movements", () => {
+  const exercises = [
+    {
+      id: "squat",
+      name: "Barbell Squat",
+      image: null,
+      muscles: "quadriceps",
+      description: "A compound lower-body movement.",
+      category: "strength",
+      equipment: "barbell",
+      difficulty: "advanced",
+      forceType: null,
+      mechanics: null,
+      instructions: [],
+    },
+    {
+      id: "push-up",
+      name: "Push-Up",
+      image: null,
+      muscles: "chest",
+      description: "A beginner bodyweight press.",
+      category: "strength",
+      equipment: null,
+      difficulty: "beginner",
+      forceType: null,
+      mechanics: null,
+      instructions: [],
+    },
+  ];
+
+  const ranked = rankExercises(exercises, {
+    fitnessLevel: "low",
+    trainingLocation: "home",
+    limitations: "Avoid knee flexion.",
+  });
+
+  assert.deepEqual(ranked.map((exercise) => exercise.id), ["push-up"]);
+});
 
 // Isolated Firestore adapter: exercises the real service's paths, queries and writes.
 function database() {
