@@ -80,6 +80,31 @@ export class LiftWiseService {
       !["kg", "lb"].includes(body.weightUnit as string)
     )
       throw new BadRequestException("Invalid weight unit.");
+    if (
+      body.fitnessLevel !== undefined &&
+      !["low", "moderate", "high"].includes(body.fitnessLevel as string)
+    )
+      throw new BadRequestException("Invalid fitness level.");
+    if (body.heightCm !== undefined)
+      validate.number(body.heightCm, "height", 100, 250);
+    if (body.weight !== undefined)
+      validate.number(body.weight, "weight", 20, 500, false);
+    if (
+      body.ageRange !== undefined &&
+      !["under-18", "18-24", "25-34", "35-44", "45-54", "55-plus", "prefer-not-to-say"].includes(
+        body.ageRange as string,
+      )
+    )
+      throw new BadRequestException("Invalid age range.");
+    if (
+      body.trainingLocation !== undefined &&
+      !["home", "gym", "mixed"].includes(body.trainingLocation as string)
+    )
+      throw new BadRequestException("Invalid training location.");
+    const limitations =
+      body.limitations === undefined
+        ? undefined
+        : validate.text(body.limitations, "limitations", 500, true);
     const reminder = body.reminder === undefined ? undefined : validate.reminder(body.reminder);
     if (
       !["build-muscle", "lose-fat", "maintain"].includes(body.goal as string) ||
@@ -109,6 +134,14 @@ export class LiftWiseService {
         goal: body.goal,
         experience: body.experience,
         weightUnit: body.weightUnit ?? preferences.weightUnit ?? "kg",
+        ...(body.fitnessLevel !== undefined ? { fitnessLevel: body.fitnessLevel } : {}),
+        ...(body.heightCm !== undefined ? { heightCm: body.heightCm } : {}),
+        ...(body.weight !== undefined ? { weight: body.weight } : {}),
+        ...(body.ageRange !== undefined ? { ageRange: body.ageRange } : {}),
+        ...(body.trainingLocation !== undefined
+          ? { trainingLocation: body.trainingLocation }
+          : {}),
+        ...(limitations !== undefined ? { limitations } : {}),
         ...(reminder ? { reminder } : {}),
       };
       if (isDeepStrictEqual(existingApp.data()?.profile, profile)) return;
@@ -122,7 +155,18 @@ export class LiftWiseService {
   }
   async patchProfile(user: AuthenticatedUser, payload: unknown) {
     const body = validate.object(payload);
-    const allowed = ["goal", "experience", "weightUnit", "reminder"];
+    const allowed = [
+      "goal",
+      "experience",
+      "weightUnit",
+      "reminder",
+      "fitnessLevel",
+      "heightCm",
+      "weight",
+      "ageRange",
+      "trainingLocation",
+      "limitations",
+    ];
     if (Object.keys(body).some((key) => !allowed.includes(key)))
       throw new BadRequestException("Invalid preference field.");
     if (
@@ -142,6 +186,29 @@ export class LiftWiseService {
       !["kg", "lb"].includes(body.weightUnit as string)
     )
       throw new BadRequestException("Invalid weight unit.");
+    if (
+      body.fitnessLevel !== undefined &&
+      !["low", "moderate", "high"].includes(body.fitnessLevel as string)
+    )
+      throw new BadRequestException("Invalid fitness level.");
+    if (body.heightCm !== undefined)
+      validate.number(body.heightCm, "height", 100, 250);
+    if (body.weight !== undefined)
+      validate.number(body.weight, "weight", 20, 500, false);
+    if (
+      body.ageRange !== undefined &&
+      !["under-18", "18-24", "25-34", "35-44", "45-54", "55-plus", "prefer-not-to-say"].includes(
+        body.ageRange as string,
+      )
+    )
+      throw new BadRequestException("Invalid age range.");
+    if (
+      body.trainingLocation !== undefined &&
+      !["home", "gym", "mixed"].includes(body.trainingLocation as string)
+    )
+      throw new BadRequestException("Invalid training location.");
+    if (body.limitations !== undefined)
+      body.limitations = validate.text(body.limitations, "limitations", 500, true);
     if (body.reminder !== undefined) body.reminder = validate.reminder(body.reminder);
     if (!Object.keys(body).length) return { success: true };
     const app = this.account(user).collection("appProfiles").doc("liftwise");

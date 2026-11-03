@@ -802,6 +802,46 @@ test("weight units persist, survive onboarding updates, and reject invalid value
   assert.equal((await service.profile(user))?.weightUnit, "kg");
 });
 
+test("optional onboarding details persist and validate their ranges", async () => {
+  const { service } = setup();
+  const user = { uid: "alice", email: "alice@example.com", roles: [] };
+  await service.saveProfile(user, {
+    gender: "female",
+    goal: "maintain",
+    experience: "beginner",
+    fitnessLevel: "moderate",
+    heightCm: 175,
+    weight: 72.5,
+    weightUnit: "kg",
+    ageRange: "25-34",
+    trainingLocation: "mixed",
+    limitations: "Avoid deep knee flexion.",
+  });
+  assert.deepEqual(await service.profile(user), {
+    gender: "female",
+    goal: "maintain",
+    experience: "beginner",
+    fitnessLevel: "moderate",
+    heightCm: 175,
+    weight: 72.5,
+    weightUnit: "kg",
+    ageRange: "25-34",
+    trainingLocation: "mixed",
+    limitations: "Avoid deep knee flexion.",
+  });
+  await assert.rejects(
+    service.saveProfile(user, {
+      gender: "female",
+      goal: "maintain",
+      experience: "beginner",
+      heightCm: 99,
+    }),
+  );
+  await assert.rejects(
+    service.patchProfile(user, { trainingLocation: "studio" }),
+  );
+});
+
 test("gender is shared across apps while goal and experience remain app-specific", async () => {
   const { service, records } = setup();
   const user = { uid: "alice", email: "alice@example.com", roles: [] };
