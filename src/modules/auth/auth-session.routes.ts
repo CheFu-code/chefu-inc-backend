@@ -97,10 +97,24 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       profilePicture?: string;
       active: boolean;
     }> = [];
+    const display = async (uid: string, email: string, rawMeta?: string) => {
+      const meta = this.sessionSigner.verify(rawMeta);
+      if (meta?.uid === uid && meta.email === email) {
+        return { fullName: meta.name, profilePicture: meta.profilePicture };
+      }
+      // Older sessions may not have display metadata yet.
+      try {
+        const user = await this.firebaseAdmin.auth().getUser(uid);
+        return { fullName: user.displayName, profilePicture: user.photoURL };
+      } catch {
+        return {};
+      }
+    };
     if (request.user?.email) {
       accounts.push({
         slot: null,
         email: request.user.email,
+        ...await display(request.user.uid, request.user.email, request.cookies?.[SESSION_META_COOKIE_NAME]),
         active: true,
       });
     }
@@ -110,16 +124,10 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       try {
         const decoded = await this.firebaseAdmin.auth().verifySessionCookie(cookie, true);
         if (decoded.email) {
-          const meta = this.sessionSigner.verify(
-            request.cookies?.[accountSessionSlotMetaCookieName(slot)],
-          );
-          const hasMatchingMeta =
-            meta?.uid === decoded.uid && meta.email === decoded.email;
           accounts.push({
             slot,
             email: decoded.email,
-            fullName: hasMatchingMeta ? meta.name : undefined,
-            profilePicture: hasMatchingMeta ? meta.profilePicture : undefined,
+            ...await display(decoded.uid, decoded.email, request.cookies?.[accountSessionSlotMetaCookieName(slot)]),
             active: false,
           });
         }
