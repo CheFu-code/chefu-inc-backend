@@ -148,7 +148,10 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         id: "liftwise-mobile",
         appId: "liftwise",
         name: "LiftWise Mobile",
-        redirectUris: ["liftwise://sso-callback"],
+        redirectUris: [
+            "liftwise://sso-callback",
+            "https://myaccount.chefu.co.za/app/liftwise/sso-callback",
+        ],
         scopes: ["openid", "profile", "email"],
     },
     {

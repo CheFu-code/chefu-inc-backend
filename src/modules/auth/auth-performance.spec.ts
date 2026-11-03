@@ -64,7 +64,7 @@ test('OAuth independently revalidates reused cookies and only issues codes for r
   const service: any = Object.create(OAuthService.prototype);
   const codes: any[] = [];
   let revoked = false;
-  const client = { id: 'liftwise-mobile', appId: 'liftwise', scopes: ['openid', 'profile'], redirectUris: ['liftwise://sso-callback'] };
+  const client = { id: 'liftwise-mobile', appId: 'liftwise', scopes: ['openid', 'profile'], redirectUris: ['liftwise://sso-callback', 'https://myaccount.chefu.co.za/app/liftwise/sso-callback'] };
   Object.assign(service, {
     logger, issuer: 'https://api.chefu.co.za', accountUrl: 'https://myaccount.chefu.co.za', authorizationCodeTtlMs: 60_000,
     appsService: { resolveOauthClient: (id: string) => id === client.id ? client : null },
