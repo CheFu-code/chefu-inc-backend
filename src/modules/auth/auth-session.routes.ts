@@ -110,31 +110,38 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
         return {};
       }
     };
-    if (request.user?.email) {
-      accounts.push({
+    const current = request.user;
+    const activeAccount = current?.email
+      ? display(current.uid, current.email, request.cookies?.[SESSION_META_COOKIE_NAME]).then(details => ({
         slot: null,
-        email: request.user.email,
-        ...await display(request.user.uid, request.user.email, request.cookies?.[SESSION_META_COOKIE_NAME]),
+        email: current.email,
+        ...details,
         active: true,
-      });
-    }
-    for (let slot = 0; slot < ACCOUNT_SESSION_SLOT_COUNT; slot++) {
+      }))
+      : Promise.resolve(null);
+    // Each saved session is independent. Start all checks together instead of
+    // adding a network round trip per account to the picker's loading time.
+    const savedAccounts = Array.from({ length: ACCOUNT_SESSION_SLOT_COUNT }, async (_, slot) => {
       const cookie = request.cookies?.[accountSessionSlotCookieName(slot)];
-      if (!cookie) continue;
+      if (!cookie) return null;
       try {
         const decoded = await this.firebaseAdmin.auth().verifySessionCookie(cookie, true);
         if (decoded.email) {
-          accounts.push({
+          return {
             slot,
             email: decoded.email,
             ...await display(decoded.uid, decoded.email, request.cookies?.[accountSessionSlotMetaCookieName(slot)]),
             active: false,
-          });
+          };
         }
       } catch {
         // Stale slots are ignored.
       }
-    }
+      return null;
+    });
+    // Promise.all retains input order even when verification finishes out of order.
+    const results = await Promise.all([activeAccount, ...savedAccounts]);
+    for (const account of results) if (account) accounts.push(account);
     return { accounts };
   }
 

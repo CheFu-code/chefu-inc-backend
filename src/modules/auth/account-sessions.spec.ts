@@ -3,6 +3,72 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AuthSessionRoutes } from './auth-session.routes';
 
+test('account loading verifies saved sessions concurrently and preserves picker order', async () => {
+  const controller: any = Object.create(AuthSessionRoutes.prototype);
+  const release = new Map<string, (value: { uid: string; email: string }) => void>();
+  Object.assign(controller, {
+    sessionSigner: { verify: () => null },
+    firebaseAdmin: { auth: () => ({
+      verifySessionCookie: (cookie: string, checkRevoked: boolean) => {
+        assert.equal(checkRevoked, true);
+        return new Promise(resolve => { release.set(cookie, resolve); });
+      },
+      getUser: async (uid: string) => ({ displayName: uid }),
+    }) },
+  });
+  const pending = controller.listAccounts({
+    user: { uid: 'current', email: 'current@example.test' },
+    cookies: { __session_account_0: 'first', __session_account_1: 'second', __session_account_7: 'last' },
+  });
+  assert.deepEqual([...release.keys()], ['first', 'second', 'last'], 'all verifications start before any finishes');
+  release.get('last')!({ uid: 'last', email: 'last@example.test' });
+  release.get('second')!({ uid: 'second', email: 'second@example.test' });
+  release.get('first')!({ uid: 'first', email: 'first@example.test' });
+  const result = await pending;
+  assert.deepEqual(result.accounts.map((account: { slot: number | null }) => account.slot), [null, 0, 1, 7]);
+});
+
+test('expired or revoked saved sessions fail switching before modifying any browser cookies', async () => {
+  const controller: any = Object.create(AuthSessionRoutes.prototype);
+  const writes: string[] = [];
+  const response: any = {
+    cookie: (name: string) => writes.push(name),
+    clearCookie: (name: string) => writes.push(name),
+  };
+  controller.firebaseAdmin = { auth: () => ({ verifySessionCookie: async (_cookie: string, checkRevoked: boolean) => {
+    assert.equal(checkRevoked, true);
+    throw new Error('Saved account session expired or revoked');
+  } }) };
+  const request = { cookies: { __session: 'current-session', __session_meta: 'current-meta', __session_account_0: 'expired-session' } };
+  await assert.rejects(controller.switchAccount({ slot: 0 }, request, response), /expired or revoked/);
+  await assert.rejects(controller.switchAccount({ slot: 1 }, request, response), /empty/);
+  assert.deepEqual(writes, []);
+  assert.equal(request.cookies.__session, 'current-session');
+});
+
+test('a successful saved-account switch preserves the previous session for switching back', async () => {
+  const controller: any = Object.create(AuthSessionRoutes.prototype);
+  const cookies: Record<string, string> = {
+    __session: 'alice-session', __session_meta: 'alice-meta',
+    __session_account_0: 'bob-session', __session_account_meta_0: 'bob-meta',
+  };
+  const written: Record<string, string> = {};
+  controller.getCookieOptions = () => ({ path: '/', httpOnly: true });
+  controller.firebaseAdmin = { auth: () => ({ verifySessionCookie: async (cookie: string, revoked: boolean) => {
+    assert.equal(cookie, 'bob-session');
+    assert.equal(revoked, true);
+    return { uid: 'bob', email: 'bob@example.test' };
+  } }) };
+  await controller.switchAccount({ slot: 0 }, { cookies }, {
+    cookie: (name: string, value: string) => { written[name] = value; },
+    clearCookie: () => assert.fail('valid session metadata must be preserved'),
+  });
+  assert.deepEqual(written, {
+    __session_account_0: 'alice-session', __session_account_meta_0: 'alice-meta',
+    __session: 'bob-session', __session_meta: 'bob-meta',
+  });
+});
+
 test('account picker displays identity-matched metadata for current and saved accounts', async () => {
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   const verified: string[] = [];
