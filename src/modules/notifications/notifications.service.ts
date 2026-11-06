@@ -32,19 +32,18 @@ export class NotificationsService {
       throw new BadRequestException('At least one valid preference is required.');
     }
 
-    const current = await this.getPreferences(user);
-    const preferences = {
-      ...current.preferences,
-      ...patch,
-    };
-
-    await this.userRef(user).set(
-      {
-        emailPreferences: preferences,
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    );
+    const ref = this.userRef(user);
+    const preferences = await this.firebaseAdmin.db().runTransaction(async transaction => {
+      const current = normalizeNotificationPreferences((await transaction.get(ref)).data()?.emailPreferences);
+      const preferences = { ...current, ...patch };
+      if (notificationPreferenceKeys.some(key => current[key] !== preferences[key])) {
+        transaction.set(ref, {
+          emailPreferences: preferences,
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
+      return preferences;
+    });
 
     return {
       preferences,

@@ -8,6 +8,7 @@ import {
 import { FieldValue } from 'firebase-admin/firestore';
 import { Readable } from 'node:stream';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { UploadApiOptions, v2 as cloudinary } from 'cloudinary';
 import { assertCloudinaryConfigured } from '../../common/env';
 import { AuthenticatedUser } from '../auth/authenticated-user';
@@ -150,6 +151,10 @@ export class ProductsService {
     if (!existingSnapshot.exists) throw new NotFoundException('Product was not found.');
     const existing = this.serialize(id, existingSnapshot.data() || {});
     const validated = this.validate({ ...existing, ...input }, false);
+    if (Object.entries(validated).every(([key, value]) =>
+      isDeepStrictEqual((existing as unknown as Record<string, unknown>)[key], value))) {
+      return existing;
+    }
     if (validated.sku !== existing.sku) {
       const duplicate = await this.firebaseAdmin.db().collection(COLLECTION).where('sku', '==', validated.sku).limit(2).get();
       if (duplicate.docs.some(doc => doc.id !== id)) throw new ConflictException('SKU is already in use.');
@@ -165,6 +170,7 @@ export class ProductsService {
     const ref = this.firebaseAdmin.db().collection(COLLECTION).doc(id);
     const snapshot = await ref.get();
     if (!snapshot.exists) throw new NotFoundException('Product was not found.');
+    if (snapshot.data()?.status === 'ARCHIVED') return { success: true, id, status: 'ARCHIVED' as const };
     await ref.update({ status: 'ARCHIVED', updatedAt: new Date().toISOString() });
     this.invalidateProductsCache();
     await this.audit(user, 'PRODUCT_ARCHIVED', id, { beforeStatus: snapshot.data()?.status, afterStatus: 'ARCHIVED' });

@@ -32,7 +32,6 @@ const VALID_PROD_ENV: NodeJS.ProcessEnv = {
   FIREBASE_PROJECT_ID: 'chefu-prod-project',
   FIREBASE_CLIENT_EMAIL: 'prod@chefu-prod-project.iam.gserviceaccount.com',
   FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC6\n-----END PRIVATE KEY-----',
-  FLOW_ACCESS_SECRET: 'flow_access_secret_production_key_1234567890',
 };
 
 void test('validateBackendEnv passes when all required development variables are provided', () => {
@@ -101,12 +100,10 @@ void test('validateBackendEnv fails and groups all missing variables when multip
   assert.match(msg, /Authentication & Session:/);
   assert.match(msg, /OAuth2 \/ OIDC Server:/);
   assert.match(msg, /Firebase Admin:/);
-  assert.match(msg, /Flow Mail Service:/);
   assert.match(msg, /FRONTEND_ORIGINS/);
   assert.match(msg, /AUTH_SESSION_SECRET/);
   assert.match(msg, /OAUTH_ISSUER/);
   assert.match(msg, /FIREBASE_PROJECT_ID/);
-  assert.match(msg, /FLOW_ACCESS_SECRET/);
 });
 
 void test('validateBackendEnv rejects short AUTH_SESSION_SECRET in production', () => {

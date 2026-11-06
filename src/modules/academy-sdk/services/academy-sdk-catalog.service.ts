@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { FirebaseAdminService } from '../../firebase-admin/firebase-admin.service';
+import { InFlightReads } from '../../../common/in-flight-reads';
 
 type ListQuery = {
   query?: string;
@@ -41,6 +42,7 @@ const CATALOG_CACHE_TTL_MS = 60_000;
 
 @Injectable()
 export class AcademySdkCatalogService {
+  private readonly courseReads = new InFlightReads();
   private coursesCache: { courses: CourseDocument[]; expiresAt: number } | null = null;
   private videosCache: { expiresAt: number; videos: VideoDocument[] } | null = null;
   private coursesRequest?: Promise<CourseDocument[]>;
@@ -99,20 +101,22 @@ export class AcademySdkCatalogService {
       throw new BadRequestException('Invalid course ID.');
     }
 
-    const snapshot = await this.firebaseAdmin
-      .db()
-      .collection('course')
-      .doc(courseId)
-      .get();
+    return this.courseReads.run(courseId, async () => {
+      const snapshot = await this.firebaseAdmin
+        .db()
+        .collection('course')
+        .doc(courseId)
+        .get();
 
-    if (!snapshot.exists) {
-      throw new NotFoundException('Course not found.');
-    }
+      if (!snapshot.exists) {
+        throw new NotFoundException('Course not found.');
+      }
 
-    return {
-      id: snapshot.id,
-      ...(this.toPlainObject(snapshot.data() || {}) as Record<string, unknown>),
-    } as CourseDocument;
+      return {
+        id: snapshot.id,
+        ...(this.toPlainObject(snapshot.data() || {}) as Record<string, unknown>),
+      } as CourseDocument;
+    });
   }
 
   async getCourseChapters(courseId?: string) {

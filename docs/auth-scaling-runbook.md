@@ -53,7 +53,7 @@
 - Run `npm ci && npm run typecheck && npm run build && npm run test:security`.
 - Also run `npm run test:liftwise` and `npm run test:cloudence`.
 - Test password sign-in, passkeys, registration, MFA, trusted-device challenge,
-  revoked sessions, password resets, logout, Admin and Flow permissions,
+  revoked sessions, password resets, logout, Admin permissions,
   and cross-app OAuth authorization-code callbacks.
 - Check `Server-Timing` on the login and `/auth/me` responses. Compare
   p50/p95/p99 at equal traffic and with warm/cold instances separately.

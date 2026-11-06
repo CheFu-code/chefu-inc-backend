@@ -6,6 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { FieldValue } from 'firebase-admin/firestore';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -221,8 +222,10 @@ export class AcademyMobileService {
 
   async getSettings(user: AuthenticatedUser) {
     const { snapshot } = await this.getUserSnapshot(user);
-    const data = snapshot.data() || {};
+    return this.settingsFromData(snapshot.data() || {});
+  }
 
+  private settingsFromData(data: PlainObject) {
     return {
       notifications:
         typeof data.notifications === 'boolean'
@@ -259,11 +262,7 @@ export class AcademyMobileService {
     if ('emailPreferences' in body) {
       const sanitized = sanitizePreferencePatch(body.emailPreferences);
       if (Object.keys(sanitized).length) {
-        const current = await this.getSettings(user);
-        patch.emailPreferences = {
-          ...current.emailPreferences,
-          ...sanitized,
-        };
+        patch.emailPreferences = sanitized;
       }
     }
 
@@ -271,15 +270,20 @@ export class AcademyMobileService {
       throw new BadRequestException('At least one setting is required.');
     }
 
-    await this.userRef(user).set(
-      {
+    const ref = this.userRef(user);
+    return this.firebaseAdmin.db().runTransaction(async transaction => {
+      const data = (await transaction.get(ref)).data() || {};
+      const current = this.settingsFromData(data);
+      const next = {
+        ...current,
         ...patch,
-        updatedAt: FieldValue.serverTimestamp(),
-      },
-      { merge: true },
-    );
-
-    return this.getSettings(user);
+        emailPreferences: { ...current.emailPreferences, ...((patch.emailPreferences as PlainObject | undefined) ?? {}) },
+      };
+      if (!isDeepStrictEqual(current, next)) {
+        transaction.set(ref, { ...next, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      }
+      return next;
+    });
   }
 
   async updatePermissions(user: AuthenticatedUser, input: unknown) {

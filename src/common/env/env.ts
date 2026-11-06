@@ -272,18 +272,6 @@ export function validateBackendEnv(
     groups.push(firebaseGroup);
   }
 
-  // Flow Access group (required in production)
-  const flowMissing: MissingVariable[] = [];
-  if (isProduction && !hasEnv('FLOW_ACCESS_SECRET', env)) {
-    flowMissing.push({
-      name: 'FLOW_ACCESS_SECRET',
-      description: 'Secret key for signing and verifying Flow access tokens',
-    });
-  }
-  if (flowMissing.length > 0) {
-    groups.push({ service: 'Flow Mail Service', missing: flowMissing });
-  }
-
   const allMissing = groups.flatMap(g => g.missing.map(m => m.name));
   const isValid = groups.length === 0;
   const error = isValid ? undefined : ConfigurationError.fromGroups(groups);

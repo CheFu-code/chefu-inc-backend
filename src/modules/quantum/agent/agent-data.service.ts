@@ -1,5 +1,6 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { FirebaseAdminService } from '../../firebase-admin/firebase-admin.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { identifier, metadata, text } from './agent-validation';
@@ -64,6 +65,10 @@ export class QuantumAgentDataService {
     return this.firebase.db().runTransaction(async tx => {
       const row = await tx.get(ref);
       if (!row.exists) throw new NotFoundException('Message not found.');
+      const current = row.data()!;
+      if (current.content === patch.content && isDeepStrictEqual(current.metadata ?? {}, patch.metadata)) {
+        return { ...current, id: ref.id };
+      }
       tx.update(ref, patch);
       return { ...row.data(), ...patch, id: ref.id };
     });

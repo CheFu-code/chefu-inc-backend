@@ -1,7 +1,6 @@
 export type ChefuAppId =
     | "academy"
     | "admin"
-    | "flow"
     | "quantum"
     | "merchant"
     | "cloudence"

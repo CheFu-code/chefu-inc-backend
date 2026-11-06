@@ -897,7 +897,6 @@ export class ResendService {
         const labels: Record<string, string> = {
             academy: "Chefu Academy",
             admin: "Chefu Admin",
-            flow: "Flow Mail",
             quantum: "Quantum",
             liftwise: "LiftWise",
         };

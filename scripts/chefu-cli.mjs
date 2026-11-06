@@ -271,7 +271,7 @@ async function cmdAppsRegister(args, jsonOutput) {
   };
 
   if (!payload.appId || !payload.name || !payload.owner) {
-    throw new Error('Usage: chefu apps register --appId flow --name "My App" --owner user@chefu.co.za --type confidential --redirect-uri "https://app.example.com/callback" --scope "openid,profile,email"');
+    throw new Error('Usage: chefu apps register --appId my-app --name "My App" --owner user@chefu.co.za --type confidential --redirect-uri "https://app.example.com/callback" --scope "openid,profile,email"');
   }
 
   const client = buildClient(session);
@@ -378,7 +378,7 @@ Usage:
   chefu whoami
 
   chefu apps list
-  chefu apps register --appId flow --name "My App" --owner user@chefu.co.za --type confidential --redirect-uri "https://app.example.com/callback" --scope "openid,profile,email"
+  chefu apps register --appId my-app --name "My App" --owner user@chefu.co.za --type confidential --redirect-uri "https://app.example.com/callback" --scope "openid,profile,email"
   chefu apps approve --client-id CLIENT_ID --approved-by admin@chefu.co.za
   chefu apps rotate-secret --client-id CLIENT_ID
 

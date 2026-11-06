@@ -7,7 +7,6 @@ import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import {
-  captureFlowInboundRawBody,
   configureCors,
   createCookieCsrfMiddleware,
   createSecurityHeadersMiddleware,
@@ -25,11 +24,7 @@ async function startTestServer(trustedProxyAddresses: string[] = []) {
   );
   app.set('trust proxy', trustedProxyAddresses);
   configureCors(app, allowedOrigins);
-  app.use(
-    express.json({
-      verify: captureFlowInboundRawBody,
-    }),
-  );
+  app.use(express.json());
   app.use(cookieParser());
   app.use(createSecurityHeadersMiddleware());
   app.use(createCookieCsrfMiddleware(allowedOrigins));
@@ -117,17 +112,6 @@ void test('HTTP security middleware enforces CORS and cookie CSRF while preservi
       body: '{}',
     });
     assert.equal(bearerClient.status, 200);
-
-    const rawBodyResponse = await fetch(`${server.baseUrl}/flow/inbound`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{"signed":"payload"}',
-    });
-    assert.equal(rawBodyResponse.status, 200);
-    assert.deepEqual(await rawBodyResponse.json(), {
-      ip: '127.0.0.1',
-      rawBodyCaptured: true,
-    });
 
     const ordinaryBodyResponse = await fetch(`${server.baseUrl}/probe`, {
       method: 'POST',

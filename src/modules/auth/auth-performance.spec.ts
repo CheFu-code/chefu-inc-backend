@@ -41,23 +41,18 @@ test('session reuse validates the real cookie with revocation checks and never l
   }
 });
 
-test('session reuse checks current admin roles and Flow access without trusting session metadata', async () => {
+test('session reuse checks current admin roles without trusting session metadata', async () => {
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   let roles = ['user'];
-  let flowAllowed = false;
   Object.assign(controller, {
     firebaseAdmin: { auth: () => ({ verifySessionCookie: async () => ({ uid: 'uid', email: 'alice@example.test', email_verified: true }) }) },
     resolveSessionAppId: (app: string) => app,
     getUserProfile: async () => ({ roles }),
-    isFlowSessionAllowed: async () => flowAllowed,
   });
   const req = { cookies: { __session: 'cookie', __session_meta: 'forged-admin' } };
   assert.deepEqual(await controller.getSessionStatus('admin', req, response()), { authenticated: false });
   roles = ['admin'];
   assert.deepEqual(await controller.getSessionStatus('admin', req, response()), { authenticated: true });
-  assert.deepEqual(await controller.getSessionStatus('flow', req, response()), { authenticated: false });
-  flowAllowed = true;
-  assert.deepEqual(await controller.getSessionStatus('flow', req, response()), { authenticated: true });
 });
 
 test('OAuth independently revalidates reused cookies and only issues codes for registered PKCE requests', async () => {
@@ -125,7 +120,7 @@ test('browser password sessions skip custom tokens; legacy login retains its res
   let ok = true;
   t.mock.method(globalThis, 'fetch', async () => ({ ok, json: async () => upstream }));
   const credentials = { email: 'alice@example.test', password: 'test-password' };
-  assert.deepEqual(await controller.createPasswordSession(credentials, 'root', undefined, request, response()), { ok: true });
+  assert.deepEqual(await controller.createPasswordSession(credentials, 'root', request, response()), { ok: true });
   assert.equal(customTokens, 0);
   const legacy = await controller.login(credentials, request);
   assert.equal(legacy.customToken, 'custom');
@@ -137,7 +132,7 @@ test('browser password sessions skip custom tokens; legacy login retains its res
   for (const successfulResponse of [false, true]) {
     ok = successfulResponse;
     upstream = { mfaPendingCredential: 'pending', mfaInfo: [{ mfaEnrollmentId: 'totp', totpInfo: {} }] };
-    await assert.rejects(controller.createPasswordSession(credentials, 'root', undefined, request, response()), (error: any) => {
+    await assert.rejects(controller.createPasswordSession(credentials, 'root', request, response()), (error: any) => {
       assert.equal(error.getStatus(), 409);
       assert.equal(error.getResponse().mfaRequired, true);
       return true;
@@ -145,7 +140,7 @@ test('browser password sessions skip custom tokens; legacy login retains its res
   }
   ok = false;
   upstream = { error: { message: 'INVALID_LOGIN_CREDENTIALS' } };
-  await assert.rejects(controller.createPasswordSession(credentials, 'root', undefined, request, response()), (error: any) => error.getStatus() === 401);
+  await assert.rejects(controller.createPasswordSession(credentials, 'root', request, response()), (error: any) => error.getStatus() === 401);
   assert.equal(sessions, 1, 'failures never reach session creation');
   assert.equal(customTokens, 1);
   assert.equal(rateLimits, 5, 'all attempts still enforce rate limits');
@@ -170,7 +165,7 @@ function sessionSetup(app = 'root') {
     sessionSigner: { sign: () => 'signed-meta' },
   });
   const res = response();
-  return { controller, auth, decoded, events, res, signIn: () => controller.createSession('Bearer test-id', app, undefined, request, res) };
+  return { controller, auth, decoded, events, res, signIn: () => controller.createSession('Bearer test-id', app, request, res) };
 }
 
 test('ordinary sessions read the profile once, after persistence and fresh token verification', async () => {
@@ -308,12 +303,12 @@ test('signup awaits verification, profile/session creation, challenge cleanup an
       createCustomToken: async () => 'custom',
     }) },
     exchangeCustomTokenForIdToken: async () => 'id',
-    createSession: async (...args: any[]) => { assert.equal(args[6], true); events.push('session'); },
+    createSession: async (...args: any[]) => { assert.equal(args[5], true); events.push('session'); },
     recordAccountSecurityActivity: async () => { events.push('audit'); },
     resendService: { sendSignupWelcomeEmail: async () => { events.push('welcome'); } },
   });
   const res = response();
-  const result = await controller.verifyEmailVerificationCode({ email: 'alice@example.test', code: '123456', password: 'test-password', displayName: 'Alice' }, 'root', undefined, request, res);
+  const result = await controller.verifyEmailVerificationCode({ email: 'alice@example.test', code: '123456', password: 'test-password', displayName: 'Alice' }, 'root', request, res);
   assert.equal(result.success, true);
   assert.deepEqual(events, ['rate-limit', 'claim', 'user', 'suppression', 'session', 'cleanup', 'audit']);
   res.emit('finish');

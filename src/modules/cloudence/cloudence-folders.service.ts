@@ -47,6 +47,7 @@ export class CloudenceFoldersService {
     const ref = this.ref(user);
     return this.firebase.db().runTransaction(async (transaction) => {
       const state = this.settings((await transaction.get(ref)).data());
+      const previous = JSON.stringify(state);
       await this.prune(transaction, user, state);
       const existing = input.id ? state.folders.find((folder) => folder.id === input.id) : undefined;
       if (input.id && !existing) throw new NotFoundException('Folder was not found.');
@@ -65,7 +66,7 @@ export class CloudenceFoldersService {
         }
       }
       // Replace the map: merge:true would retain placements removed by deleting a folder.
-      transaction.set(ref, state);
+      if (JSON.stringify(state) !== previous) transaction.set(ref, state);
       return { folders: state.folders, status: 'success' };
     });
   }
@@ -102,6 +103,7 @@ export class CloudenceFoldersService {
     const ref = this.ref(user);
     return this.firebase.db().runTransaction(async (transaction) => {
       const state = this.settings((await transaction.get(ref)).data());
+      const previous = JSON.stringify(state);
       const files = await Promise.all(ids.map(async (id) => {
         const file = (await transaction.get(this.firebase.db().collection(COLLECTION).doc(id))).data() as CloudenceFileDocument | undefined;
         this.assertReadable(file, user);
@@ -109,7 +111,7 @@ export class CloudenceFoldersService {
       }));
       const cleaned = await this.prune(transaction, user, state, new Map(files.map((file) => [file.id, file])));
       for (const file of files) this.place(state, file, folderId);
-      transaction.set(ref, state);
+      if (JSON.stringify(state) !== previous) transaction.set(ref, state);
       return { status: 'success', moved: files.length, cleaned: cleaned.cleaned, folderId: folderId || null };
     });
   }
@@ -143,8 +145,9 @@ export class CloudenceFoldersService {
     const ref = this.ref(user);
     return this.firebase.db().runTransaction(async (transaction) => {
       const state = this.settings((await transaction.get(ref)).data());
+      const previous = JSON.stringify(state);
       const result = await this.prune(transaction, user, state, new Map(), 100);
-      if (result.checked) transaction.set(ref, state);
+      if (JSON.stringify(state) !== previous) transaction.set(ref, state);
       return { status: 'success', ...result };
     });
   }

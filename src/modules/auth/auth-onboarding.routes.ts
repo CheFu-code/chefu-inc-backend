@@ -23,9 +23,6 @@ import {
 import isEmail from 'validator/lib/isEmail';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { CHEFU_APP_HEADER } from '../apps/app-registry';
-import {
-    FLOW_SESSION_HEADER
-} from '../flow/flow-access';
 import { afterSuccessfulAuthResponse } from './auth-performance';
 import { AuthSecurityRoutes } from './auth-security.routes';
 import {
@@ -604,7 +601,6 @@ export abstract class AuthOnboardingRoutes extends AuthSecurityRoutes {
             displayName?: string;
         },
         @Headers(CHEFU_APP_HEADER) chefuApp: string | undefined,
-        @Headers(FLOW_SESSION_HEADER) flowSession: string | undefined,
         @Req() request: Request,
         @Res({ passthrough: true }) response: Response,
     ) {
@@ -612,7 +608,7 @@ export abstract class AuthOnboardingRoutes extends AuthSecurityRoutes {
             throw new BadRequestException('Email address is required.');
         }
         const email = body.email.trim().toLowerCase();
-        const sessionAppId = this.resolveSessionAppId(chefuApp, flowSession);
+        const sessionAppId = this.resolveSessionAppId(chefuApp);
         const code = body.code?.trim() || '';
         const password = typeof body.password === 'string' ? body.password : '';
         const displayName = String(body.displayName || '').trim();
@@ -815,7 +811,6 @@ export abstract class AuthOnboardingRoutes extends AuthSecurityRoutes {
         await this.createSession(
             `Bearer ${signupIdToken}`,
             chefuApp,
-            flowSession,
             request,
             response,
             true,

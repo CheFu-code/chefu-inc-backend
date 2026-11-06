@@ -9,6 +9,7 @@
     "multer": "^2.4.0"
   },
   "scripts": {
+    "test:efficiency": "node --import tsx --test src/common/database-efficiency.spec.ts",
     "test:cloudence": "node --import tsx --test src/modules/cloudence/*.spec.ts",
     "migrate:cloudence-private": "tsx --env-file-if-exists=.env scripts/migrate-cloudence-private.ts",
     "release:prod": "node scripts/production-release.mjs",
@@ -20,13 +21,9 @@
     "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.migrations.json",
     "start": "node dist/main.js",
     "start:prod": "node dist/main.js",
-    "migrate:flow-html": "tsx --env-file=.env scripts/migrate-flow-html.ts",
-    "test:flow": "node --import tsx --test src/modules/flow/flow-email-template.test.ts",
     "test:security": "node --import tsx --test src/common/security-audit.spec.ts src/common/csrf-protection.spec.ts src/common/http-security.spec.ts src/common/proxy-trust.spec.ts src/common/runtime-limit.spec.ts src/modules/auth/device-auth.spec.ts src/modules/auth/trusted-device.spec.ts src/modules/auth/trusted-device-activity.spec.ts src/modules/auth/auth-performance.spec.ts src/modules/auth/session-risk.spec.ts",
-    "verify:flow-security": "node scripts/verify-flow-security.mjs",
     "lint": "eslint \"src/**/*.ts\"",
     "smoke": "node scripts/smoke-routes.mjs",
-    "sync:flow-template": "node scripts/sync-flow-resend-template.mjs",
     "typecheck": "tsc --noEmit",
     "seed:products": "tsx --env-file=.env scripts/seed-products.ts"
   },
@@ -51,7 +48,6 @@
     "cookie-parser": "^1.4.7",
     "country-state-city": "^3.2.1",
     "firebase-admin": "^13.6.0",
-    "he": "^1.2.0",
     "ioredis": "^6.0.0",
     "lru-cache": "^11.5.2",
     "multer": "^2.4.0",
@@ -60,13 +56,11 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "sanitize-html": "^2.17.7",
-    "svix": "^1.94.0",
     "typescript": "^5.9.3",
     "validator": "^13.15.35"
   },
   "devDependencies": {
     "@types/compression": "^1.8.1",
-    "@types/he": "^1.2.3",
     "@types/lru-cache": "^7.10.9",
     "@types/multer": "^2.2.0",
     "@types/node": "^20.19.43",

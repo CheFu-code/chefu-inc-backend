@@ -25,11 +25,6 @@ import { FieldValue } from 'firebase-admin/firestore';
 import isEmail from 'validator/lib/isEmail';
 import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { CHEFU_APP_HEADER } from '../apps/app-registry';
-import {
-  FLOW_ACCESS_DENIED_MESSAGE,
-  FLOW_SESSION_HEADER,
-  isFlowSessionRequest
-} from '../flow/flow-access';
 import { FirebaseDecodedToken } from './auth-controller.types';
 import { AuthControllerBase, decodeJwtPayload } from './auth.controller.base';
 import { AuthGuard } from './auth.guard';
@@ -72,15 +67,12 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     if (!decoded.uid || !decoded.email || decoded.email_verified !== true) {
       return { authenticated: false };
     }
-    const appId = this.resolveSessionAppId(chefuApp, undefined);
+    const appId = this.resolveSessionAppId(chefuApp);
     if (appId === 'admin') {
       const profile = await this.getUserProfile(decoded.email);
       if (!profile.roles.some(role => role.trim().toLowerCase() === ADMIN_ROLE)) {
         return { authenticated: false };
       }
-    }
-    if (appId === 'flow' && !(await this.isFlowSessionAllowed(decoded.email))) {
-      return { authenticated: false };
     }
     return { authenticated: true };
   }
@@ -533,7 +525,6 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
   async createPasswordSession(
     @Body() body: { email?: string; password?: string; trustDevice?: boolean },
     @Headers(CHEFU_APP_HEADER) chefuApp: string | undefined,
-    @Headers(FLOW_SESSION_HEADER) flowSession: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
@@ -545,7 +536,6 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     return this.createSession(
       `Bearer ${authResult.idToken}`,
       chefuApp,
-      flowSession,
       request,
       response,
       body.trustDevice === true,
@@ -564,7 +554,6 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       trustDevice?: boolean;
     },
     @Headers(CHEFU_APP_HEADER) chefuApp: string | undefined,
-    @Headers(FLOW_SESSION_HEADER) flowSession: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
@@ -609,7 +598,6 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     return this.createSession(
       `Bearer ${mfaResult.idToken}`,
       chefuApp,
-      flowSession,
       request,
       response,
       body.trustDevice === true,
@@ -645,7 +633,6 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     return this.createSession(
       `Bearer ${idToken}`,
       chefuApp,
-      undefined,
       request,
       response,
       body.trustDevice === true,
@@ -674,7 +661,6 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
   async createSession(
     @Headers('authorization') authorization: string | undefined,
     @Headers(CHEFU_APP_HEADER) chefuApp: string | undefined,
-    @Headers(FLOW_SESSION_HEADER) flowSession: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
     trustDevice = false,
@@ -688,7 +674,7 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       throw new UnauthorizedException('Missing Firebase ID token.');
     }
 
-    const sessionAppId = this.resolveSessionAppId(chefuApp, flowSession);
+    const sessionAppId = this.resolveSessionAppId(chefuApp);
     const tokenPayload = decodeJwtPayload(idToken);
     this.logger.log(
       JSON.stringify({
@@ -700,7 +686,6 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
         signInProvider: tokenPayload?.firebase?.sign_in_provider || null,
         adminProjectId: this.firebaseAdmin.projectId(),
         app: sessionAppId,
-        flowSession: isFlowSessionRequest(flowSession),
       }),
     );
 
@@ -722,7 +707,6 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
           signInProvider: tokenPayload?.firebase?.sign_in_provider || null,
           adminProjectId: this.firebaseAdmin.projectId(),
           app: sessionAppId,
-          flowSession: isFlowSessionRequest(flowSession),
         }),
         error instanceof Error ? error.stack : undefined,
       );
@@ -731,21 +715,6 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
 
     if (decodedToken.email_verified !== true) {
       throw new ForbiddenException('Please verify your email address before continuing.');
-    }
-
-    if (
-      sessionAppId === 'flow' &&
-      !(await this.isFlowSessionAllowed(decodedToken.email))
-    ) {
-      this.logger.warn(
-        JSON.stringify({
-          event: 'flow_session_denied',
-          uidHash: hashForAudit(decodedToken.uid),
-          emailHash: hashForAudit(decodedToken.email),
-          ...auditRequestContext(request),
-        }),
-      );
-      throw new ForbiddenException(FLOW_ACCESS_DENIED_MESSAGE);
     }
 
     if (sessionAppId === 'admin') {
@@ -784,7 +753,6 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
           signInProvider: tokenPayload?.firebase?.sign_in_provider || null,
           adminProjectId: this.firebaseAdmin.projectId(),
           app: sessionAppId,
-          flowSession: isFlowSessionRequest(flowSession),
         }),
         error instanceof Error ? error.stack : undefined,
       );

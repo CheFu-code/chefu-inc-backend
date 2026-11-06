@@ -44,11 +44,6 @@ export const CHEFU_APPS: ChefuApp[] = [
         origins: ["https://internal.chefu.co.za"],
     },
     {
-        id: "flow",
-        name: "Flow Mail",
-        origins: ["https://flow.chefu.co.za"],
-    },
-    {
         id: "quantum",
         name: "Quantum",
         origins: ["https://quantum.chefu.co.za"],
@@ -122,13 +117,6 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         name: "Chefu Merchant",
         redirectUris: ["https://merchant.chefu.co.za/auth/callback"],
         scopes: ["openid", "profile", "email", "admin:manage"],
-    },
-    {
-        id: "flow-web",
-        appId: "flow",
-        name: "Flow Mail",
-        redirectUris: ["https://flow.chefu.co.za/auth/callback"],
-        scopes: ["openid", "profile", "email", "flow:read", "flow:send"],
     },
     {
         id: "quantum-web",

@@ -48,9 +48,6 @@ export function configureCors(
       'If-None-Match',
       CHEFU_APP_HEADER,
       'x-api-key',
-      'x-flow-api-key',
-      'x-flow-session',
-      'x-flow-webhook-secret',
     ],
   });
 }
@@ -100,14 +97,4 @@ export function createCookieCsrfMiddleware(allowedOrigins: string[]) {
 
     next();
   };
-}
-
-export function captureFlowInboundRawBody(
-  request: Request & { rawBody?: Buffer },
-  _response: Response,
-  body: Buffer,
-) {
-  if (request.path === '/flow/inbound') {
-    request.rawBody = Buffer.from(body);
-  }
 }

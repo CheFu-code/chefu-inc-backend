@@ -63,7 +63,7 @@ function setup() {
   const request: any = { socket: { remoteAddress: "127.0.0.1" }, path: "/auth/session", method: "POST", cookies: { [TRUSTED_DEVICE_COOKIE_NAME]: token, [SESSION_COOKIE_NAME]: 'test-session' }, headers: { 'user-agent': 'Test Browser' } };
   const response: any = { cookie() {}, clearCookie() {} };
   const idToken = `header.${Buffer.from(JSON.stringify({ firebase: { sign_in_provider: 'password' } })).toString('base64url')}.signature`;
-  const signIn = () => controller.createSession(`Bearer ${idToken}`, undefined, undefined, request, response);
+  const signIn = () => controller.createSession(`Bearer ${idToken}`, undefined, request, response);
   return { controller, request, response, records, deviceKey, stateKey, signIn, lookups: () => ({ documents: documentLookups, auth: authLookups }), changeCredentials: () => { boundary += 20_000; }, counts: () => ({ alerts, revocations, publications }) };
 }
 

@@ -69,13 +69,6 @@ import { ProfilePictureService } from './profile-picture.service';
 import { PasskeyService } from './passkey.service';
 import { ResendService } from '../email/resend.service';
 import {
-  FLOW_ACCESS_DENIED_MESSAGE,
-  FLOW_SESSION_HEADER,
-  isFlowAllowedEmail,
-  isFlowSessionRequest,
-  normalizeEmailAddress,
-} from '../flow/flow-access';
-import {
   buildDeviceAuthChallenge,
   isTrustedDeviceInvalidatedByCredentialChange,
   isDeviceAuthExpired,
@@ -671,20 +664,12 @@ export class AuthControllerBase {
 
   protected resolveSessionAppId(
     chefuApp: string | undefined,
-    flowSession: string | undefined,
   ): ChefuAppId {
     const resolvedAppId = this.appsService.resolveId(chefuApp);
-    const isFlowRequest = isFlowSessionRequest(flowSession);
 
     if (chefuApp && !resolvedAppId) {
       throw new BadRequestException(`Unknown app "${chefuApp}".`);
     }
-
-    if (isFlowRequest && resolvedAppId && resolvedAppId !== 'flow') {
-      throw new BadRequestException('Flow session header conflicts with app id.');
-    }
-
-    if (isFlowRequest) return 'flow';
 
     return resolvedAppId || 'root';
   }
@@ -1683,28 +1668,5 @@ export class AuthControllerBase {
         429,
       );
     }
-  }
-
-  protected async isFlowSessionAllowed(email?: string | null) {
-    const normalized = normalizeEmailAddress(email || '');
-    if (!normalized) return false;
-
-    if (isFlowAllowedEmail(normalized)) return true;
-
-    try {
-      const doc = await this.firebaseAdmin
-        .db()
-        .collection('flowAllowedEmails')
-        .doc(normalized.replace(/[.#$/\[\]]/g, '_'))
-        .get();
-
-      if (doc.exists && String((doc.data() || {}).status || '') === 'active') {
-        return true;
-      }
-    } catch {
-      // Ignore Firestore check failures
-    }
-
-    return false;
   }
 }

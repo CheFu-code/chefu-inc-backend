@@ -2,6 +2,7 @@ import { BadRequestException, Inject, Injectable, NotFoundException, ServiceUnav
 import { FirebaseAdminService } from '../../firebase-admin/firebase-admin.service';
 import { QuantumAgentDataService } from './agent-data.service';
 import { identifier } from './agent-validation';
+import { InFlightReads } from '../../../common/in-flight-reads';
 
 type Tool = { id: string; slug: string; name: string; toolkit_slug: string; composio_auth_config_id?: string | null; [key: string]: unknown };
 const DEFAULT_TOOLS = [
@@ -16,6 +17,7 @@ const DEFAULT_TOOLS = [
 
 @Injectable()
 export class QuantumAgentToolsService {
+  private readonly catalogReads = new InFlightReads();
   constructor(
     @Inject(FirebaseAdminService) private readonly firebase: FirebaseAdminService,
     @Inject(QuantumAgentDataService) private readonly data: QuantumAgentDataService,
@@ -27,9 +29,11 @@ export class QuantumAgentToolsService {
   }
   private connections(uid: string) { return this.data.user(uid).collection('connections'); }
   async catalog(): Promise<Tool[]> {
-    const rows = await this.firebase.db().collection('quantum_agent_tools').get();
-    const tools: Tool[] = rows.empty ? DEFAULT_TOOLS : rows.docs.map(row => ({ ...row.data(), id: row.id } as Tool));
-    return tools.filter(tool => tool.is_active !== false).sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+    return this.catalogReads.run('catalog', async () => {
+      const rows = await this.firebase.db().collection('quantum_agent_tools').get();
+      const tools: Tool[] = rows.empty ? DEFAULT_TOOLS : rows.docs.map(row => ({ ...row.data(), id: row.id } as Tool));
+      return tools.filter(tool => tool.is_active !== false).sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
+    });
   }
   private async tool(id: string) {
     identifier(id);

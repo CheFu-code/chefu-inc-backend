@@ -10,7 +10,6 @@ import { GlobalExceptionFilter } from "./common/global-exception.filter";
 import { ValidationPipe } from "@nestjs/common";
 import { registeredAppOrigins } from "./modules/apps/app-registry";
 import {
-    captureFlowInboundRawBody,
     configureCors,
     createCookieCsrfMiddleware,
     createSecurityHeadersMiddleware,
@@ -63,7 +62,6 @@ async function bootstrap() {
     // 4 MB provides ample headroom while blocking JSON-body DoS attacks.
     app.useBodyParser("json", {
         limit: "4mb",
-        verify: captureFlowInboundRawBody,
     });
     app.useBodyParser("urlencoded", { extended: true, limit: "4mb" });
     app.use(cookieParser());

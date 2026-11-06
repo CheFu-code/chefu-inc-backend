@@ -20,11 +20,7 @@ Next/React frontends should send `x-chefu-app` when creating a session:
 
 - `x-chefu-app: academy`
 - `x-chefu-app: admin`
-- `x-chefu-app: flow`
 - `x-chefu-app: quantum`
-
-Flow's existing `x-flow-session` header still works and still enforces the
-Flow sender allowlist.
 
 ## OAuth/OIDC
 
@@ -47,7 +43,7 @@ This backend is organized as a shared CHEFU platform plus product modules:
 
 - Platform modules: app registry, Firebase Admin, auth, and health.
 - Shared service modules: AI, billing, email, and notifications.
-- Product modules: Academy SDK, Academy courses, Flow, and future apps.
+- Product modules: Academy SDK, Academy courses, and future apps.
 
 See `docs/backend-architecture.md` for the module pattern and the checklist for
 adding a new CHEFU app.
@@ -70,8 +66,6 @@ Set these on the backend host:
 - `GEMINI_API_KEY`
 - `RESEND_API_KEY` for security notification emails
 - `RUNTIME_LIMIT_STORE=firestore` only when rate limits must be shared across multiple API instances; the default in-memory limiter avoids a Firestore read/write on every request
-- `FLOW_ACCESS_SECRET=<long random secret shared with the Flow frontend>`
-- `FLOW_SENDERS="CHEFU Inc <hello@chefu.co.za>;Flow Mail <mail@chefu.co.za>;Support <support@chefu.co.za>;Security <security@chefu.co.za>;Chefu Academy <academy@chefu.co.za>;CHEFU Quantum <quantum@chefu.co.za>"`
 - `SIGNIN_ALERT_TEMPLATE_ID` if using a saved Resend template for sign-in alerts
 - `PASSWORD_CHANGED_TEMPLATE_ID` for the saved Resend template used for password-change alerts (default: `password-reset-notification`)
 - `PASSKEY_ADDED_TEMPLATE_ID` if using a saved Resend template for passkey-added alerts (default: `new-passkey-added`)
@@ -80,8 +74,7 @@ Set these on the backend host:
 set it to `*`, a hop count, or an address range that includes untrusted clients.
 Client IP and forwarded HTTPS detection use Express's proxy-aware request
 properties, so forwarded headers are ignored unless their sending proxy is
-listed. The API retains raw request bytes only for `POST /flow/inbound`, where
-they are needed to verify Resend webhook signatures.
+listed.
 
 On the frontend host, set:
 
@@ -113,10 +106,3 @@ On the frontend host, set:
 - `DELETE /auth/session`
 - `POST /ai/generate`
 - `POST /email/password-changed`
-- `GET /flow/access/session`
-- `POST /flow/access/login`
-- `POST /flow/access/activate`
-- `DELETE /flow/access/session`
-- `GET /flow/admin/access-keys` admin only
-- `POST /flow/admin/access-keys` admin only
-- `POST /flow/admin/access-keys/:keyId/revoke` admin only

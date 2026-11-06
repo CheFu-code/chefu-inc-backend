@@ -32,7 +32,6 @@ Product modules own app-specific workflows and route groups.
 
 - `academy-sdk`: public SDK API, SDK auth, developer keys, course/video catalog.
 - `courses`: authenticated Chefu Academy learning and export workflows.
-- `flow`: Flow Mail config, mailbox, send, and webhook flows.
 
 Future apps should get their own product module instead of adding app-specific
 logic to shared modules.
@@ -102,6 +101,5 @@ in the API response.
 - `/email/*`: shared email operations.
 - `/api/*`: Academy SDK public API surface.
 - `/courses/*`: Academy web learning workflows requiring user auth.
-- `/flow/*`: Flow Mail product API.
 
 Keep new app routes under a clear route prefix so future apps do not collide.

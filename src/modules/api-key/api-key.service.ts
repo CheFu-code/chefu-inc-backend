@@ -93,6 +93,8 @@ export class ApiKeyService {
             throw new BadRequestException('API key not found.');
         }
 
+        if (doc.data()?.active === false) return { success: true };
+
         await docRef.update({
             active: false,
             revokedAt: FieldValue.serverTimestamp(),

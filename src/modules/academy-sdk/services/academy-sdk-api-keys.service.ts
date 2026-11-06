@@ -112,6 +112,8 @@ export class AcademySdkApiKeysService {
       throw new ForbiddenException('You cannot revoke this API key.');
     }
 
+    if (snapshot.data()?.active === false) return { success: true };
+
     await ref.update({ active: false });
     return { success: true };
   }
