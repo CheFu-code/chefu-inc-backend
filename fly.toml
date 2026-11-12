@@ -10,7 +10,8 @@ auto_start_machines = true
 auto_stop_machines = true
 force_https = true
 internal_port = 4_000
-min_machines_running = 0
+# Payment reconciliation must continue after customers close their browsers.
+min_machines_running = 1
 processes = [ "app" ]
 
 [[vm]]

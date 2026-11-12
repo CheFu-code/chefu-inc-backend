@@ -160,7 +160,12 @@ export class ProductsService {
       if (duplicate.docs.some(doc => doc.id !== id)) throw new ConflictException('SKU is already in use.');
     }
     const updated = { ...existing, ...validated, id, updatedAt: new Date().toISOString() } as ProductDocument;
-    await ref.set(updated);
+    // Refuse to overwrite an inventory reservation committed after our read.
+    try { await ref.update(updated, { lastUpdateTime: existingSnapshot.updateTime! }); }
+    catch (error) {
+      if ((error as { code?: number }).code === 9) throw new ConflictException('Product changed while it was being edited. Reload before saving.');
+      throw error;
+    }
     this.invalidateProductsCache();
     await this.audit(user, existing.priceMinor !== updated.priceMinor ? 'PRICE_CHANGED' : 'PRODUCT_UPDATED', id, { before: existing, after: updated });
     return updated;
@@ -251,7 +256,7 @@ export class ProductsService {
 
   private slugify(value: string) { return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); }
 
-  private invalidateProductsCache() {
+  invalidateProductsCache() {
     this.publicProductsCacheVersion += 1;
     this.publicProductsCache = undefined;
     this.publicProductsRequest = undefined;

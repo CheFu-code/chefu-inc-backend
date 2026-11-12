@@ -31,14 +31,19 @@ export class RateLimitMiddleware implements NestMiddleware {
       return;
     }
 
+    // Preparing a checkout reserves inventory; give it a smaller budget than
+    // ordinary API reads. Verification/webhooks retain the normal retry budget.
+    const isCheckoutInitialization = request.method === 'POST' && request.path.toLowerCase().replace(/\/+$/, '') === '/store/checkout/initialize';
+    const limit = isCheckoutInitialization ? 120 : this.limit;
+    const windowMs = isCheckoutInitialization ? 15 * 60_000 : this.windowMs;
     const result = await this.runtimeLimits.reserve({
       collection: 'runtime_api_rate_limits',
-      key: `${getClientIp(request) || 'unknown'}:${request.method}:${request.path}`,
-      limit: this.limit,
-      windowMs: this.windowMs,
+      key: `${getClientIp(request) || 'unknown'}:${request.method}:${isCheckoutInitialization ? '/store/checkout/initialize' : request.path}`,
+      limit,
+      windowMs,
     });
 
-    response.setHeader('RateLimit-Limit', String(this.limit));
+    response.setHeader('RateLimit-Limit', String(limit));
     response.setHeader('RateLimit-Remaining', String(result.remaining));
     response.setHeader('RateLimit-Reset', String(result.retryAfterSeconds));
 

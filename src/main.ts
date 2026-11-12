@@ -2,6 +2,7 @@ import "./instrument";
 import { NestFactory } from "@nestjs/core";
 import cookieParser from "cookie-parser";
 import compression from "compression";
+import express from "express";
 import { AppModule } from "./app.module";
 import { Logger } from "@nestjs/common";
 import { NestExpressApplication } from "@nestjs/platform-express";
@@ -45,6 +46,7 @@ async function bootstrap() {
 
     const app = await NestFactory.create<NestExpressApplication>(AppModule, {
         bodyParser: false,
+        rawBody: true,
         logger: ['warn', 'error'],
     });
     const allowedOrigins = getAllowedOrigins();
@@ -60,6 +62,8 @@ async function bootstrap() {
     // Body parser limits: uploads now use multipart (multer), so the JSON body parser
     // only needs to handle small payloads like rename/share requests (~1 KB each).
     // 4 MB provides ample headroom while blocking JSON-body DoS attacks.
+    app.use('/store/checkout/webhook', express.json({ limit: '64kb', verify: (request, _response, buffer) => { (request as express.Request & { rawBody?: Buffer }).rawBody = buffer; } }));
+    app.use('/store/checkout', express.json({ limit: '32kb' }));
     app.useBodyParser("json", {
         limit: "4mb",
     });

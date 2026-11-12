@@ -1,3 +1,5 @@
+import { validateStoreEnv } from '../../modules/store/store.config';
+
 export interface MissingVariable {
   name: string;
   description?: string;
@@ -272,6 +274,8 @@ export function validateBackendEnv(
     groups.push(firebaseGroup);
   }
 
+  const storeGroup = validateStoreEnv(env);
+  if (storeGroup.missing.length) groups.push(storeGroup);
   const allMissing = groups.flatMap(g => g.missing.map(m => m.name));
   const isValid = groups.length === 0;
   const error = isValid ? undefined : ConfigurationError.fromGroups(groups);

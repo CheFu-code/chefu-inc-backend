@@ -9,6 +9,9 @@
     "multer": "^2.4.0"
   },
   "scripts": {
+    "test:checkout": "node --import tsx --test src/modules/store/*.spec.ts scripts/migrate-store-payments.spec.ts",
+    "migrate:store": "tsx --env-file-if-exists=.env scripts/migrate-store-payments.ts",
+    "test:checkout:browser": "node --import tsx --test scripts/store-browser.spec.ts",
     "test:efficiency": "node --import tsx --test src/common/database-efficiency.spec.ts",
     "test:cloudence": "node --import tsx --test src/modules/cloudence/*.spec.ts",
     "migrate:cloudence-private": "tsx --env-file-if-exists=.env scripts/migrate-cloudence-private.ts",

@@ -3,6 +3,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { CHEFU_APP_HEADER } from '../modules/apps/app-registry';
 import { SESSION_COOKIE_NAME } from '../modules/auth/session.constants';
 import { isAllowedCookieMutationOrigin } from './csrf-protection';
+import { CHECKOUT_COOKIE } from '../modules/store/checkout.validation';
 
 export function normalizeOrigin(origin: string) {
   if (!origin) return null;
@@ -46,6 +47,7 @@ export function configureCors(
       'Content-Type',
       'Authorization',
       'If-None-Match',
+      'Idempotency-Key',
       CHEFU_APP_HEADER,
       'x-api-key',
     ],
@@ -79,9 +81,11 @@ export function createCookieCsrfMiddleware(allowedOrigins: string[]) {
       request.method,
     );
     const hasSessionCookie = Boolean(request.cookies?.[SESSION_COOKIE_NAME]);
+    const normalizedPath = request.path.toLowerCase().replace(/\/+$/, '');
+    const isCheckoutMutation = normalizedPath.startsWith('/store/checkout/') && normalizedPath !== '/store/checkout/webhook';
     if (
       isStateChangingMethod &&
-      hasSessionCookie &&
+      (hasSessionCookie || Boolean(request.cookies?.[CHECKOUT_COOKIE]) || isCheckoutMutation) &&
       !isAllowedCookieMutationOrigin(
         request.headers.origin,
         request.headers.referer,

@@ -1,5 +1,22 @@
 {
   "indexes": [
+    { "collectionGroup": "storeJobs", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "state", "order": "ASCENDING" }, { "fieldPath": "availableAt", "order": "ASCENDING" }
+    ] },
+    { "collectionGroup": "storeOrders", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "accountUid", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ] },
+    { "collectionGroup": "storeAlerts", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "resolved", "order": "ASCENDING" }, { "fieldPath": "createdAt", "order": "DESCENDING" }
+    ] },
+    {
+      "collectionGroup": "storeOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "reconcileAfter", "order": "ASCENDING" }
+      ]
+    },
     {
       "collectionGroup": "sessions",
       "queryScope": "COLLECTION",
