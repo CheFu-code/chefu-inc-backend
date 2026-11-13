@@ -1,0 +1,57 @@
+import { BadRequestException } from '@nestjs/common';
+import type { Actor, MarketplaceRepository, SellerApplication, Storefront, ApplicationStatus } from './marketplace.types';
+import { assertAdmin, exists, text } from './marketplace.validation';
+
+export class ApplicationsService {
+  constructor(private readonly repo: MarketplaceRepository) {}
+  async account(actor: Actor) {
+    const [application, store] = await Promise.all([
+      this.repo.get<SellerApplication>('applications', actor.uid), this.repo.get<Storefront>('stores', actor.uid),
+    ]);
+    return { user: { uid: actor.uid, email: actor.email }, application, store };
+  }
+  async submit(actor: Actor, body: Record<string, unknown>) {
+    const fields = {
+      businessName: text(body.businessName, 'Business name', 2, 100), contactName: text(body.contactName, 'Contact name', 2, 100),
+      email: text(body.email, 'Contact email', 5, 200), phone: text(body.phone, 'Phone number', 7, 30),
+      area: text(body.area, 'Operating area', 2, 120), plans: text(body.plans, 'What you plan to sell', 10, 2000),
+      response: typeof body.response === 'string' ? text(body.response, 'Response', 0, 2000) : '',
+    };
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.email)) throw new BadRequestException('Enter a valid contact email.');
+    return this.repo.transaction(async tx => {
+      const previous = await tx.get<SellerApplication>('applications', actor.uid);
+      if (previous && previous.status !== 'more-info') throw new BadRequestException('This application cannot be resubmitted in its current status.');
+      if (previous?.status === 'more-info' && fields.response.length < 5) throw new BadRequestException('Respond to the information requested by CheFu.');
+      const application: SellerApplication = { ...fields, id: actor.uid, ownerUid: actor.uid, status: 'pending', reason: previous?.reason || '', updatedAt: new Date().toISOString() };
+      tx.set('applications', actor.uid, application);
+      return application;
+    });
+  }
+  async review(actor: Actor, uid: string, body: Record<string, unknown>) {
+    assertAdmin(actor);
+    const status = body.status as ApplicationStatus;
+    if (!['more-info', 'approved', 'rejected'].includes(status)) throw new BadRequestException('Invalid review decision.');
+    const reason = text(body.reason ?? '', 'Customer-facing reason', status === 'approved' ? 0 : 5, 2000);
+    return this.repo.transaction(async tx => {
+      const application = exists(await tx.get<SellerApplication>('applications', uid), 'Application');
+      const existing = await tx.get<Storefront>('stores', uid);
+      if (!['pending', 'more-info'].includes(application.status)) throw new BadRequestException('This application has already been decided.');
+      const updated = { ...application, status, reason, updatedAt: new Date().toISOString() };
+      tx.set('applications', uid, updated);
+      if (status === 'approved' && !existing) tx.set('stores', uid, {
+        id: uid, ownerUid: uid, name: application.businessName, description: application.plans,
+        area: application.area, status: 'active', reason: '', updatedAt: updated.updatedAt,
+      });
+      return updated;
+    });
+  }
+  async suspend(actor: Actor, uid: string, body: Record<string, unknown>) {
+    assertAdmin(actor);
+    if (!['active', 'suspended'].includes(String(body.status))) throw new BadRequestException('Invalid seller status.');
+    return this.repo.transaction(async tx => {
+      const store = exists(await tx.get<Storefront>('stores', uid), 'Store');
+      const updated = { ...store, status: body.status as Storefront['status'], reason: text(body.reason ?? '', 'Reason', 0, 1000), updatedAt: new Date().toISOString() };
+      tx.set('stores', uid, updated); return updated;
+    });
+  }
+}

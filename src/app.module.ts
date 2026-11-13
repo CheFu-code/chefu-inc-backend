@@ -18,6 +18,7 @@ import { SentryModule } from '@sentry/nestjs/setup';
 import { CloudenceModule } from './modules/cloudence/cloudence.module';
 import { LiftWiseModule } from './modules/liftwise/liftwise.module';
 import { StoreModule } from './modules/store/store.module';
+import { ShopYethuModule } from './modules/shopyethu/shopyethu.module';
 
 const platformModules = [
   AppsModule,
@@ -41,6 +42,7 @@ const productModules = [
   CloudenceModule,
   LiftWiseModule,
   StoreModule,
+  ShopYethuModule,
 ];
 
 @Module({

@@ -1,0 +1,29 @@
+import { Body, Controller, Get, Header, Headers, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { MarketplaceService } from './marketplace.service';
+import { MarketplaceAuthGuard, MarketplaceRequest } from './marketplace-auth.guard';
+
+@Controller('shopyethu')
+export class MarketplacePublicController {
+  constructor(private readonly market: MarketplaceService) {}
+  @Get('config') config() { return { payments: 'not-configured', collectionEnabled: process.env.SHOPYETHU_PAY_ON_COLLECTION_ENABLED === 'true', deliveryCents: 0 }; }
+  @Get('products') async products(@Query('q') q = '', @Query('category') category = '', @Query('store') store = '') { return { products: await this.market.catalog.browse(q.slice(0, 120), category, store) }; }
+  @Get('products/:id') product(@Param('id') id: string) { return this.market.catalog.product(id); }
+  @Get('stores/:id') storefront(@Param('id') id: string) { return this.market.catalog.storefront(id); }
+}
+
+@Controller('shopyethu')
+@UseGuards(MarketplaceAuthGuard)
+export class MarketplaceCustomerController {
+  constructor(private readonly market: MarketplaceService) {}
+  @Get('me') me(@Req() req: MarketplaceRequest) { return this.market.applications.account(req.user); }
+  @Post('application') application(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>) { return this.market.applications.submit(req.user, body); }
+  @Get('orders') async orders(@Req() req: MarketplaceRequest) { return { orders: await this.market.orders.list(req.user) }; }
+  @Post('orders') order(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>, @Headers('idempotency-key') key: string) { return this.market.orders.place(req.user, body, key); }
+  @Post('reports') report(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>) { return this.market.reports.submit(req.user, body); }
+  @Get('seller/store') mine(@Req() req: MarketplaceRequest) { return this.market.catalog.mine(req.user); }
+  @Put('seller/store') store(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>) { return this.market.catalog.saveStore(req.user, body); }
+  @Post('seller/products') createProduct(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>) { return this.market.catalog.saveProduct(req.user, body); }
+  @Put('seller/products/:id') updateProduct(@Req() req: MarketplaceRequest, @Param('id') id: string, @Body() body: Record<string, unknown>) { return this.market.catalog.saveProduct(req.user, body, id); }
+  @Get('seller/orders') async incoming(@Req() req: MarketplaceRequest) { return { orders: await this.market.orders.list(req.user, true) }; }
+  @Put('seller/orders/:id') status(@Req() req: MarketplaceRequest, @Param('id') id: string, @Body() body: { status?: unknown }) { return this.market.orders.update(req.user, id, body.status); }
+}
