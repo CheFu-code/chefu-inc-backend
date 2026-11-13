@@ -1,9 +1,14 @@
 export type Actor = { uid: string; email: string; roles: string[] };
 export type ApplicationStatus = 'pending' | 'more-info' | 'approved' | 'rejected';
+export type ApplicationEvent = { status: ApplicationStatus; at: string; reason?: string; response?: string };
 export type SellerApplication = {
   id: string; ownerUid: string; businessName: string; contactName: string; email: string;
   phone: string; area: string; plans: string; response: string; status: ApplicationStatus;
   reason: string; updatedAt: string;
+  businessType?: 'individual' | 'registered-business'; categories?: string[];
+  phoneConfirmed?: boolean; contactConfirmedAt?: string;
+  collectionOffered?: boolean; collectionArea?: string; pickupHours?: string;
+  createdAt?: string; history?: ApplicationEvent[];
 };
 export type Storefront = {
   id: string; ownerUid: string; name: string; description: string; area: string;

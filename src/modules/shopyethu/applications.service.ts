@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import type { Actor, MarketplaceRepository, SellerApplication, Storefront, ApplicationStatus } from './marketplace.types';
 import { assertAdmin, exists, text } from './marketplace.validation';
+import { applicationFields, applicationHistory } from './application.validation';
 
 export class ApplicationsService {
   constructor(private readonly repo: MarketplaceRepository) {}
@@ -11,18 +12,19 @@ export class ApplicationsService {
     return { user: { uid: actor.uid, email: actor.email }, application, store };
   }
   async submit(actor: Actor, body: Record<string, unknown>) {
-    const fields = {
-      businessName: text(body.businessName, 'Business name', 2, 100), contactName: text(body.contactName, 'Contact name', 2, 100),
-      email: text(actor.email, 'Contact email', 5, 200), phone: text(body.phone, 'Phone number', 7, 30),
-      area: text(body.area, 'Operating area', 2, 120), plans: text(body.plans, 'What you plan to sell', 10, 2000),
-      response: typeof body.response === 'string' ? text(body.response, 'Response', 0, 2000) : '',
-    };
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.email)) throw new BadRequestException('Enter a valid contact email.');
+    const fields = applicationFields(actor, body);
     return this.repo.transaction(async tx => {
       const previous = await tx.get<SellerApplication>('applications', actor.uid);
       if (previous && previous.status !== 'more-info') throw new BadRequestException('This application cannot be resubmitted in its current status.');
       if (previous?.status === 'more-info' && fields.response.length < 5) throw new BadRequestException('Respond to the information requested by CheFu.');
-      const application: SellerApplication = { ...fields, id: actor.uid, ownerUid: actor.uid, status: 'pending', reason: previous?.reason || '', updatedAt: new Date().toISOString() };
+      const now = new Date().toISOString();
+      const event = { status: 'pending' as const, at: now, ...(previous ? { response: fields.response } : {}) };
+      const application: SellerApplication = {
+        ...fields, id: actor.uid, ownerUid: actor.uid, status: 'pending', reason: previous?.reason || '',
+        updatedAt: now, contactConfirmedAt: now,
+        ...(!previous ? { createdAt: now } : previous.createdAt ? { createdAt: previous.createdAt } : {}),
+        history: previous ? applicationHistory(previous, event) : [event],
+      };
       tx.set('applications', actor.uid, application);
       return application;
     });
@@ -36,7 +38,8 @@ export class ApplicationsService {
       const application = exists(await tx.get<SellerApplication>('applications', uid), 'Application');
       const existing = await tx.get<Storefront>('stores', uid);
       if (!['pending', 'more-info'].includes(application.status)) throw new BadRequestException('This application has already been decided.');
-      const updated = { ...application, status, reason, updatedAt: new Date().toISOString() };
+      const now = new Date().toISOString();
+      const updated = { ...application, status, reason, updatedAt: now, history: applicationHistory(application, { status, reason, at: now }) };
       tx.set('applications', uid, updated);
       if (status === 'approved' && !existing) tx.set('stores', uid, {
         id: uid, ownerUid: uid, name: application.businessName, description: application.plans,
