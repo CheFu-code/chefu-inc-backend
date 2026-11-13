@@ -5,6 +5,7 @@ export type ChefuAppId =
     | "merchant"
     | "cloudence"
     | "liftwise"
+    | "shopyethu"
     | "root";
     
 export type ChefuApp = {

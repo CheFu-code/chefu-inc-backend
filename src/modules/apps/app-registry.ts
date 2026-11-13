@@ -25,6 +25,11 @@ export function mapAppRecordToOauthClient(record: ChefuRegisteredAppRecord): Che
 
 export const CHEFU_APPS: ChefuApp[] = [
     {
+        id: "shopyethu",
+        name: "ShopYethu",
+        origins: ["https://shopyethu-admin.chefu.co.za"],
+    },
+    {
         id: "academy",
         name: "Chefu Academy",
         origins: ["https://academy.chefu.co.za"],
@@ -66,6 +71,15 @@ export const CHEFU_APPS: ChefuApp[] = [
 ];
 
 export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
+    {
+        id: "shopyethu-web",
+        appId: "shopyethu",
+        name: "ShopYethu Admin",
+        redirectUris: [
+            "https://shopyethu-admin.chefu.co.za/auth/callback",
+        ],
+        scopes: ["openid", "profile", "email"],
+    },
     {
         id: "chefu-technologies",
         appId: "root",
