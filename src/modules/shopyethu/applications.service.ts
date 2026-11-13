@@ -13,7 +13,7 @@ export class ApplicationsService {
   async submit(actor: Actor, body: Record<string, unknown>) {
     const fields = {
       businessName: text(body.businessName, 'Business name', 2, 100), contactName: text(body.contactName, 'Contact name', 2, 100),
-      email: text(body.email, 'Contact email', 5, 200), phone: text(body.phone, 'Phone number', 7, 30),
+      email: text(actor.email, 'Contact email', 5, 200), phone: text(body.phone, 'Phone number', 7, 30),
       area: text(body.area, 'Operating area', 2, 120), plans: text(body.plans, 'What you plan to sell', 10, 2000),
       response: typeof body.response === 'string' ? text(body.response, 'Response', 0, 2000) : '',
     };

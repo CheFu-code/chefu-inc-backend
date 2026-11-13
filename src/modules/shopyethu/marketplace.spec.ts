@@ -27,14 +27,16 @@ async function approved() {
 
 test('application review, more-information response, approval and rejection remain server controlled', async () => {
   const { applications, catalog } = setup();
-  const submitted = await applications.submit(seller, { ...application, status: 'approved', ownerUid: buyer.uid });
+  const submitted = await applications.submit(seller, { ...application, email: buyer.email, status: 'approved', ownerUid: buyer.uid });
   assert.equal(submitted.status, 'pending'); assert.equal(submitted.ownerUid, seller.uid);
+  assert.equal(submitted.email, seller.email);
   await assert.rejects(catalog.mine(seller), status(403));
   await assert.rejects(applications.review(seller, seller.uid, { status: 'approved' }), status(403));
   await assert.rejects(applications.submit(seller, application), status(400));
   await applications.review(staff, seller.uid, { status: 'more-info', reason: 'Please provide operating hours.' });
   await assert.rejects(applications.submit(seller, application), status(400));
-  await applications.submit(seller, { ...application, response: 'Weekdays from 9am until 5pm.' });
+  const resubmitted = await applications.submit(seller, { ...application, email: buyer.email, response: 'Weekdays from 9am until 5pm.' });
+  assert.equal(resubmitted.email, seller.email);
   await applications.review(staff, seller.uid, { status: 'approved' });
   assert.equal((await catalog.mine(seller)).store.ownerUid, seller.uid);
   await applications.submit(other, { ...application, email: other.email });
