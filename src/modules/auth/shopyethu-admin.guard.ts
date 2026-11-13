@@ -3,6 +3,7 @@ import type { Request } from 'express';
 import type { AuthenticatedUser } from './authenticated-user';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { ADMIN_ROLE } from './roles';
+import { readAuthUserProfile } from './auth-user-profile';
 
 export type ShopYethuRequest = Request & {
   user?: AuthenticatedUser;
@@ -19,8 +20,7 @@ export class ShopYethuAdminGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<ShopYethuRequest>();
     const user = request.user;
     if (!user?.uid || !user.email) throw new UnauthorizedException('CheFu sign-in required.');
-    const snapshot = await this.firebase.db().collection('users').doc(user.email).get();
-    const profile = snapshot.data() || {};
+    const profile = await readAuthUserProfile(this.firebase, user.email, request);
     const roles = Array.isArray(profile.roles) ? profile.roles.filter((role: unknown): role is string => typeof role === 'string') : [];
     if (!roles.some(role => role.trim().toLowerCase() === ADMIN_ROLE)) {
       throw new ForbiddenException('ShopYethu administrator access required.');

@@ -20,6 +20,7 @@ import {
   SESSION_META_COOKIE_NAME,
 } from './session.constants';
 import { SessionSignerService } from './session-signer.service';
+import { readAuthUserProfile } from './auth-user-profile';
 
 type RequestWithUser = Request & {
   user?: AuthenticatedUser;
@@ -116,7 +117,7 @@ export class AuthGuard implements CanActivate {
         user: {
           uid: decoded.uid,
           email,
-          roles: await this.getUserRoles(email),
+          roles: await this.getUserRoles(email, request),
         },
       };
     } catch {
@@ -137,7 +138,7 @@ export class AuthGuard implements CanActivate {
           roles: Array.isArray(claims.roles)
             ? claims.roles.map(String)
             : email
-              ? await this.getUserRoles(email)
+              ? await this.getUserRoles(email, request)
               : [],
         },
       };
@@ -158,7 +159,7 @@ export class AuthGuard implements CanActivate {
     const roles =
       meta?.uid === decoded.uid && meta.email === email
         ? meta.roles
-        : await this.getUserRoles(email);
+        : await this.getUserRoles(email, request);
 
     return {
       source: 'session_cookie',
@@ -207,16 +208,11 @@ export class AuthGuard implements CanActivate {
     };
   }
 
-  private async getUserRoles(email: string) {
+  private async getUserRoles(email: string, request?: Request) {
     if (!email) return [];
 
-    const snapshot = await this.firebaseAdmin
-      .db()
-      .collection('users')
-      .doc(email)
-      .get();
-
-    const roles = snapshot.data()?.roles;
+    const profile = await readAuthUserProfile(this.firebaseAdmin, email, request);
+    const roles = profile.roles;
     return Array.isArray(roles) ? roles.map(String) : [];
   }
 
