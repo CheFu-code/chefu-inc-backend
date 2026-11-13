@@ -72,15 +72,6 @@ export const CHEFU_APPS: ChefuApp[] = [
 
 export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
     {
-        id: "shopyethu-web",
-        appId: "shopyethu",
-        name: "ShopYethu Admin",
-        redirectUris: [
-            "https://shopyethu-admin.chefu.co.za/auth/callback",
-        ],
-        scopes: ["openid", "profile", "email"],
-    },
-    {
         id: "chefu-technologies",
         appId: "root",
         name: "Chefu Technologies",

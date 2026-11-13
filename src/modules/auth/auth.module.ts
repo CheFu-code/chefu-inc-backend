@@ -13,11 +13,14 @@ import { HoneytokenService } from './honeytoken.service';
 import { SecurityEventsService } from './security-events.service';
 import { AppsModule } from '../apps/apps.module';
 import { EmailModule } from '../email/email.module';
+import { ShopYethuAdminGuard } from './shopyethu-admin.guard';
+import { ShopYethuSessionController } from './shopyethu-session.controller';
 
 @Module({
   imports: [AppsModule, forwardRef(() => EmailModule)],
-  controllers: [AuthController, OAuthController, OAuthDiscoveryController, PasskeyController],
+  controllers: [AuthController, OAuthController, OAuthDiscoveryController, PasskeyController, ShopYethuSessionController],
   providers: [
+    ShopYethuAdminGuard,
     AuthGuard,
     AdminGuard,
     SessionSignerService,
@@ -29,6 +32,7 @@ import { EmailModule } from '../email/email.module';
     HoneytokenService,
   ],
   exports: [
+    ShopYethuAdminGuard,
     AuthGuard,
     AdminGuard,
     OAuthService,
