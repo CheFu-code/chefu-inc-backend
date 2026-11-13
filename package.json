@@ -9,6 +9,7 @@
     "multer": "^2.4.0"
   },
   "scripts": {
+    "test:shopyethu": "node --import tsx --test src/modules/shopyethu/*.spec.ts",
     "test:checkout": "node --import tsx --test src/modules/store/*.spec.ts scripts/migrate-store-payments.spec.ts",
     "migrate:store": "tsx --env-file-if-exists=.env scripts/migrate-store-payments.ts",
     "test:checkout:browser": "node --import tsx --test scripts/store-browser.spec.ts",

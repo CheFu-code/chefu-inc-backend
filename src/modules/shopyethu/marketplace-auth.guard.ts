@@ -1,4 +1,4 @@
-import { CanActivate, ExecutionContext, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, CanActivate, ExecutionContext, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import type { Request } from 'express';
 import { OAuthService } from '../auth/oauth.service';
 import type { Actor } from './marketplace.types';
@@ -10,6 +10,7 @@ export class MarketplaceAuthGuard implements CanActivate {
   async canActivate(context: ExecutionContext) {
     context.switchToHttp().getResponse().setHeader('Cache-Control', 'private, no-store');
     const request = context.switchToHttp().getRequest<MarketplaceRequest>();
+    if (['POST', 'PUT'].includes(request.method) && (!request.body || typeof request.body !== 'object' || Array.isArray(request.body))) throw new BadRequestException('A valid request body is required.');
     const authorization = request.headers.authorization || '';
     if (!authorization.startsWith('Bearer ')) throw new UnauthorizedException('Sign in with your CheFu account.');
     const claims = await this.oauth.verifyAccessToken(authorization.slice(7), request);
