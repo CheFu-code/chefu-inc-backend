@@ -27,7 +27,7 @@
     "build": "tsc -p tsconfig.build.json && tsc -p tsconfig.migrations.json",
     "start": "node dist/main.js",
     "start:prod": "node dist/main.js",
-    "test:security": "node --import tsx --test src/common/security-audit.spec.ts src/common/csrf-protection.spec.ts src/common/http-security.spec.ts src/common/proxy-trust.spec.ts src/common/runtime-limit.spec.ts src/modules/auth/device-auth.spec.ts src/modules/auth/trusted-device.spec.ts src/modules/auth/trusted-device-activity.spec.ts src/modules/auth/auth-performance.spec.ts src/modules/auth/session-risk.spec.ts",
+    "test:security": "node --import tsx --test src/common/security-audit.spec.ts src/common/csrf-protection.spec.ts src/common/http-security.spec.ts src/common/proxy-trust.spec.ts src/common/country-detection.spec.ts src/common/runtime-limit.spec.ts src/modules/auth/device-auth.spec.ts src/modules/auth/trusted-device.spec.ts src/modules/auth/trusted-device-activity.spec.ts src/modules/auth/auth-performance.spec.ts src/modules/auth/session-risk.spec.ts",
     "lint": "eslint \"src/**/*.ts\"",
     "smoke": "node scripts/smoke-routes.mjs",
     "typecheck": "tsc --noEmit",

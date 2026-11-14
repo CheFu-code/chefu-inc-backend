@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { assertResendConfigured } from "../../common/env";
+import { CHEFU_APPS } from "../apps/app-registry";
 import { AccountDeletionConfirmationData, AccountEmailVerificationData, ApiKeyCompromisedNotificationData, BreachedPasswordAlertData, EmailVerificationData, PasskeyAddedNotificationData, PasskeyRemovedNotificationData, PasswordChangedNotificationData, PasswordResetEmailData, SignInNotificationData, SignupWelcomeData } from "./resend.types";
 
 
@@ -891,17 +892,8 @@ export class ResendService {
     }
 
     private resolveAppLabel(appId?: string) {
-        if (!appId) return "Chefu Technologies";
-
-        const normalized = appId.trim().toLowerCase();
-        const labels: Record<string, string> = {
-            academy: "Chefu Academy",
-            admin: "Chefu Admin",
-            quantum: "Quantum",
-            liftwise: "LiftWise",
-        };
-
-        return labels[normalized] || "Chefu Technologies";
+        const normalized = this.normalizeAppId(appId);
+        return CHEFU_APPS.find(app => app.id === normalized)?.name || "Chefu Technologies";
     }
 
     private resolveFromAddress(appId?: string) {

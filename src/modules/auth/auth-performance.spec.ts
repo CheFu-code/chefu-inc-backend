@@ -324,6 +324,9 @@ test('country updates only on a location change or after one day', () => {
   assert.equal(shouldRefreshDetectedCountry('ZA', 'ZA', new Date(now - 86400001).toISOString(), now), true);
   assert.equal(shouldRefreshDetectedCountry('ZA', 'GB', new Date(now - 1000).toISOString(), now), true);
   assert.equal(shouldRefreshDetectedCountry('ZA', 'ZA', null, now), true);
+  assert.equal(shouldRefreshDetectedCountry('ZA', 'ZA', 'invalid-date', now), true);
+  assert.equal(shouldRefreshDetectedCountry('ZA', 'ZA', new Date(now + 1000).toISOString(), now), false);
+  assert.equal(shouldRefreshDetectedCountry('ZA', 'ZA', new Date(now + 86400000).toISOString(), now), true);
 });
 
 test('/auth/me skips Firebase Auth lookup when the profile already has a phone', async () => {

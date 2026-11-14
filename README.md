@@ -76,6 +76,11 @@ Client IP and forwarded HTTPS detection use Express's proxy-aware request
 properties, so forwarded headers are ignored unless their sending proxy is
 listed.
 
+Country detection is disabled unless `COUNTRY_HEADER_PROVIDER` selects one
+provider (`cloudflare`, `vercel`, `cloudfront`, `appengine` or `proxy`). It also
+requires explicit `TRUSTED_PROXY_IPS`. See [country detection](docs/country-detection.md)
+for the required proxy configuration and validation rules.
+
 On the frontend host, set:
 
 - `NEXT_PUBLIC_API_BASE_URL=https://api.chefu.co.za`

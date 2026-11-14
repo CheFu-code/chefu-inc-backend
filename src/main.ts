@@ -17,6 +17,7 @@ import {
     normalizeOrigin,
 } from "./common/http-security";
 import { getTrustedProxyAddresses } from "./common/proxy-trust";
+import { configureCountryDetection } from "./common/country-detection";
 
 function getAllowedOrigins() {
     const configuredOrigins =
@@ -54,6 +55,9 @@ async function bootstrap() {
         process.env.TRUSTED_PROXY_IPS,
     );
     app.set('trust proxy', trustedProxyAddresses);
+    configureCountryDetection(
+        app.getHttpAdapter().getInstance(), process.env.COUNTRY_HEADER_PROVIDER,
+    );
 
     // Compress all JSON responses with gzip/brotli.
     // A 50-file list response drops from ~25 KB to ~5 KB (80% reduction).

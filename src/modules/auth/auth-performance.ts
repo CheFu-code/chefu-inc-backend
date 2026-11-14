@@ -62,5 +62,6 @@ export function shouldRefreshDetectedCountry(
     if (!detectedCode) return false;
     if (detectedCode !== savedCode) return true;
     const last = savedAt ? Date.parse(savedAt) : NaN;
-    return !Number.isFinite(last) || nowMs - last >= 24 * 60 * 60_000;
+    // Tolerate small clock differences between the API and Firestore servers.
+    return !Number.isFinite(last) || last > nowMs + 5 * 60_000 || nowMs - last >= 24 * 60 * 60_000;
 }
