@@ -21,9 +21,10 @@ export class MarketplaceCustomerController {
   @Post('orders') order(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>, @Headers('idempotency-key') key: string) { return this.market.orders.place(req.user, body, key); }
   @Post('reports') report(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>) { return this.market.reports.submit(req.user, body); }
   @Get('seller/store') mine(@Req() req: MarketplaceRequest) { return this.market.catalog.mine(req.user); }
+  @Get('seller/products/:id') ownProduct(@Req() req: MarketplaceRequest, @Param('id') id: string) { return this.market.catalog.ownProduct(req.user, id); }
   @Put('seller/store') store(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>) { return this.market.catalog.saveStore(req.user, body); }
-  @Post('seller/products') createProduct(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>) { return this.market.catalog.saveProduct(req.user, body); }
-  @Put('seller/products/:id') updateProduct(@Req() req: MarketplaceRequest, @Param('id') id: string, @Body() body: Record<string, unknown>) { return this.market.catalog.saveProduct(req.user, body, id); }
+  @Post('seller/products') createProduct(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>, @Headers('idempotency-key') key?: string) { return this.market.catalog.saveProduct(req.user, body, undefined, key); }
+  @Put('seller/products/:id') updateProduct(@Req() req: MarketplaceRequest, @Param('id') id: string, @Body() body: Record<string, unknown>, @Headers('idempotency-key') key?: string) { return this.market.catalog.saveProduct(req.user, body, id, key); }
   @Get('seller/orders') async incoming(@Req() req: MarketplaceRequest) { return { orders: await this.market.orders.list(req.user, true) }; }
   @Put('seller/orders/:id') status(@Req() req: MarketplaceRequest, @Param('id') id: string, @Body() body: { status?: unknown }) { return this.market.orders.update(req.user, id, body.status); }
 }

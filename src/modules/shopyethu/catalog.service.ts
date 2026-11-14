@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { BadRequestException, ForbiddenException } from '@nestjs/common';
+import { createHash, randomUUID } from 'node:crypto';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import type { Actor, Fulfilment, MarketplaceRepository, Product, Storefront } from './marketplace.types';
 import { exists, integer, photos, seller, text } from './marketplace.validation';
 
@@ -27,6 +27,12 @@ export class CatalogService {
     const store = await seller(this.repo, actor);
     return { store, products: await this.repo.list<Product>('products', [['ownerUid', actor.uid]]) };
   }
+  async ownProduct(actor: Actor, productId: string) {
+    const store = await seller(this.repo, actor);
+    const product = exists(await this.repo.get<Product>('products', productId), 'Product');
+    if (product.ownerUid !== actor.uid || product.storeId !== store.id) throw new ForbiddenException('You can only edit your own products.');
+    return { store, product };
+  }
   async saveStore(actor: Actor, body: Record<string, unknown>) {
     return this.repo.transaction(async tx => {
       const current = await seller(tx, actor);
@@ -34,7 +40,11 @@ export class CatalogService {
       tx.set('stores', actor.uid, updated); return updated;
     });
   }
-  async saveProduct(actor: Actor, body: Record<string, unknown>, productId: string = randomUUID()) {
+  async saveProduct(actor: Actor, body: Record<string, unknown>, productId?: string, rawKey?: unknown) {
+    const updating = !!productId;
+    const targetId = productId || randomUUID();
+    const key = rawKey === undefined ? null : text(rawKey, 'Save attempt key', 16, 120);
+    const reservation = key ? createHash('sha256').update(`product:${actor.uid}:${key}`).digest('hex') : null;
     if (typeof body.published !== 'boolean') throw new BadRequestException('Choose draft or published.');
     const fulfilment = body.fulfilment;
     if (!Array.isArray(fulfilment) || fulfilment.length === 0 || fulfilment.some(value => !['collection', 'local-delivery'].includes(value))) throw new BadRequestException('Choose at least one valid fulfilment option.');
@@ -44,12 +54,28 @@ export class CatalogService {
       stock: integer(body.stock, 'Stock', 0, 100000), photos: photos(body.photos), fulfilment: [...new Set(fulfilment)] as Fulfilment[], published: body.published,
     };
     if (fields.published && !fields.photos.length) throw new BadRequestException('Add a product photo before publishing.');
+    const signature = createHash('sha256').update(JSON.stringify({ fields, productId: productId || null, expectedUpdatedAt: body.expectedUpdatedAt ?? null, expectedStock: body.expectedStock ?? null })).digest('hex');
     return this.repo.transaction(async tx => {
       await seller(tx, actor);
-      const current = await tx.get<Product>('products', productId);
+      const previous = reservation ? await tx.get<{ signature: string; productId: string }>('idempotency', reservation) : null;
+      if (previous) {
+        if (previous.signature !== signature) throw new ConflictException('This save attempt was already used for different product details.');
+        const saved = exists(await tx.get<Product>('products', previous.productId), 'Product');
+        if (saved.ownerUid !== actor.uid) throw new ForbiddenException('You can only edit your own products.');
+        return saved;
+      }
+      const current = await tx.get<Product>('products', targetId);
       if (current && current.ownerUid !== actor.uid) throw new ForbiddenException('You can only edit your own products.');
-      const product: Product = { ...fields, id: productId, ownerUid: actor.uid, storeId: actor.uid, updatedAt: new Date().toISOString() };
-      tx.set('products', productId, product); return product;
+      if (updating) exists(current, 'Product');
+      // Legacy clients can still save; new editors provide their starting version and stock.
+      if (current && (body.expectedUpdatedAt !== undefined && body.expectedUpdatedAt !== current.updatedAt ||
+        body.expectedStock !== undefined && body.expectedStock !== current.stock)) {
+        throw new ConflictException('This product or its stock changed. Reload the latest details before saving.');
+      }
+      const product: Product = { ...fields, id: targetId, ownerUid: actor.uid, storeId: actor.uid, updatedAt: new Date().toISOString() };
+      tx.set('products', targetId, product);
+      if (reservation) tx.set('idempotency', reservation, { productId: targetId, signature });
+      return product;
     });
   }
 }
