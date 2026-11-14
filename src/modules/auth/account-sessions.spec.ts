@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AuthSessionRoutes } from './auth-session.routes';
 
-test('account loading verifies saved sessions concurrently and preserves picker order', async () => {
+void test('account loading verifies saved sessions concurrently and preserves picker order', async () => {
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   const release = new Map<string, (value: { uid: string; email: string }) => void>();
   Object.assign(controller, {
@@ -28,7 +28,7 @@ test('account loading verifies saved sessions concurrently and preserves picker 
   assert.deepEqual(result.accounts.map((account: { slot: number | null }) => account.slot), [null, 0, 1, 7]);
 });
 
-test('saved accounts remain available to the chooser after active-session sign-out', async () => {
+void test('saved accounts remain available to the chooser after active-session sign-out', async () => {
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   Object.assign(controller, {
     sessionSigner: { verify: (value: string) => value === 'saved-meta'
@@ -59,7 +59,7 @@ test('saved accounts remain available to the chooser after active-session sign-o
   }]);
 });
 
-test('expired or revoked saved sessions fail switching before modifying any browser cookies', async () => {
+void test('expired or revoked saved sessions fail switching before modifying any browser cookies', async () => {
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   const writes: string[] = [];
   const response: any = {
@@ -77,7 +77,7 @@ test('expired or revoked saved sessions fail switching before modifying any brow
   assert.equal(request.cookies.__session, 'current-session');
 });
 
-test('a successful saved-account switch preserves the previous session for switching back', async () => {
+void test('a successful saved-account switch preserves the previous session for switching back', async () => {
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   const cookies: Record<string, string> = {
     __session: 'alice-session', __session_meta: 'alice-meta',
@@ -87,8 +87,9 @@ test('a successful saved-account switch preserves the previous session for switc
   controller.getCookieOptions = () => ({ path: '/', httpOnly: true });
   controller.getUserProfile = async () => ({ phone: '+27821234567' });
   controller.firebaseAdmin = { auth: () => ({ verifySessionCookie: async (cookie: string, revoked: boolean) => {
-    assert.equal(cookie, 'bob-session');
     assert.equal(revoked, true);
+    if (cookie === 'alice-session') return { uid: 'alice', email: 'alice@example.test' };
+    assert.equal(cookie, 'bob-session');
     return { uid: 'bob', email: 'bob@example.test' };
   } }) };
   const switched = await controller.switchAccount({ slot: 0 }, { cookies }, {
@@ -102,7 +103,34 @@ test('a successful saved-account switch preserves the previous session for switc
   assert.equal(switched.phoneVerificationRequired, true);
 });
 
-test('account picker displays identity-matched metadata for current and saved accounts', async () => {
+void test('a saved account can be restored when no active session cookie exists', async () => {
+  const controller: any = Object.create(AuthSessionRoutes.prototype);
+  const written: Record<string, string> = {};
+  const cleared: string[] = [];
+  controller.getCookieOptions = () => ({ path: '/', httpOnly: true });
+  controller.getUserProfile = async () => ({});
+  controller.firebaseAdmin = { auth: () => ({ verifySessionCookie: async (cookie: string, checkRevoked: boolean) => {
+    assert.equal(cookie, 'bob-session');
+    assert.equal(checkRevoked, true);
+    return { uid: 'bob', email: 'bob@example.test' };
+  } }) };
+
+  const result = await controller.switchAccount({ slot: 2 }, {
+    cookies: {
+      __session_account_2: 'bob-session',
+      __session_account_meta_2: 'bob-meta',
+    },
+  }, {
+    cookie: (name: string, value: string) => { written[name] = value; },
+    clearCookie: (name: string) => { cleared.push(name); },
+  });
+
+  assert.equal(result.email, 'bob@example.test');
+  assert.deepEqual(written, { __session: 'bob-session', __session_meta: 'bob-meta' });
+  assert.deepEqual(cleared, ['__session_account_2', '__session_account_meta_2']);
+});
+
+void test('account picker displays identity-matched metadata for current and saved accounts', async () => {
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   const verified: string[] = [];
   Object.assign(controller, {
@@ -115,23 +143,24 @@ test('account picker displays identity-matched metadata for current and saved ac
         assert.equal(revoked, true);
         verified.push(cookie);
         if (cookie === 'expired') throw new Error('expired');
-        return { uid: 'bob', email: 'bob@example.test' };
+        return cookie === 'alice-session'
+          ? { uid: 'alice', email: 'alice@example.test' }
+          : { uid: 'bob', email: 'bob@example.test' };
       },
       getUser: () => assert.fail('matching display metadata requires no extra profile read'),
     }) },
   });
   const result = await controller.listAccounts({
-    user: { uid: 'alice', email: 'alice@example.test' },
-    cookies: { __session_meta: 'current', __session_account_0: 'bob-session', __session_account_meta_0: 'saved', __session_account_1: 'expired' },
+    cookies: { __session: 'alice-session', __session_meta: 'current', __session_account_0: 'bob-session', __session_account_meta_0: 'saved', __session_account_1: 'expired' },
   });
   assert.deepEqual(result.accounts, [
     { slot: null, email: 'alice@example.test', active: true, fullName: 'Alice', profilePicture: 'https://example.test/alice.jpg' },
     { slot: 0, email: 'bob@example.test', active: false, fullName: 'Bob', profilePicture: 'https://example.test/bob.jpg' },
   ]);
-  assert.deepEqual(verified, ['bob-session', 'expired']);
+  assert.deepEqual(verified, ['alice-session', 'bob-session', 'expired']);
 });
 
-test('mismatched metadata cannot supply another account identity; legacy sessions use verified user records', async () => {
+void test('mismatched metadata cannot supply another account identity; legacy sessions use verified user records', async () => {
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   let fail = false;
   Object.assign(controller, {
@@ -148,7 +177,7 @@ test('mismatched metadata cannot supply another account identity; legacy session
   assert.deepEqual((await controller.listAccounts(req)).accounts, [{ slot: null, email: 'alice@example.test', active: true }]);
 });
 
-test('removing one saved account clears only its two cookies and rejects invalid slots', async () => {
+void test('removing one saved account clears only its two cookies and rejects invalid slots', async () => {
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   controller.getCookieOptions = () => ({ path: '/', httpOnly: true });
   const cleared: string[] = [];
