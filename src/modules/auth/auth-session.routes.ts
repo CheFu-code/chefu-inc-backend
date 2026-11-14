@@ -154,6 +154,7 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     if (!targetCookie) throw new BadRequestException('Account slot is empty.');
     const targetMeta = request.cookies?.[accountSessionSlotMetaCookieName(slot)];
     const target = await this.firebaseAdmin.auth().verifySessionCookie(targetCookie, true);
+    const targetPhone = phoneContact(await this.getUserProfile(target.email, request));
     const currentCookie = request.cookies?.[SESSION_COOKIE_NAME];
     const currentMeta = request.cookies?.[SESSION_META_COOKIE_NAME];
     if (currentCookie) {
@@ -167,7 +168,7 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     response.cookie(SESSION_COOKIE_NAME, targetCookie, this.getCookieOptions());
     if (targetMeta) response.cookie(SESSION_META_COOKIE_NAME, targetMeta, this.getCookieOptions());
     else response.clearCookie(SESSION_META_COOKIE_NAME, this.getCookieOptions());
-    return { ok: true, email: target.email || '', ...phoneContact(await this.getUserProfile(target.email)) };
+    return { ok: true, email: target.email || '', ...targetPhone };
   }
 
   @Delete('accounts/:slot')
@@ -232,7 +233,7 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     }
 
     const startedAt = performance.now();
-    const profile = await this.getUserProfile(request.user.email);
+    const profile = await this.getUserProfile(request.user.email, request);
     const profileReadDuration = performance.now() - startedAt;
     const detected = this.getDetectedCountry(request);
     const needsCountryUpdate = shouldRefreshDetectedCountry(

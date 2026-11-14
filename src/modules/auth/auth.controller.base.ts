@@ -1,5 +1,6 @@
 import { sharedGender } from './shared-profile';
 import { phoneContact } from './phone-contact';
+import { readAuthUserProfile } from './auth-user-profile';
 import {
   BadGatewayException,
   BadRequestException,
@@ -758,7 +759,7 @@ export class AuthControllerBase {
     ];
   }
 
-  protected async getUserProfile(email?: string) {
+  protected async getUserProfile(email?: string, request?: Request) {
     if (!email) {
       return {
         fullname: '',
@@ -797,13 +798,7 @@ export class AuthControllerBase {
       };
     }
 
-    const snapshot = await this.firebaseAdmin
-      .db()
-      .collection('users')
-      .doc(email)
-      .get();
-
-    const data = snapshot.data() || {};
+    const data = await readAuthUserProfile(this.firebaseAdmin, email, request);
     const fullname = this.stringValue(data.fullname);
     const roles = data.roles;
     const emailPreferences = this.normalizeEmailPreferences(

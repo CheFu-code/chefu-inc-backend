@@ -433,6 +433,11 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
                         firstName: FieldValue.delete(),
                         lastName: FieldValue.delete(),
                         phone: FieldValue.delete(),
+                        phoneNumber: FieldValue.delete(),
+                        phoneVerifiedAt: FieldValue.delete(),
+                        phoneVerifiedFor: FieldValue.delete(),
+                        phoneContactSchemaVersion: FieldValue.delete(),
+                        phoneMigrationConflict: FieldValue.delete(),
                         website: FieldValue.delete(),
                         location: FieldValue.delete(),
                         profilePicture: FieldValue.delete(),
@@ -552,6 +557,8 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
             db.collection('auth_trusted_device_challenges').doc(uid).delete(),
             db.collection('auth_trusted_device_send_limits').doc(uid).delete(),
             db.collection('auth_trusted_device_state').doc(uid).delete(),
+            db.collection('phone_verification_challenges').doc(createHash('sha256').update(uid).digest('hex')).delete(),
+            db.collection('phone_verification_verified').doc(createHash('sha256').update(uid).digest('hex')).delete(),
         ]);
     }
 

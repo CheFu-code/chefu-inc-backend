@@ -25,13 +25,12 @@ export class PhoneVerificationService {
   async status(uid: string, contactEmail?: string) {
     this.identity(uid);
     const receipt = await this.stored(() => this.records.get<VerifiedPhone>('verified', uid));
+    if (receipt?.uid !== uid) return { verified: false as const };
     if (contactEmail) {
       const contact = phoneContact(await this.stored(() => this.records.getContact(contactEmail)));
       if (contact.phone !== receipt?.phone || !contact.phoneVerifiedAt) return { verified: false as const };
     }
-    return receipt?.uid === uid
-      ? { verified: true as const, phone: receipt.phone, verifiedAt: receipt.verifiedAt }
-      : { verified: false as const };
+    return { verified: true as const, phone: receipt.phone, verifiedAt: receipt.verifiedAt };
   }
   async sendCode(uid: string, input: unknown, ip = 'unknown', contactEmail?: string) {
     this.identity(uid); this.policy.assertEnabled();

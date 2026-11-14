@@ -181,6 +181,20 @@ test('approval saves the authenticated contact with the receipt; wrong codes can
   assert.equal(await repo.get('contacts', 'other@example.test'), null);
 });
 
+test('an old receipt cannot verify a newly edited profile or bypass a fresh OTP', async () => {
+  const { service, provider, repo } = setup();
+  const email = 'owner@example.test';
+  await service.sendCode('owner', phone, 'ip', email);
+  provider.approved = true;
+  await service.checkCode('owner', phone, '123456', 'ip', email);
+  assert.equal((await service.status('owner', email)).verified, true);
+  await repo.transaction(async tx => tx.set('contacts', email, { phone: '+27831234567', phoneVerifiedAt: null }));
+  assert.equal((await service.status('owner', email)).verified, false);
+  await service.sendCode('owner', phone, 'ip', email);
+  assert.equal(provider.sends, 2);
+  assert.equal((await service.status('owner', email)).verified, false);
+});
+
 test('the controller takes contact identity only from the authenticated session', async () => {
   let received: unknown[] = [];
   const service = { checkCode: async (...args: unknown[]) => { received = args; return { verified: true }; } };

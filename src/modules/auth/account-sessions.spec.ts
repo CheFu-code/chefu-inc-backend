@@ -54,12 +54,13 @@ test('a successful saved-account switch preserves the previous session for switc
   };
   const written: Record<string, string> = {};
   controller.getCookieOptions = () => ({ path: '/', httpOnly: true });
+  controller.getUserProfile = async () => ({ phone: '+27821234567' });
   controller.firebaseAdmin = { auth: () => ({ verifySessionCookie: async (cookie: string, revoked: boolean) => {
     assert.equal(cookie, 'bob-session');
     assert.equal(revoked, true);
     return { uid: 'bob', email: 'bob@example.test' };
   } }) };
-  await controller.switchAccount({ slot: 0 }, { cookies }, {
+  const switched = await controller.switchAccount({ slot: 0 }, { cookies }, {
     cookie: (name: string, value: string) => { written[name] = value; },
     clearCookie: () => assert.fail('valid session metadata must be preserved'),
   });
@@ -67,6 +68,7 @@ test('a successful saved-account switch preserves the previous session for switc
     __session_account_0: 'alice-session', __session_account_meta_0: 'alice-meta',
     __session: 'bob-session', __session_meta: 'bob-meta',
   });
+  assert.equal(switched.phoneVerificationRequired, true);
 });
 
 test('account picker displays identity-matched metadata for current and saved accounts', async () => {

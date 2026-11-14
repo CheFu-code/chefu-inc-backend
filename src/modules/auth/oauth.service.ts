@@ -686,7 +686,7 @@ export class OAuthService {
     }
 
     await this.securityEvents.assertTokenNotRevoked(claims);
-
+    if (claims.email) assertPhoneVerified(await readAuthUserProfile(this.firebaseAdmin, claims.email));
     return claims as OAuthAccessTokenClaims;
   }
 

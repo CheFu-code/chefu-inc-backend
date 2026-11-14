@@ -403,3 +403,14 @@ test('trusted-device verification overlaps only the final profile read, never th
   await pending;
   assert.equal(state.res.cookies.length, 2);
 });
+
+test('password and passkey session completion derives phone requirements from the existing profile load', async () => {
+  const state = sessionSetup();
+  let reads = 0;
+  state.controller.getUserProfile = async () => {
+    reads++; return { roles: ['user'], fullname: 'Alice', securityEmailsEnabled: false, phone: '+27821234567' };
+  };
+  const result = await state.signIn();
+  assert.equal(result.phoneVerificationRequired, true);
+  assert.equal(reads, 1);
+});

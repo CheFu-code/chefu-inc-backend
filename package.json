@@ -10,7 +10,7 @@
   },
   "scripts": {
     "migrate:phone-contacts": "tsx --env-file-if-exists=.env scripts/migrate-phone-contacts.ts",
-    "test:phone-verification": "node --import tsx --test src/modules/phone-verification/*.spec.ts",
+    "test:phone-verification": "node --import tsx --test src/modules/phone-verification/*.spec.ts scripts/migrate-phone-contacts.spec.ts",
     "test:shopyethu": "node --import tsx --test src/modules/shopyethu/*.spec.ts",
     "test:checkout": "node --import tsx --test src/modules/store/*.spec.ts scripts/migrate-store-payments.spec.ts",
     "migrate:store": "tsx --env-file-if-exists=.env scripts/migrate-store-payments.ts",
