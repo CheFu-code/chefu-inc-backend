@@ -1,4 +1,5 @@
 import { authStage, shouldRefreshDetectedCountry } from './auth-performance';
+import { phoneContact } from './phone-contact';
 import {
   BadGatewayException,
   BadRequestException,
@@ -68,13 +69,13 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       return { authenticated: false };
     }
     const appId = this.resolveSessionAppId(chefuApp);
+    const profile = await this.getUserProfile(decoded.email);
     if (appId === 'admin') {
-      const profile = await this.getUserProfile(decoded.email);
       if (!profile.roles.some(role => role.trim().toLowerCase() === ADMIN_ROLE)) {
         return { authenticated: false };
       }
     }
-    return { authenticated: true };
+    return { authenticated: true, ...phoneContact(profile) };
   }
 
   @Get('accounts')
@@ -166,7 +167,7 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     response.cookie(SESSION_COOKIE_NAME, targetCookie, this.getCookieOptions());
     if (targetMeta) response.cookie(SESSION_META_COOKIE_NAME, targetMeta, this.getCookieOptions());
     else response.clearCookie(SESSION_META_COOKIE_NAME, this.getCookieOptions());
-    return { ok: true, email: target.email || '' };
+    return { ok: true, email: target.email || '', ...phoneContact(await this.getUserProfile(target.email)) };
   }
 
   @Delete('accounts/:slot')
@@ -231,13 +232,7 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
     }
 
     const startedAt = performance.now();
-    // The Firebase Auth lookup is only used to backfill a missing phone.
-    // Existing phone values already bypass synchronization, so avoid an
-    // unnecessary upstream API call on every account-page visit.
     const profile = await this.getUserProfile(request.user.email);
-    const authUser = !profile.phone
-      ? await this.firebaseAdmin.auth().getUser(request.user.uid)
-      : null;
     const profileReadDuration = performance.now() - startedAt;
     const detected = this.getDetectedCountry(request);
     const needsCountryUpdate = shouldRefreshDetectedCountry(
@@ -245,24 +240,13 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       profile.detectedCountryCode,
       profile.detectedCountryUpdatedAt,
     );
-    const firebasePhone = authUser?.phoneNumber || null;
-    const needsPhoneSync = !profile.phone && Boolean(firebasePhone);
-    // Independent merge writes can overlap. Neither is skipped when required.
-    const [countrySaved] = await Promise.all([
-      needsCountryUpdate
-        ? this.recordServerDetectedCountry(request.user.email, request)
-        : Promise.resolve(false),
-      needsPhoneSync
-        ? this.firebaseAdmin.db().collection('users').doc(request.user.email)
-          .set({ phone: firebasePhone }, { merge: true })
-        : Promise.resolve(),
-    ]);
+    const countrySaved = needsCountryUpdate
+      ? await this.recordServerDetectedCountry(request.user.email, request) : false;
     if (countrySaved && detected) {
       profile.detectedCountryCode = detected.code;
       profile.detectedCountrySource = detected.source;
       profile.detectedCountryUpdatedAt = new Date().toISOString();
     }
-    if (needsPhoneSync) profile.phone = firebasePhone || '';
     if (response && !response.headersSent) {
       response.setHeader('Server-Timing',
         `account_profile;dur=${profileReadDuration.toFixed(1)}, account_sync;dur=${(performance.now() - startedAt - profileReadDuration).toFixed(1)}`);
@@ -901,6 +885,7 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
       trustDeviceResendCooldownSeconds,
       trustDeviceResendsRemaining,
       trustDeviceRequiresAuthenticator,
+      ...phoneContact(userProfile),
     };
   }
 

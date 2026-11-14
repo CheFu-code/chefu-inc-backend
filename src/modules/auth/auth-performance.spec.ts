@@ -10,11 +10,12 @@ import { AuthOnboardingRoutes } from './auth-onboarding.routes';
 import { AuthControllerBase } from './auth.controller.base';
 import { ResendService } from '../email/resend.service';
 import { afterSuccessfulAuthResponse, authStage, shouldRefreshDetectedCountry } from './auth-performance';
+import { phoneContact } from './phone-contact';
 
 const logger = { log() {}, warn() {}, error() {} };
 const request: any = { ip: '127.0.0.1', headers: {}, cookies: {}, socket: {} };
 
-test('session reuse validates the real cookie with revocation checks and never loads ordinary profiles', async () => {
+test('session reuse validates the cookie and reads current phone state without writes', async () => {
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   const calls: unknown[][] = [];
   let decoded: any = { uid: 'uid', email: 'alice@example.test', email_verified: true };
@@ -25,13 +26,13 @@ test('session reuse validates the real cookie with revocation checks and never l
       return decoded;
     } }) },
     resolveSessionAppId: () => 'root',
-    getUserProfile: () => assert.fail('ordinary reuse must not load or synchronize profiles'),
+    getUserProfile: async () => ({}),
   });
   const res = response();
   const check = (cookie?: string) => controller.getSessionStatus('root', { cookies: { __session: cookie } }, res);
   assert.deepEqual(await check(), { authenticated: false });
   assert.equal(calls.length, 0);
-  assert.deepEqual(await check('signed-cookie'), { authenticated: true });
+  assert.deepEqual(await check('signed-cookie'), { authenticated: true, ...phoneContact({}) });
   assert.deepEqual(calls, [['signed-cookie', true]]);
   assert.equal(res.getHeader('Cache-Control'), 'private, no-store');
   assert.equal(res.cookies.length, 0, 'reuse never renews cookies');
@@ -52,7 +53,7 @@ test('session reuse checks current admin roles without trusting session metadata
   const req = { cookies: { __session: 'cookie', __session_meta: 'forged-admin' } };
   assert.deepEqual(await controller.getSessionStatus('admin', req, response()), { authenticated: false });
   roles = ['admin'];
-  assert.deepEqual(await controller.getSessionStatus('admin', req, response()), { authenticated: true });
+  assert.deepEqual(await controller.getSessionStatus('admin', req, response()), { authenticated: true, ...phoneContact({}) });
 });
 
 test('OAuth independently revalidates reused cookies and only issues codes for registered PKCE requests', async () => {
@@ -69,7 +70,7 @@ test('OAuth independently revalidates reused cookies and only issues codes for r
         if (revoked) throw new Error('revoked');
         return { uid: 'uid', email: 'alice@example.test', auth_time: 123 };
       } }),
-      db: () => ({ collection: () => ({ doc: () => ({ set: async (data: unknown) => { codes.push(data); } }) }) }),
+      db: () => ({ collection: () => ({ doc: () => ({ get: async () => ({ data: () => ({}) }), set: async (data: unknown) => { codes.push(data); } }) }) }),
     },
   });
   const params = { client_id: client.id, redirect_uri: client.redirectUris[0], response_type: 'code', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256', scope: 'openid profile', state: 'state-that-is-long-enough', nonce: 'nonce-that-is-long-enough' };
@@ -343,7 +344,7 @@ test('/auth/me skips Firebase Auth lookup when the profile already has a phone',
   assert.equal(lookups, 0);
 });
 
-test('/auth/me still fetches Firebase user and synchronizes a missing phone', async () => {
+test('/auth/me never resurrects a removed phone from Firebase Authentication', async () => {
   const writes: unknown[] = [];
   let lookups = 0;
   const controller: any = Object.create(AuthSessionRoutes.prototype);
@@ -360,9 +361,9 @@ test('/auth/me still fetches Firebase user and synchronizes a missing phone', as
   });
   const req = { user: { uid: 'uid', email: 'alice@example.test', roles: ['user'] } };
   const result = await controller.getCurrentUser(req, response());
-  assert.equal(lookups, 1);
-  assert.equal(result.profile.phone, '+27123456789');
-  assert.deepEqual(writes, [{ phone: '+27123456789' }]);
+  assert.equal(lookups, 0);
+  assert.equal(result.profile.phone, '');
+  assert.deepEqual(writes, []);
 });
 
 test('/auth/me skips redundant writes but updates changed country using the existing read', async () => {

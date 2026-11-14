@@ -1,4 +1,5 @@
 import { sharedGender } from './shared-profile';
+import { phoneContact } from './phone-contact';
 import {
   BadGatewayException,
   BadRequestException,
@@ -813,7 +814,7 @@ export class AuthControllerBase {
       gender: sharedGender(data.gender) ?? null,
       firstName: this.stringValue(data.firstName),
       lastName: this.stringValue(data.lastName),
-      phone: this.stringValue(data.phone),
+      ...phoneContact(data),
       website: this.stringValue(data.website),
       location: this.stringValue(data.location),
       profilePicture: this.stringValue(data.profilePicture),
@@ -1590,34 +1591,6 @@ export class AuthControllerBase {
 
   protected getClientIp(request: Request) {
     return getTrustedClientIp(request);
-  }
-
-  protected normalizeFirebasePhoneNumber(input: string): string | null {
-    const raw = input.trim();
-    if (!raw) {
-      return null;
-    }
-
-    const compact = raw.replace(/\s+/g, '');
-    const digitsOnly = compact.replace(/\D/g, '');
-
-    if (!digitsOnly || digitsOnly.length < 8 || digitsOnly.length > 15) {
-      return null;
-    }
-
-    if (compact.startsWith('+')) {
-      return `+${digitsOnly}`;
-    }
-
-    if (compact.startsWith('27')) {
-      return `+${digitsOnly}`;
-    }
-
-    if (compact.startsWith('0')) {
-      return `+27${digitsOnly.slice(1)}`;
-    }
-
-    return null;
   }
 
   protected async enforceAuthRateLimit(

@@ -29,6 +29,7 @@ import { auditRequestContext, hashForAudit } from '../../common/security-audit';
 import { AdminGuard } from './admin.guard';
 import { ProfileUpdateBody } from './auth-controller.types';
 import { AuthSessionRoutes } from './auth-session.routes';
+import { saveContactProfile } from './phone-contact';
 import { TRUSTED_DEVICE_CHALLENGE_COOKIE_NAME, TRUSTED_DEVICE_CHALLENGE_TTL_MS, TRUSTED_DEVICE_CODE_MAX_ATTEMPTS, TRUSTED_DEVICE_COOKIE_NAME } from './auth.controller.base';
 import { AuthGuard } from './auth.guard';
 import { AuthenticatedUser } from './authenticated-user';
@@ -1099,7 +1100,6 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
         const authUpdates: {
             displayName?: string;
             photoURL?: string | null;
-            phoneNumber?: string;
         } = {};
 
         if (body.fullname !== undefined) {
@@ -1133,24 +1133,6 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
             updates.fullname = fullname;
             updates.name = FieldValue.delete();
             authUpdates.displayName = fullname;
-        }
-
-        if (body.phone !== undefined) {
-            const phone = body.phone.trim();
-
-            if (phone && phone.length > 30) {
-                throw new BadRequestException('Phone number must be 30 characters or less.');
-            }
-
-            updates.phone = phone || null;
-
-            const firebasePhoneNumber = phone
-                ? this.normalizeFirebasePhoneNumber(phone)
-                : null;
-
-            if (firebasePhoneNumber) {
-                authUpdates.phoneNumber = firebasePhoneNumber;
-            }
         }
 
         if (body.gender !== undefined) {
@@ -1286,11 +1268,7 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
             }
         }
 
-        await this.firebaseAdmin
-            .db()
-            .collection('users')
-            .doc(user.email)
-            .set(updates, { merge: true });
+        await saveContactProfile(this.firebaseAdmin, user.email, updates, body.phone);
 
         const profile = await this.getUserProfile(user.email);
         const meta = this.buildSessionMeta({

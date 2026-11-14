@@ -58,6 +58,8 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         ? Object.fromEntries(
             [
               'attemptsRemaining',
+              'code',
+              'phoneVerificationRequired',
               'mfaInfo',
               'mfaPendingCredential',
               'mfaRequired',

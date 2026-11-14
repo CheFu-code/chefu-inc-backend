@@ -6,6 +6,6 @@
     "incremental": false,
     "declaration": false
   },
-  "include": ["scripts/migrate-cloudence-private.ts", "scripts/migrate-store-payments.ts"],
+  "include": ["scripts/migrate-cloudence-private.ts", "scripts/migrate-store-payments.ts", "scripts/migrate-phone-contacts.ts"],
   "exclude": ["node_modules", "dist", "dist-migrations", "**/*.spec.ts"]
 }

@@ -39,7 +39,8 @@ function setup(overrides: Record<string, string | undefined> = {}) {
   };
   const records: PhoneRecords = {
     get: repo.get.bind(repo),
-    transaction: work => repo.transaction(tx => work({ ...tx, setContact: (email, value) => tx.set('contacts', email, { phone: value }) })),
+    getContact: async email => await repo.get<Record<string, unknown>>('contacts', email) || {},
+    transaction: work => repo.transaction(tx => work({ ...tx, setContact: (email, value, verifiedAt) => tx.set('contacts', email, { phone: value, phoneVerifiedAt: verifiedAt, phoneVerifiedFor: value }) })),
   };
   return { repo, provider, policy, reservations, service: new PhoneVerificationService(records, policy, provider) };
 }
@@ -175,7 +176,8 @@ test('approval saves the authenticated contact with the receipt; wrong codes can
   assert.equal(await repo.get('contacts', 'owner@example.test'), null);
   provider.approved = true;
   await service.checkCode('owner', phone, '123456', 'ip', 'owner@example.test');
-  assert.deepEqual(await repo.get('contacts', 'owner@example.test'), { phone });
+  const contact = await repo.get<any>('contacts', 'owner@example.test');
+  assert.equal(contact.phone, phone); assert.equal(contact.phoneVerifiedFor, phone); assert.ok(contact.phoneVerifiedAt);
   assert.equal(await repo.get('contacts', 'other@example.test'), null);
 });
 
@@ -201,9 +203,12 @@ test('production storage merges only contact fields in the same transaction as t
   const records = new PhoneVerificationRecords({ db: () => db } as unknown as FirebaseAdminService);
   await records.transaction(async tx => {
     tx.set('verified', 'owner', { uid: 'owner', phone });
-    tx.setContact('owner@example.test', phone);
+    tx.setContact('owner@example.test', phone, '2026-01-01T00:00:00.000Z');
   });
   assert.equal(transactions, 1);
   assert.match(writes[0].path, /^phone_verification_verified\//);
-  assert.deepEqual(writes[1], { path: 'users/owner@example.test', data: { phone }, options: { merge: true } });
+  assert.equal(writes[1].path, 'users/owner@example.test');
+  assert.equal(writes[1].data.phone, phone); assert.equal(writes[1].data.phoneVerifiedFor, phone);
+  assert.equal(writes[1].data.phoneVerifiedAt, '2026-01-01T00:00:00.000Z');
+  assert.deepEqual(writes[1].options, { merge: true });
 });

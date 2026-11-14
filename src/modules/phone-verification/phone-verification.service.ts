@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { PhoneVerificationRecords, type PhoneChallenge, type PhoneRecords, type VerifiedPhone } from './phone-verification.records';
 import { PHONE_LEASE_MS, PHONE_MAX_CHECKS, PHONE_TTL_MS, phoneLimit, PhoneVerificationPolicy } from './phone-verification.policy';
 import { TwilioVerificationProvider, type VerificationProvider } from './phone-verification.provider';
+import { phoneContact } from '../auth/phone-contact';
 
 @Injectable()
 export class PhoneVerificationService {
@@ -21,17 +22,21 @@ export class PhoneVerificationService {
       throw new ServiceUnavailableException('Phone verification storage is temporarily unavailable.');
     }
   }
-  async status(uid: string) {
+  async status(uid: string, contactEmail?: string) {
     this.identity(uid);
     const receipt = await this.stored(() => this.records.get<VerifiedPhone>('verified', uid));
+    if (contactEmail) {
+      const contact = phoneContact(await this.stored(() => this.records.getContact(contactEmail)));
+      if (contact.phone !== receipt?.phone || !contact.phoneVerifiedAt) return { verified: false as const };
+    }
     return receipt?.uid === uid
       ? { verified: true as const, phone: receipt.phone, verifiedAt: receipt.verifiedAt }
       : { verified: false as const };
   }
-  async sendCode(uid: string, input: unknown, ip = 'unknown') {
+  async sendCode(uid: string, input: unknown, ip = 'unknown', contactEmail?: string) {
     this.identity(uid); this.policy.assertEnabled();
     const phone = this.policy.normalise(input);
-    const verified = await this.status(uid);
+    const verified = await this.status(uid, contactEmail);
     if (verified.verified && verified.phone === phone) return { ...verified, resendAfterSeconds: 0, expiresInSeconds: 0 };
     this.provider.assertConfigured();
     await this.policy.send(uid, phone, ip);
@@ -65,7 +70,7 @@ export class PhoneVerificationService {
     const phone = this.policy.normalise(input);
     if (typeof code !== 'string' || !/^\d{4,10}$/.test(code)) throw new BadRequestException('Enter the numeric code from your message.');
     await this.policy.check(uid, ip);
-    const verified = await this.status(uid);
+    const verified = await this.status(uid, contactEmail);
     if (verified.verified && verified.phone === phone) return verified;
     this.provider.assertConfigured();
     const now = Date.now(), checkToken = randomUUID();
@@ -102,7 +107,7 @@ export class PhoneVerificationService {
       tx.set('challenges', current.uid, next);
       if (receipt) {
         tx.set('verified', current.uid, receipt);
-        if (contactEmail) tx.setContact(contactEmail, receipt.phone);
+        if (contactEmail) tx.setContact(contactEmail, receipt.phone, receipt.verifiedAt);
       }
       return receipt;
     }));

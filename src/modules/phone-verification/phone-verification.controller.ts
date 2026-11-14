@@ -14,13 +14,13 @@ export class PhoneVerificationController {
 
   @Get('status')
   @Header('Cache-Control', 'private, no-store')
-  status(@Req() req: PhoneRequest) { return this.verification.status(req.user.uid); }
+  status(@Req() req: PhoneRequest) { return this.verification.status(req.user.uid, req.user.email); }
 
   @Post('send')
   @HttpCode(200)
   @Header('Cache-Control', 'private, no-store')
   send(@Req() req: PhoneRequest, @Body() dto: SendCodeDto, @Res({ passthrough: true }) response: Response) {
-    return this.execute(response, () => this.verification.sendCode(req.user.uid, dto.phone, getClientIp(req)));
+    return this.execute(response, () => this.verification.sendCode(req.user.uid, dto.phone, getClientIp(req), req.user.email));
   }
 
   @Post('check')
