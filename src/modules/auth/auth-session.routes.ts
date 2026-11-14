@@ -79,7 +79,6 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
   }
 
   @Get('accounts')
-  @UseGuards(AuthGuard)
   async listAccounts(
     @Req() request: Request & { user?: AuthenticatedUser },
   ) {
@@ -963,11 +962,13 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
   @HttpCode(200)
   async clearSession(
     @Query('global') globalLogout: string | undefined,
+    @Query('current') currentLogout: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
     const revokeGlobally =
       globalLogout === 'true' || globalLogout === '1' || globalLogout === 'yes';
+    const clearCurrentOnly = !revokeGlobally && currentLogout === 'true';
     let revocation = { revoked: false, uidHash: null as string | null, emailHash: null as string | null };
     let revocationError: unknown;
 
@@ -989,11 +990,13 @@ export abstract class AuthSessionRoutes extends AuthControllerBase {
         request,
         revokeGlobally ? 'sessions_revoked' : 'signed_out',
       );
-      this.clearSessionCookies(response);
+      if (clearCurrentOnly) this.clearCurrentSessionCookies(response);
+      else this.clearSessionCookies(response);
       this.logger.log(
         JSON.stringify({
           event: 'auth_session_cleared',
           global: revokeGlobally,
+          currentOnly: clearCurrentOnly,
           revoked: revocation.revoked,
           uidHash: revocation.uidHash,
           emailHash: revocation.emailHash,

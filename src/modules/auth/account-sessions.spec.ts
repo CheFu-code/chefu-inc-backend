@@ -28,6 +28,37 @@ test('account loading verifies saved sessions concurrently and preserves picker 
   assert.deepEqual(result.accounts.map((account: { slot: number | null }) => account.slot), [null, 0, 1, 7]);
 });
 
+test('saved accounts remain available to the chooser after active-session sign-out', async () => {
+  const controller: any = Object.create(AuthSessionRoutes.prototype);
+  Object.assign(controller, {
+    sessionSigner: { verify: (value: string) => value === 'saved-meta'
+      ? { uid: 'bob', email: 'bob@example.test', name: 'Bob', profilePicture: 'https://example.test/bob.jpg' }
+      : null },
+    firebaseAdmin: { auth: () => ({
+      verifySessionCookie: async (cookie: string, checkRevoked: boolean) => {
+        assert.equal(cookie, 'saved-session');
+        assert.equal(checkRevoked, true);
+        return { uid: 'bob', email: 'bob@example.test' };
+      },
+      getUser: () => assert.fail('matching metadata should avoid a Firebase user lookup'),
+    }) },
+  });
+
+  const result = await controller.listAccounts({
+    cookies: {
+      __session_account_0: 'saved-session',
+      __session_account_meta_0: 'saved-meta',
+    },
+  });
+  assert.deepEqual(result.accounts, [{
+    slot: 0,
+    email: 'bob@example.test',
+    fullName: 'Bob',
+    profilePicture: 'https://example.test/bob.jpg',
+    active: false,
+  }]);
+});
+
 test('expired or revoked saved sessions fail switching before modifying any browser cookies', async () => {
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   const writes: string[] = [];
@@ -128,4 +159,34 @@ test('removing one saved account clears only its two cookies and rejects invalid
     await assert.rejects(controller.removeAccount(slot, response), /Invalid account slot/);
   }
   assert.equal(cleared.length, 2);
+});
+
+void test('current-session sign-out clears only active-session cookies and preserves saved accounts', async () => {
+  const controller: any = Object.create(AuthSessionRoutes.prototype);
+  const cleared: string[] = [];
+  const expired: string[] = [];
+  let activity: string | undefined;
+  Object.assign(controller, {
+    getClearCookieOptionsList: () => [{ path: '/', httpOnly: true }],
+    recordSignedOutActivity: async (_request: unknown, event: string) => { activity = event; },
+    logger: { log() {} },
+  });
+  const result = await controller.clearSession(undefined, 'true', {
+    method: 'DELETE', path: '/auth/session', headers: {},
+    socket: { remoteAddress: '127.0.0.1' },
+    cookies: {
+      __session: 'active-session',
+      __session_meta: 'active-meta',
+      __session_account_0: 'saved-session',
+      __session_account_meta_0: 'saved-meta',
+    },
+  }, {
+    clearCookie: (name: string) => cleared.push(name),
+    cookie: (name: string) => expired.push(name),
+  });
+
+  assert.deepEqual(result, { ok: true, revoked: false });
+  assert.equal(activity, 'signed_out');
+  assert.deepEqual(cleared, ['__session', '__session_meta']);
+  assert.deepEqual(expired, ['__session', '__session_meta']);
 });

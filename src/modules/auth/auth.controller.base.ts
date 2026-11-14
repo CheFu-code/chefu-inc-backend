@@ -360,6 +360,19 @@ export class AuthControllerBase {
         }
     }
 
+    protected clearCurrentSessionCookies(response: Response) {
+        for (const options of this.getClearCookieOptionsList()) {
+            for (const name of [SESSION_COOKIE_NAME, SESSION_META_COOKIE_NAME]) {
+                response.clearCookie(name, options);
+                response.cookie(name, '', {
+                    ...options,
+                    expires: new Date(0),
+                    maxAge: 0,
+                });
+            }
+        }
+    }
+
     protected async isTrustedAuthDevice(uid: string, request: Request) {
         const token = request.cookies?.[TRUSTED_DEVICE_COOKIE_NAME];
         if (typeof token !== 'string' || token.length < 32) return false;
