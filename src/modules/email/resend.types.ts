@@ -4,6 +4,7 @@ export interface SignInNotificationData {
     provider: string;
     deviceInfo?: string;
     ipAddress?: string;
+    country?: string;
     timestamp: Date;
     appId?: string;
 }

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { CHEFU_APPS } from '../apps/app-registry';
 import { ResendService } from './resend.service';
 
-test('sign-in alerts use registered app names in the sender, subject and template', async t => {
+void test('sign-in alerts use registered app names in the sender, subject and template', async t => {
     const requests: Record<string, any>[] = [];
     t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
         requests.push(JSON.parse(String(init.body)));
@@ -26,6 +26,7 @@ test('sign-in alerts use registered app names in the sender, subject and templat
     for (const { appId, name } of cases) {
         await service.sendSignInNotification({
             email: 'buyer@example.test', provider: 'password',
+            country: 'South Africa',
             timestamp: new Date('2026-11-14T10:00:00Z'), appId,
         });
         const payload = requests.at(-1)!;
@@ -34,6 +35,8 @@ test('sign-in alerts use registered app names in the sender, subject and templat
         assert.equal(payload.template.id, 'sign-in-alert');
         assert.equal(payload.template.variables.APP_NAME, name, appId);
         assert.equal(payload.template.variables.appName, name, appId);
+        assert.equal(payload.template.variables.COUNTRY, 'South Africa', appId);
+        assert.equal(payload.template.variables.country, 'South Africa', appId);
     }
 
     Object.assign(service, {
@@ -45,4 +48,5 @@ test('sign-in alerts use registered app names in the sender, subject and templat
     });
     assert.equal(requests.at(-1)!.from, 'ShopYethu Security <security@chefu.co.za>');
     assert.equal(requests.at(-1)!.template.variables.APP_NAME, 'ShopYethu');
+    assert.equal(requests.at(-1)!.template.variables.COUNTRY, 'Unknown country');
 });

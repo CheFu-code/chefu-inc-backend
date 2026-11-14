@@ -8,6 +8,7 @@ import {
     UnauthorizedException
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import { Country } from 'country-state-city';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import {
     createHash,
@@ -1358,12 +1359,18 @@ export class AuthControllerBase {
                 return;
             }
 
+            const countryCode = this.getDetectedCountry(request)?.code;
+            const country = countryCode
+                ? Country.getCountryByCode(countryCode)?.name || countryCode
+                : undefined;
+
             await this.resendService.sendSignInNotification({
                 email,
                 userName,
                 provider,
                 deviceInfo: request.headers['user-agent'] || undefined,
                 ipAddress: this.getClientIp(request),
+                country,
                 timestamp: new Date(),
                 appId,
             });
