@@ -11,7 +11,8 @@ import { TestRepository } from '../shopyethu/marketplace.testing';
 import { PhoneVerificationController } from './phone-verification.controller';
 import { CheckCodeDto } from './phone-verification.dto';
 import { PhoneVerificationPolicy, PHONE_MAX_CHECKS } from './phone-verification.policy';
-import type { PhoneChallenge } from './phone-verification.records';
+import { PhoneVerificationRecords, type PhoneChallenge, type PhoneRecords } from './phone-verification.records';
+import type { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { PhoneVerificationService } from './phone-verification.service';
 
 const phone = '+27821234567';
@@ -36,7 +37,11 @@ function setup(overrides: Record<string, string | undefined> = {}) {
       return provider.approved;
     },
   };
-  return { repo, provider, policy, reservations, service: new PhoneVerificationService(repo, policy, provider) };
+  const records: PhoneRecords = {
+    get: repo.get.bind(repo),
+    transaction: work => repo.transaction(tx => work({ ...tx, setContact: (email, value) => tx.set('contacts', email, { phone: value }) })),
+  };
+  return { repo, provider, policy, reservations, service: new PhoneVerificationService(records, policy, provider) };
 }
 
 test('all phone endpoints require the central auth guard; codes must be numeric', async () => {
@@ -161,4 +166,44 @@ test('provider approval is not reported as verified when receipt storage fails',
     assert.equal(cause.message.includes('Private storage'), false); return true;
   });
   assert.equal((await service.status('owner')).verified, false);
+});
+
+test('approval saves the authenticated contact with the receipt; wrong codes cannot change it', async () => {
+  const { service, provider, repo } = setup();
+  await service.sendCode('owner', phone);
+  await assert.rejects(service.checkCode('owner', phone, '000000', 'ip', 'owner@example.test'), status(400));
+  assert.equal(await repo.get('contacts', 'owner@example.test'), null);
+  provider.approved = true;
+  await service.checkCode('owner', phone, '123456', 'ip', 'owner@example.test');
+  assert.deepEqual(await repo.get('contacts', 'owner@example.test'), { phone });
+  assert.equal(await repo.get('contacts', 'other@example.test'), null);
+});
+
+test('the controller takes contact identity only from the authenticated session', async () => {
+  let received: unknown[] = [];
+  const service = { checkCode: async (...args: unknown[]) => { received = args; return { verified: true }; } };
+  const controller = new PhoneVerificationController(service as unknown as PhoneVerificationService);
+  await controller.check({ user: { uid: 'owner', email: 'owner@example.test' }, ip: '127.0.0.1' } as any,
+    { phone, code: '123456', email: 'other@example.test', uid: 'other' } as any, {} as any);
+  assert.deepEqual(received, ['owner', phone, '123456', '127.0.0.1', 'owner@example.test']);
+});
+
+test('production storage merges only contact fields in the same transaction as the receipt', async () => {
+  const writes: { path: string; data: any; options: unknown }[] = [];
+  let transactions = 0;
+  const db = {
+    collection: (table: string) => ({ doc: (id: string) => ({ path: `${table}/${id}` }) }),
+    runTransaction: async (work: any) => {
+      transactions++;
+      return work({ set: (ref: any, data: any, options: unknown) => { writes.push({ path: ref.path, data, options }); } });
+    },
+  };
+  const records = new PhoneVerificationRecords({ db: () => db } as unknown as FirebaseAdminService);
+  await records.transaction(async tx => {
+    tx.set('verified', 'owner', { uid: 'owner', phone });
+    tx.setContact('owner@example.test', phone);
+  });
+  assert.equal(transactions, 1);
+  assert.match(writes[0].path, /^phone_verification_verified\//);
+  assert.deepEqual(writes[1], { path: 'users/owner@example.test', data: { phone }, options: { merge: true } });
 });

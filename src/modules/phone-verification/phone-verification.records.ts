@@ -12,6 +12,7 @@ export type VerifiedPhone = { uid: string; phone: string; verifiedAt: string; pr
 export interface PhoneTransaction {
     get<T>(table: string, uid: string): Promise<T | null>;
     set(table: string, uid: string, value: object): void;
+    setContact(email: string, phone: string): void;
 }
 export interface PhoneRecords {
     get<T>(table: string, uid: string): Promise<T | null>;
@@ -39,6 +40,11 @@ export class PhoneVerificationRecords implements PhoneRecords {
                 ...value,
                 ...(table === 'challenges' ? { expiresAt: Timestamp.fromMillis((value as PhoneChallenge).expiresAtMs) } : {}),
             }),
+            // Email comes from AuthGuard, never from the request body. Keep
+            // contact storage separate from Firebase phone sign-in/MFA linking.
+            setContact: (email, phone) => {
+                native.set(this.firebase.db().collection('users').doc(email), { phone }, { merge: true });
+            },
         }));
     }
 }

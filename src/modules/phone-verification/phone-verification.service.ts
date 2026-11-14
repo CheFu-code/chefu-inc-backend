@@ -60,7 +60,7 @@ export class PhoneVerificationService {
     }));
     return { phone, verified: false, resendAfterSeconds: 30, expiresInSeconds: Math.max(0, Math.floor((saved.expiresAtMs - Date.now()) / 1000)) };
   }
-  async checkCode(uid: string, input: unknown, code: unknown, ip = 'unknown') {
+  async checkCode(uid: string, input: unknown, code: unknown, ip = 'unknown', contactEmail?: string) {
     this.identity(uid); this.policy.assertEnabled();
     const phone = this.policy.normalise(input);
     if (typeof code !== 'string' || !/^\d{4,10}$/.test(code)) throw new BadRequestException('Enter the numeric code from your message.');
@@ -86,11 +86,11 @@ export class PhoneVerificationService {
       await this.finishCheck(challenge, checkToken, false);
       throw cause;
     }
-    const receipt = await this.finishCheck(challenge, checkToken, approved);
+    const receipt = await this.finishCheck(challenge, checkToken, approved, contactEmail);
     if (!approved || !receipt) throw new BadRequestException({ message: 'That code is incorrect.', attemptsRemaining: Math.max(0, PHONE_MAX_CHECKS - challenge.attempts) });
     return { verified: true as const, phone: receipt.phone, verifiedAt: receipt.verifiedAt };
   }
-  private finishCheck(challenge: PhoneChallenge, checkToken: string, approved: boolean) {
+  private finishCheck(challenge: PhoneChallenge, checkToken: string, approved: boolean, contactEmail?: string) {
     return this.stored(() => this.records.transaction(async tx => {
       const current = await tx.get<PhoneChallenge>('challenges', challenge.uid);
       if (current?.nonce !== challenge.nonce || current.checkToken !== checkToken || current.state !== 'checking' || current.expiresAtMs <= Date.now()) {
@@ -100,7 +100,10 @@ export class PhoneVerificationService {
       const next: PhoneChallenge = { ...current, state: approved ? 'approved' : 'pending', leaseUntilMs: 0 };
       const receipt: VerifiedPhone | null = approved ? { uid: current.uid, phone: current.phone, verifiedAt: new Date().toISOString(), provider: 'twilio-verify' } : null;
       tx.set('challenges', current.uid, next);
-      if (receipt) tx.set('verified', current.uid, receipt);
+      if (receipt) {
+        tx.set('verified', current.uid, receipt);
+        if (contactEmail) tx.setContact(contactEmail, receipt.phone);
+      }
       return receipt;
     }));
   }

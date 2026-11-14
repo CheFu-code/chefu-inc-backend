@@ -27,7 +27,7 @@ export class PhoneVerificationController {
   @HttpCode(200)
   @Header('Cache-Control', 'private, no-store')
   check(@Req() req: PhoneRequest, @Body() dto: CheckCodeDto, @Res({ passthrough: true }) response: Response) {
-    return this.execute(response, () => this.verification.checkCode(req.user.uid, dto.phone, dto.code, getClientIp(req)));
+    return this.execute(response, () => this.verification.checkCode(req.user.uid, dto.phone, dto.code, getClientIp(req), req.user.email));
   }
 
   private async execute<T>(response: Response, operation: () => Promise<T>) {

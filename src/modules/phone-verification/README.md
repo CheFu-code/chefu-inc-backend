@@ -10,6 +10,8 @@ All routes use the existing central `AuthGuard` (OAuth/Firebase bearer or centra
 - `POST /phone-verification/check`: `{ "phone": "...", "code": "..." }`. Returns `verified: true`, phone and server verification date only after provider approval is persisted, or for the account's already verified phone.
 - `GET /phone-verification/status`: returns only the signed-in account's saved verification state.
 
+The central SSO signup offers an optional phone modal after email verification and before the passkey offer. On a fresh approval, the verification receipt and `users/<authenticated email>.phone` contact are committed together. The email comes only from `AuthGuard`; the request cannot choose another profile. This saves contact details without enrolling Firebase phone sign-in or SMS MFA. Skipping the modal makes no phone API calls. Existing receipts remain historical proof; editing a profile contact does not change those receipts.
+
 Local South African numbers must have ten digits. International E.164 numbers must be valid and belong to an allowed country. Codes must contain 4–10 digits, matching the configured Verify service length. Unknown DTO properties are rejected by the existing global validation pipe.
 
 ## Deployment
