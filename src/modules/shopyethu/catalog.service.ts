@@ -5,12 +5,29 @@ import { exists, integer, photos, seller, text } from './marketplace.validation'
 
 export class CatalogService {
   constructor(private readonly repo: MarketplaceRepository) {}
+  async page(query = '', category = '', storeId = '', after = '') {
+    const filters: [string, string][] = [['published', 'true']];
+    if (category) filters.push(['category', category]);
+    if (storeId) filters.push(['storeId', storeId]);
+    const page = this.repo.page ? await this.repo.page<Product>('products', filters, after, 24)
+      : { items: await this.repo.list<Product>('products', filters), nextCursor: null };
+    // Read only stores referenced by this page, without caching permissions/visibility.
+    const stores = new Map((await Promise.all([...new Set(page.items.map(item => item.storeId))]
+      .map(async id => [id, await this.repo.get<Storefront>('stores', id)] as const))));
+    return { products: page.items.filter(product => product.published && stores.get(product.storeId)?.status === 'active' &&
+      `${product.name} ${product.description}`.toLowerCase().includes(query.toLowerCase()))
+      .map(product => ({ ...product, storeName: stores.get(product.storeId)!.name })), nextCursor: page.nextCursor };
+  }
   async browse(query = '', category = '', storeId = '') {
-    const stores = await this.repo.list<Storefront>('stores', [['status', 'active']]);
-    const active = new Set(stores.map(store => store.id));
-    const products = await this.repo.list<Product>('products', storeId ? [['storeId', storeId]] : [['published', 'true']]);
-    return products.filter(product => product.published && active.has(product.storeId) &&
-      (!category || product.category === category) && `${product.name} ${product.description}`.toLowerCase().includes(query.toLowerCase())).map(product => ({ ...product, storeName: stores.find(store => store.id === product.storeId)?.name || 'Local store' }));
+    const filters: [string, string][] = [['published', 'true']];
+    if (storeId) filters.push(['storeId', storeId]);
+    if (category) filters.push(['category', category]);
+    const products = await this.repo.list<Product>('products', filters);
+    const stores = new Map(await Promise.all([...new Set(products.map(item => item.storeId))]
+      .map(async id => [id, await this.repo.get<Storefront>('stores', id)] as const)));
+    return products.filter(product => product.published && stores.get(product.storeId)?.status === 'active' &&
+      `${product.name} ${product.description}`.toLowerCase().includes(query.toLowerCase()))
+      .map(product => ({ ...product, storeName: stores.get(product.storeId)!.name }));
   }
   async product(productId: string) {
     const product = exists(await this.repo.get<Product>('products', productId), 'Product');
@@ -21,7 +38,7 @@ export class CatalogService {
   async storefront(storeId: string) {
     const store = exists(await this.repo.get<Storefront>('stores', storeId), 'Store');
     if (store.status !== 'active') throw new BadRequestException('This store is currently unavailable.');
-    return { store, products: await this.browse('', '', storeId) };
+    return { store, ...await this.page('', '', storeId) };
   }
   async mine(actor: Actor) {
     const store = await seller(this.repo, actor);

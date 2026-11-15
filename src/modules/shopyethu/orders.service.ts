@@ -16,7 +16,6 @@ export class OrdersService {
     return (await this.repo.list<Order>('orders', [[selling ? 'sellerUid' : 'buyerUid', actor.uid]])).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
   async place(actor: Actor, body: Record<string, unknown>, rawKey: unknown) {
-    if (!this.config.collectionEnabled) throw new ServiceUnavailableException('Marketplace payment and fulfilment rules are not configured. Ordering is unavailable.');
     const key = text(rawKey, 'Idempotency key', 16, 120);
     if (!Array.isArray(body.items) || !body.items.length || body.items.length > 30) throw new BadRequestException('Your basket must have 1–30 items.');
     const items: BasketItem[] = body.items.map(item => {
@@ -36,6 +35,7 @@ export class OrdersService {
         if (previous.signature !== signature) throw new ConflictException('This order attempt was already used for different basket details.');
         return exists(await tx.get<Order>('orders', previous.orderId), 'Order');
       }
+      if (!this.config.collectionEnabled) throw new ServiceUnavailableException('Marketplace payment and fulfilment rules are not configured. Ordering is unavailable.');
       const products = await Promise.all(items.map(item => tx.get<Product>('products', item.productId)));
       const storeId = products[0]?.storeId;
       const store = storeId ? await tx.get<Storefront>('stores', storeId) : null;

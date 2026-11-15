@@ -6,7 +6,11 @@ import { MarketplaceAuthGuard, MarketplaceRequest } from './marketplace-auth.gua
 export class MarketplacePublicController {
   constructor(private readonly market: MarketplaceService) {}
   @Get('config') config() { return { payments: 'not-configured', collectionEnabled: process.env.SHOPYETHU_PAY_ON_COLLECTION_ENABLED === 'true', deliveryCents: 0 }; }
-  @Get('products') async products(@Query('q') q = '', @Query('category') category = '', @Query('store') store = '') { return { products: await this.market.catalog.browse(q.slice(0, 120), category, store) }; }
+  @Get('products') @Header('Cache-Control', 'no-store')
+  async products(@Query('q') q = '', @Query('category') category = '', @Query('store') store = '', @Query('after') after = '', @Query('page') page = '') {
+    if (page === '1' || after) return this.market.catalog.page(q.slice(0, 120), category.slice(0, 60), store.slice(0, 150), after);
+    return { products: await this.market.catalog.browse(q.slice(0, 120), category.slice(0, 60), store.slice(0, 150)) };
+  }
   @Get('products/:id') product(@Param('id') id: string) { return this.market.catalog.product(id); }
   @Get('stores/:id') storefront(@Param('id') id: string) { return this.market.catalog.storefront(id); }
 }

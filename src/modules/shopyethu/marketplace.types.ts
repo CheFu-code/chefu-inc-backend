@@ -35,6 +35,7 @@ export interface Reader { get<T>(table: string, id: string): Promise<T | null> }
 export interface Transaction extends Reader { set(table: string, id: string, data: object): void }
 export interface MarketplaceRepository extends Reader {
   list<T>(table: string, filters?: Filters): Promise<T[]>;
+  page?<T>(table: string, filters: Filters, after: string, limit: number): Promise<{ items: T[]; nextCursor: string | null }>;
   transaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T>;
 }
 export type MarketplaceConfig = { collectionEnabled: boolean };
