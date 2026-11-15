@@ -40,7 +40,7 @@ void test('approval uses its own template, variables and idempotency key with no
   assert.equal(payload.from, 'ShopYethu <notifications@chefu.co.za>');
   assert.deepEqual(payload.to, [applicant.email]);
   assert.equal(payload.subject, 'Your ShopYethu seller application is approved');
-  assert.equal(payload.template.id, 'seller-application-approved');
+  assert.equal(payload.template.id, 'seller-account-approval');
   assert.deepEqual(payload.template.variables, {
     CONTACT_NAME: '&lt;Test&gt;', BUSINESS_NAME: 'Test &amp; products', YEAR: '2026',
     APPROVED_AT: new Date(application.updatedAt).toLocaleString('en-ZA', {

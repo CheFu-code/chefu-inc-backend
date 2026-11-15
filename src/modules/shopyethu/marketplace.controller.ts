@@ -11,8 +11,10 @@ export class MarketplacePublicController {
     if (page === '1' || after) return this.market.catalog.page(q.slice(0, 120), category.slice(0, 60), store.slice(0, 150), after);
     return { products: await this.market.catalog.browse(q.slice(0, 120), category.slice(0, 60), store.slice(0, 150)) };
   }
-  @Get('products/:id') product(@Param('id') id: string) { return this.market.catalog.product(id); }
-  @Get('stores/:id') storefront(@Param('id') id: string) { return this.market.catalog.storefront(id); }
+  @Get('products/:id') @Header('Cache-Control', 'no-store')
+  product(@Param('id') id: string) { return this.market.catalog.product(id); }
+  @Get('stores/:id') @Header('Cache-Control', 'no-store')
+  storefront(@Param('id') id: string, @Query('page') page = '') { return this.market.catalog.storefront(id, page === '1'); }
 }
 
 @Controller('shopyethu')

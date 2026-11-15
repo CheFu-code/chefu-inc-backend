@@ -35,10 +35,10 @@ export class CatalogService {
     if (!product.published || store.status !== 'active') throw new BadRequestException('This listing is no longer available.');
     return { product, store };
   }
-  async storefront(storeId: string) {
+  async storefront(storeId: string, paginated = false) {
     const store = exists(await this.repo.get<Storefront>('stores', storeId), 'Store');
     if (store.status !== 'active') throw new BadRequestException('This store is currently unavailable.');
-    return { store, ...await this.page('', '', storeId) };
+    return paginated ? { store, ...await this.page('', '', storeId) } : { store, products: await this.browse('', '', storeId) };
   }
   async mine(actor: Actor) {
     const store = await seller(this.repo, actor);

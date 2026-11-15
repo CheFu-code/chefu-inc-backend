@@ -1,5 +1,14 @@
 {
   "indexes": [
+    { "collectionGroup": "shopyethu_products", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "published", "order": "ASCENDING" }, { "fieldPath": "category", "order": "ASCENDING" }
+    ] },
+    { "collectionGroup": "shopyethu_products", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "published", "order": "ASCENDING" }, { "fieldPath": "storeId", "order": "ASCENDING" }
+    ] },
+    { "collectionGroup": "shopyethu_products", "queryScope": "COLLECTION", "fields": [
+      { "fieldPath": "published", "order": "ASCENDING" }, { "fieldPath": "category", "order": "ASCENDING" }, { "fieldPath": "storeId", "order": "ASCENDING" }
+    ] },
     { "collectionGroup": "storeJobs", "queryScope": "COLLECTION", "fields": [
       { "fieldPath": "state", "order": "ASCENDING" }, { "fieldPath": "availableAt", "order": "ASCENDING" }
     ] },
