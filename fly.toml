@@ -1,21 +1,26 @@
+# fly.toml app configuration file generated for chefu-inc-backend on 2026-11-15T21:55:03Z
+#
+# See https://docs.fly.io/reference/configuration for information about how to use this file.
+#
+
 app = "chefu-inc-backend"
-primary_region = "iad"
+primary_region = 'jnb'
 
 [deploy]
-release_command = "npm run release:prod"
-release_command_timeout = "30m"
+  release_command = 'npm run release:prod'
+  release_command_timeout = '30m0s'
 
 [http_service]
 auto_start_machines = true
 auto_stop_machines = true
 force_https = true
-internal_port = 4_000
+internal_port = 4000
 # Payment reconciliation must continue after customers close their browsers.
 min_machines_running = 1
-processes = [ "app" ]
+processes = ['app']
 
 [[vm]]
-cpu_kind = "shared"
-cpus = 1
-memory = "1gb"
-memory_mb = 1_024
+  cpu_kind = 'shared'
+  cpus = 1
+  memory = '1gb'
+  memory_mb = 1024
