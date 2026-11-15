@@ -24,6 +24,19 @@ test('simultaneous creates and lost-response retries produce one product and one
   assert.equal((await repo.get<Product>('products', first.id))?.priceCents, 2000);
 });
 
+test('unchanged product saves avoid product writes while retaining idempotent retries', async () => {
+  const { catalog, repo } = await setup();
+  const product = await catalog.saveProduct(actor, fields);
+  repo.writes = 0;
+  const body = { ...fields, expectedUpdatedAt: product.updatedAt, expectedStock: product.stock };
+  const saved = await catalog.saveProduct(actor, body, product.id, 'unchanged-save-attempt');
+  assert.equal(saved.updatedAt, product.updatedAt);
+  assert.equal(repo.writes, 1, 'only the retry reservation is written');
+  repo.writes = 0;
+  await catalog.saveProduct(actor, body, product.id);
+  assert.equal(repo.writes, 0, 'legacy unkeyed no-op saves write nothing');
+});
+
 test('replaying a product save never restores stock changed by a later order', async () => {
   const { catalog, repo } = await setup();
   const product = await catalog.saveProduct(actor, fields, undefined, 'initial-product-attempt');

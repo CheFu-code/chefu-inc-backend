@@ -39,3 +39,20 @@ void test('store updates persist a selected South African Place ID without its G
   assert.equal(stored?.area, '');
   assert.equal(stored?.areaPlaceId, placeId);
 });
+
+void test('unchanged store details do not write another Firestore document', async () => {
+  const seller: Actor = { uid: 'seller-area-noop-test', email: 'seller@example.test', roles: [] };
+  const repo = new TestRepository();
+  const store: Storefront = {
+    id: seller.uid, ownerUid: seller.uid, name: 'Test business',
+    description: 'A business description long enough for validation.',
+    area: 'Cape Town', status: 'active', reason: '', updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  await repo.transaction(async tx => tx.set('stores', seller.uid, store));
+  repo.writes = 0;
+  const updated = await new CatalogService(repo).saveStore(seller, {
+    name: store.name, description: store.description, area: store.area,
+  });
+  assert.equal(updated.updatedAt, store.updatedAt);
+  assert.equal(repo.writes, 0);
+});

@@ -7,14 +7,17 @@ export class MarketplacePublicController {
   constructor(private readonly market: MarketplaceService) {}
   @Get('config') config() { return { payments: 'not-configured', collectionEnabled: true, deliveryCents: 0 }; }
   @Get('products') @Header('Cache-Control', 'no-store')
-  async products(@Query('q') q = '', @Query('category') category = '', @Query('store') store = '', @Query('after') after = '', @Query('page') page = '') {
-    if (page === '1' || after) return this.market.catalog.page(q.slice(0, 120), category.slice(0, 60), store.slice(0, 150), after);
-    return { products: await this.market.catalog.browse(q.slice(0, 120), category.slice(0, 60), store.slice(0, 150)) };
+  async products(@Query('q') q = '', @Query('category') category = '', @Query('store') store = '', @Query('after') after = '', @Query('page') page = '', @Query('view') view = '') {
+    const compact = view === 'compact';
+    if (page === '1' || after) return this.market.catalog.page(q.slice(0, 120), category.slice(0, 60), store.slice(0, 150), after, compact);
+    return { products: await this.market.catalog.browse(q.slice(0, 120), category.slice(0, 60), store.slice(0, 150), compact) };
   }
   @Get('products/:id') @Header('Cache-Control', 'no-store')
   product(@Param('id') id: string) { return this.market.catalog.product(id); }
   @Get('stores/:id') @Header('Cache-Control', 'no-store')
-  storefront(@Param('id') id: string, @Query('page') page = '') { return this.market.catalog.storefront(id, page === '1'); }
+  storefront(@Param('id') id: string, @Query('page') page = '', @Query('view') view = '') {
+    return this.market.catalog.storefront(id, page === '1', view === 'compact');
+  }
 }
 
 @Controller('shopyethu')

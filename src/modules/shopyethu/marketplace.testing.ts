@@ -4,6 +4,7 @@ import type { Filters, MarketplaceRepository, Transaction } from './marketplace.
 export class TestRepository implements MarketplaceRepository {
   private rows = new Map<string, object>();
   private queue: Promise<unknown> = Promise.resolve();
+  writes = 0;
   async get<T>(table: string, id: string): Promise<T | null> { return structuredClone(this.rows.get(`${table}/${id}`) ?? null) as T | null; }
   async list<T>(table: string, filters: Filters = []): Promise<T[]> {
     return [...this.rows].filter(([key, value]) => key.startsWith(`${table}/`) && filters.every(([field, expected]) => String((value as Record<string, unknown>)[field]) === expected)).map(([, value]) => structuredClone(value) as T);
@@ -22,6 +23,7 @@ export class TestRepository implements MarketplaceRepository {
       const result = await work(tx);
       pending.forEach(([key, value]) => snapshot.set(key, value));
       this.rows = snapshot;
+      this.writes += pending.length;
       return result;
     });
     this.queue = run; return run;

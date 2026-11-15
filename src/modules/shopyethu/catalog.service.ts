@@ -4,31 +4,49 @@ import type { Actor, Fulfilment, MarketplaceRepository, Product, Storefront } fr
 import { exists, integer, photos, seller, text } from './marketplace.validation';
 import type { GooglePlacesService } from './google-places.service';
 
+function productFieldsMatch(current: Product, fields: Pick<Product, 'name' | 'description' | 'category' | 'priceCents' | 'stock' | 'photos' | 'fulfilment' | 'published'>, ownerUid: string) {
+  const sameArray = <T>(left: T[], right: T[]) => left.length === right.length && left.every((value, index) => value === right[index]);
+  return current.ownerUid === ownerUid && current.storeId === ownerUid &&
+    current.name === fields.name && current.description === fields.description &&
+    current.category === fields.category && current.priceCents === fields.priceCents &&
+    current.stock === fields.stock && current.published === fields.published &&
+    sameArray(current.photos, fields.photos) && sameArray(current.fulfilment, fields.fulfilment);
+}
+
 export class CatalogService {
   constructor(private readonly repo: MarketplaceRepository, private readonly places?: Pick<GooglePlacesService, 'resolve'>) {}
-  async page(query = '', category = '', storeId = '', after = '') {
+  private productView(product: Product, store: Storefront, compact: boolean) {
+    return {
+      ...product,
+      ...(compact ? { description: '', photos: product.photos.slice(0, 1) } : {}),
+      storeName: store.name,
+    };
+  }
+  private async stores(ids: string[]) {
+    if (this.repo.getMany) return this.repo.getMany<Storefront>('stores', ids);
+    return new Map(await Promise.all(ids.map(async id => [id, await this.repo.get<Storefront>('stores', id)] as const)));
+  }
+  async page(query = '', category = '', storeId = '', after = '', compact = false) {
     const filters: [string, string][] = [['published', 'true']];
     if (category) filters.push(['category', category]);
     if (storeId) filters.push(['storeId', storeId]);
     const page = this.repo.page ? await this.repo.page<Product>('products', filters, after, 24)
       : { items: await this.repo.list<Product>('products', filters), nextCursor: null };
     // Read only stores referenced by this page, without caching permissions/visibility.
-    const stores = new Map((await Promise.all([...new Set(page.items.map(item => item.storeId))]
-      .map(async id => [id, await this.repo.get<Storefront>('stores', id)] as const))));
+    const stores = await this.stores([...new Set(page.items.map(item => item.storeId))]);
     return { products: page.items.filter(product => product.published && stores.get(product.storeId)?.status === 'active' &&
       `${product.name} ${product.description}`.toLowerCase().includes(query.toLowerCase()))
-      .map(product => ({ ...product, storeName: stores.get(product.storeId)!.name })), nextCursor: page.nextCursor };
+      .map(product => this.productView(product, stores.get(product.storeId)!, compact)), nextCursor: page.nextCursor };
   }
-  async browse(query = '', category = '', storeId = '') {
+  async browse(query = '', category = '', storeId = '', compact = false) {
     const filters: [string, string][] = [['published', 'true']];
     if (storeId) filters.push(['storeId', storeId]);
     if (category) filters.push(['category', category]);
     const products = await this.repo.list<Product>('products', filters);
-    const stores = new Map(await Promise.all([...new Set(products.map(item => item.storeId))]
-      .map(async id => [id, await this.repo.get<Storefront>('stores', id)] as const)));
+    const stores = await this.stores([...new Set(products.map(item => item.storeId))]);
     return products.filter(product => product.published && stores.get(product.storeId)?.status === 'active' &&
       `${product.name} ${product.description}`.toLowerCase().includes(query.toLowerCase()))
-      .map(product => ({ ...product, storeName: stores.get(product.storeId)!.name }));
+      .map(product => this.productView(product, stores.get(product.storeId)!, compact));
   }
   async product(productId: string) {
     const product = exists(await this.repo.get<Product>('products', productId), 'Product');
@@ -36,10 +54,11 @@ export class CatalogService {
     if (!product.published || store.status !== 'active') throw new BadRequestException('This listing is no longer available.');
     return { product, store };
   }
-  async storefront(storeId: string, paginated = false) {
+  async storefront(storeId: string, paginated = false, compact = false) {
     const store = exists(await this.repo.get<Storefront>('stores', storeId), 'Store');
     if (store.status !== 'active') throw new BadRequestException('This store is currently unavailable.');
-    return paginated ? { store, ...await this.page('', '', storeId) } : { store, products: await this.browse('', '', storeId) };
+    return paginated ? { store, ...await this.page('', '', storeId, '', compact) }
+      : { store, products: await this.browse('', '', storeId, compact) };
   }
   async mine(actor: Actor) {
     const store = await seller(this.repo, actor);
@@ -73,6 +92,10 @@ export class CatalogService {
         updatedAt: new Date().toISOString(),
       };
       if (!areaPlaceId) delete updated.areaPlaceId;
+      if (current.name === updated.name && current.description === updated.description &&
+        current.area === updated.area && (current.areaPlaceId || '') === (updated.areaPlaceId || '')) {
+        return current;
+      }
       tx.set('stores', actor.uid, updated); return updated;
     });
   }
@@ -107,6 +130,10 @@ export class CatalogService {
       if (current && (body.expectedUpdatedAt !== undefined && body.expectedUpdatedAt !== current.updatedAt ||
         body.expectedStock !== undefined && body.expectedStock !== current.stock)) {
         throw new ConflictException('This product or its stock changed. Reload the latest details before saving.');
+      }
+      if (current && productFieldsMatch(current, fields, actor.uid)) {
+        if (reservation) tx.set('idempotency', reservation, { productId: targetId, signature });
+        return current;
       }
       const product: Product = { ...fields, id: targetId, ownerUid: actor.uid, storeId: actor.uid, updatedAt: new Date().toISOString() };
       tx.set('products', targetId, product);

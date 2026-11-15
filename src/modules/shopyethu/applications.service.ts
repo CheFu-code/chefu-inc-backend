@@ -78,7 +78,10 @@ export class ApplicationsService {
     if (!['active', 'suspended'].includes(String(body.status))) throw new BadRequestException('Invalid seller status.');
     return this.repo.transaction(async tx => {
       const store = exists(await tx.get<Storefront>('stores', uid), 'Store');
-      const updated = { ...store, status: body.status as Storefront['status'], reason: text(body.reason ?? '', 'Reason', 0, 1000), updatedAt: new Date().toISOString() };
+      const status = body.status as Storefront['status'];
+      const reason = text(body.reason ?? '', 'Reason', 0, 1000);
+      if (store.status === status && store.reason === reason) return store;
+      const updated = { ...store, status, reason, updatedAt: new Date().toISOString() };
       tx.set('stores', uid, updated); return updated;
     });
   }

@@ -96,7 +96,12 @@ test('seller ownership, status transitions, cancellation restocking, suspension 
   await orders.update(seller, order.id, 'cancelled');
   assert.equal((await repo.get<any>('products', product.id)).stock, 3);
   await assert.rejects(orders.update(seller, order.id, 'cancelled'), status(400));
+  repo.writes = 0;
   await applications.suspend(staff, seller.uid, { status: 'suspended', reason: 'Under review' });
+  assert.equal(repo.writes, 1);
+  repo.writes = 0;
+  await applications.suspend(staff, seller.uid, { status: 'suspended', reason: 'Under review' });
+  assert.equal(repo.writes, 0, 'repeating the current moderation state must not write');
   await assert.rejects(catalog.saveProduct(seller, listing), status(403));
   await assert.rejects(catalog.mine(seller), status(403));
   assert.equal((await catalog.browse()).length, 0);

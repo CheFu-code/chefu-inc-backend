@@ -6,6 +6,7 @@ import { FirestoreMarketplaceRepository } from './marketplace.repository';
 import { TestRepository } from './marketplace.testing';
 import { OrdersService } from './orders.service';
 import { readFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 
 void test('public query cache combines concurrent reads, clones payloads, expires and never caches failures', async () => {
   let now = 1000, calls = 0;
@@ -69,6 +70,87 @@ void test('catalogue reads only referenced stores and excludes a suspension even
   assert.equal((await catalog.page()).products.length, 3); assert.equal(storeReads, 1);
   await repo.transaction(async tx => { tx.set('stores', 'seller', { id: 'seller', status: 'suspended' }); });
   assert.equal((await catalog.page()).products.length, 0); assert.equal(storeReads, 2);
+});
+
+void test('catalogue groups unique store visibility reads through the batch reader', async () => {
+  const data = new TestRepository();
+  await data.transaction(async tx => {
+    for (let id = 0; id < 3; id++) {
+      tx.set('stores', `seller-${id}`, { id: `seller-${id}`, name: `Store ${id}`, status: 'active' });
+      tx.set('products', String(id), { id: String(id), storeId: `seller-${id}`, published: true, category: 'Other', name: 'Test product', description: 'Only in tests.' });
+    }
+  });
+  let batchCalls = 0;
+  const repo = {
+    get: data.get.bind(data),
+    list: data.list.bind(data),
+    transaction: data.transaction.bind(data),
+    getMany: async <T>(table: string, ids: string[]) => {
+      batchCalls++;
+      const stores = new Map<string, T>();
+      for (const id of ids) {
+        const store = await data.get<T>(table, id);
+        if (store !== null) stores.set(id, store);
+      }
+      return stores;
+    },
+  };
+  const result = await new CatalogService(repo).page();
+  assert.equal(result.products.length, 3);
+  assert.equal(batchCalls, 1);
+});
+
+void test('compact catalogue responses keep searchable summaries but omit descriptions and extra photo URLs', async t => {
+  const repo = new TestRepository();
+  const products = Array.from({ length: 24 }, (_, productIndex) => ({
+    id: `large-listing-${productIndex}`, storeId: 'seller', ownerUid: 'seller',
+    name: `Searchable product ${productIndex}`, description: `needle ${'x'.repeat(3990)} ${productIndex}`,
+    category: 'Other', priceCents: 2000, stock: 5,
+    photos: Array.from({ length: 5 }, (_, photoIndex) =>
+      `https://res.cloudinary.com/test/image/upload/${'a'.repeat(180)}${productIndex}-${photoIndex}.jpg`),
+    published: true, fulfilment: ['collection'], updatedAt: '2026-01-01T00:00:00.000Z',
+  }));
+  await repo.transaction(async tx => {
+    tx.set('stores', 'seller', { id: 'seller', name: 'Test store', status: 'active' });
+    for (const product of products) tx.set('products', product.id, product);
+  });
+  const catalog = new CatalogService(repo);
+  const full = await catalog.page('needle');
+  const compact = await catalog.page('needle', '', '', '', true);
+  const storePage = await catalog.storefront('seller', true, true);
+  assert.equal(full.products.length, 24);
+  assert.equal(full.products[0].description.length, 3999);
+  assert.equal(compact.products[0].description, '');
+  assert.deepEqual(compact.products[0].photos, [products[0].photos[0]]);
+  assert.equal(storePage.products[0].description, '');
+  assert.deepEqual(storePage.products[0].photos, [products[0].photos[0]]);
+  const fullBytes = Buffer.byteLength(JSON.stringify(full));
+  const compactBytes = Buffer.byteLength(JSON.stringify(compact));
+  const fullGzipBytes = gzipSync(JSON.stringify(full)).length;
+  const compactGzipBytes = gzipSync(JSON.stringify(compact)).length;
+  assert.ok(compactBytes < fullBytes);
+  assert.ok(compactGzipBytes < fullGzipBytes);
+  t.diagnostic(`24-product fixture JSON bytes: ${fullBytes} -> ${compactBytes} (${((fullBytes - compactBytes) / fullBytes * 100).toFixed(1)}% smaller); gzip: ${fullGzipBytes} -> ${compactGzipBytes} (${((fullGzipBytes - compactGzipBytes) / fullGzipBytes * 100).toFixed(1)}% smaller)`);
+});
+
+void test('Firestore batch reader deduplicates references and makes one batch request', async () => {
+  let batchCalls = 0;
+  let readIds: string[] = [];
+  const firebase = {
+    db: () => ({
+      collection: (table: string) => ({ doc: (id: string) => ({ table, id }) }),
+      getAll: async (...refs: { table: string; id: string }[]) => {
+        batchCalls++;
+        readIds = refs.map(ref => `${ref.table}/${ref.id}`);
+        return refs.map(ref => ({ exists: ref.id !== 'missing', data: () => ({ id: ref.id }) }));
+      },
+    }),
+  };
+  const repo = new FirestoreMarketplaceRepository(firebase as any);
+  const stores = await repo.getMany<{ id: string }>('stores', ['one', 'two', 'one', 'missing']);
+  assert.equal(batchCalls, 1);
+  assert.deepEqual(readIds, ['shopyethu_stores/one', 'shopyethu_stores/two', 'shopyethu_stores/missing']);
+  assert.deepEqual([...stores.keys()], ['one', 'two']);
 });
 
 void test('a confirmed order is recovered by its original key after a seller suspension; new orders remain blocked', async () => {

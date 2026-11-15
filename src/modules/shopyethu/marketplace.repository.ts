@@ -17,6 +17,18 @@ export class FirestoreMarketplaceRepository implements MarketplaceRepository {
     const doc = await this.firebase.db().collection(collection(table)).doc(documentId(id)).get();
     return doc.exists ? doc.data() as T : null;
   }
+  async getMany<T>(table: string, ids: string[]): Promise<Map<string, T>> {
+    const uniqueIds = [...new Set(ids.map(documentId))];
+    if (!uniqueIds.length) return new Map();
+    const db = this.firebase.db();
+    const refs = uniqueIds.map(id => db.collection(collection(table)).doc(id));
+    const snapshots = await db.getAll(...refs);
+    const result = new Map<string, T>();
+    snapshots.forEach((snapshot, index) => {
+      if (snapshot.exists) result.set(uniqueIds[index], snapshot.data() as T);
+    });
+    return result;
+  }
   async list<T>(table: string, filters: Filters = []): Promise<T[]> {
     const read = () => this.readList<T>(table, filters);
     return table === 'products' && filters.some(([field, value]) => field === 'published' && value === 'true')

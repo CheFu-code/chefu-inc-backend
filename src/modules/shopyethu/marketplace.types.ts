@@ -35,8 +35,9 @@ export type Order = {
 export type Report = { id: string; reporterUid: string; productId?: string; orderId?: string; message: string; status: 'open'; createdAt: string };
 export type Filters = [string, string][];
 export interface Reader { get<T>(table: string, id: string): Promise<T | null> }
+export interface BatchReader extends Reader { getMany?<T>(table: string, ids: string[]): Promise<Map<string, T>> }
 export interface Transaction extends Reader { set(table: string, id: string, data: object): void }
-export interface MarketplaceRepository extends Reader {
+export interface MarketplaceRepository extends BatchReader {
   list<T>(table: string, filters?: Filters): Promise<T[]>;
   page?<T>(table: string, filters: Filters, after: string, limit: number): Promise<{ items: T[]; nextCursor: string | null }>;
   transaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T>;
