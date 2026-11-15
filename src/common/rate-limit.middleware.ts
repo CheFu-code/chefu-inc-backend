@@ -31,7 +31,7 @@ export class RateLimitMiddleware implements NestMiddleware {
       return;
     }
 
-    const googleAreaPath = /^\/shopyethu\/(?:areas\/[A-Za-z0-9_-]+|application\/areas\/(?:suggestions|resolve))$/.test(request.path);
+    const googleAreaPath = /^\/shopyethu\/(?:areas\/[A-Za-z0-9_-]+|application\/areas\/suggestions)$/.test(request.path);
     // Google Places proxy routes have a shared per-IP budget to cap upstream usage.
     const isCheckoutInitialization = request.method === 'POST' && request.path.toLowerCase().replace(/\/+$/, '') === '/store/checkout/initialize';
     const limit = googleAreaPath || isCheckoutInitialization ? 120 : this.limit;

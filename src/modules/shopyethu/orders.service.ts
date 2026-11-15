@@ -64,7 +64,15 @@ export class OrdersService {
       products.forEach((product, index) => tx.set('products', product!.id, { ...product, stock: product!.stock - items[index].quantity }));
       tx.set('orders', orderId, order);
       tx.set('idempotency', reservation, { orderId, signature });
-      return { order, receipt: { order, recipientEmail: actor.email, storeName: store.name, collectionArea: store.area } };
+      return {
+        order,
+        receipt: {
+          order,
+          recipientEmail: actor.email,
+          storeName: store.name,
+          collectionArea: store.area || 'Check the seller storefront in ShopYethu for its operating area.',
+        },
+      };
     });
     // Transaction callbacks may run more than once. Only the committed creation sends.
     if (saved.receipt) {

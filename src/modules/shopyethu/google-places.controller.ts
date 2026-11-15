@@ -12,12 +12,6 @@ export class ApplicationAreasController {
   suggestions(@Req() _request: MarketplaceRequest, @Body() body: { input?: unknown; sessionToken?: unknown }) {
     return this.places.suggestions(body.input, body.sessionToken);
   }
-
-  @Post('resolve')
-  @Header('Cache-Control', 'private, no-store')
-  resolve(@Req() _request: MarketplaceRequest, @Body() body: { placeId?: unknown; sessionToken?: unknown }) {
-    return this.places.resolve(body.placeId, body.sessionToken);
-  }
 }
 
 @Controller('shopyethu/areas')
