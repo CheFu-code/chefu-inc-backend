@@ -6,7 +6,7 @@ import { exists, integer, seller, text } from './marketplace.validation';
 type BasketItem = { productId: string; quantity: number; expectedPriceCents: number };
 const transitions: Record<OrderStatus, OrderStatus[]> = {
   placed: ['accepted', 'cancelled'], accepted: ['preparing', 'cancelled'], preparing: ['ready', 'dispatched'],
-  ready: ['completed'], dispatched: ['completed'], completed: [], cancelled: [],
+  ready: ['collected'], dispatched: ['completed'], completed: [], collected: [], cancelled: [],
 };
 
 export class OrdersService {
@@ -73,11 +73,33 @@ export class OrdersService {
       const status = next as OrderStatus;
       if (!transitions[order.status].includes(status)) throw new BadRequestException('This status change is not allowed.');
       if ((status === 'dispatched' && order.fulfilment !== 'local-delivery') || (status === 'ready' && order.fulfilment !== 'collection')) throw new BadRequestException('Choose the status matching this order’s fulfilment.');
+      if (status === 'collected' && (order.fulfilment !== 'collection' || order.paymentStatus !== 'paid-on-collection')) throw new BadRequestException('Confirm payment before marking this order collected.');
       const restock = status === 'cancelled' ? await Promise.all(order.items.map(item => tx.get<Product>('products', item.productId))) : [];
       restock.forEach((product, index) => { if (product) tx.set('products', product.id, { ...product, stock: product.stock + order.items[index].quantity }); });
       const now = new Date().toISOString();
       const updated = { ...order, status, updatedAt: now, history: [...order.history, { status, at: now }] };
       tx.set('orders', orderId, updated); return updated;
+    });
+  }
+  async confirmPayment(actor: Actor, orderId: string) {
+    return this.repo.transaction(async tx => {
+      await seller(tx, actor);
+      const order = exists(await tx.get<Order>('orders', orderId), 'Order');
+      if (order.sellerUid !== actor.uid) throw new ForbiddenException('This order belongs to another store.');
+      if (order.fulfilment !== 'collection') throw new BadRequestException('Payment confirmation is only available for collection orders.');
+      if (order.paymentStatus === 'paid-on-collection') return order;
+      if (order.status !== 'ready') throw new ConflictException('Payment can only be confirmed when the order is ready for collection.');
+      const now = new Date().toISOString();
+      const updated: Order = {
+        ...order,
+        paymentStatus: 'paid-on-collection',
+        paymentNote: 'The seller confirmed payment was received at collection.',
+        paymentReceivedAt: now,
+        paymentReceivedBy: actor.uid,
+        updatedAt: now,
+      };
+      tx.set('orders', orderId, updated);
+      return updated;
     });
   }
 }

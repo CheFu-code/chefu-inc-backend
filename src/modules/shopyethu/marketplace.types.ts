@@ -20,13 +20,15 @@ export type Product = {
   category: string; priceCents: number; stock: number; photos: string[]; published: boolean;
   fulfilment: Fulfilment[]; updatedAt: string;
 };
-export type OrderStatus = 'placed' | 'accepted' | 'preparing' | 'ready' | 'dispatched' | 'completed' | 'cancelled';
+export type OrderStatus = 'placed' | 'accepted' | 'preparing' | 'ready' | 'dispatched' | 'completed' | 'collected' | 'cancelled';
 export type OrderItem = { productId: string; name: string; quantity: number; priceCents: number; photo: string };
 export type Order = {
   id: string; reference: string; buyerUid: string; storeId: string; sellerUid: string;
   items: OrderItem[]; subtotalCents: number; deliveryCents: number; totalCents: number;
   fulfilment: Fulfilment; address: string; contact: string; status: OrderStatus;
-  paymentStatus: 'not-collected'; paymentNote: string; createdAt: string; updatedAt: string;
+  paymentStatus: 'not-collected' | 'paid-on-collection'; paymentNote: string;
+  paymentReceivedAt?: string; paymentReceivedBy?: string;
+  createdAt: string; updatedAt: string;
   history: { status: OrderStatus; at: string }[];
 };
 export type Report = { id: string; reporterUid: string; productId?: string; orderId?: string; message: string; status: 'open'; createdAt: string };

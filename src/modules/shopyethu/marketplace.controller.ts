@@ -31,4 +31,5 @@ export class MarketplaceCustomerController {
   @Put('seller/products/:id') updateProduct(@Req() req: MarketplaceRequest, @Param('id') id: string, @Body() body: Record<string, unknown>, @Headers('idempotency-key') key?: string) { return this.market.catalog.saveProduct(req.user, body, id, key); }
   @Get('seller/orders') async incoming(@Req() req: MarketplaceRequest) { return { orders: await this.market.orders.list(req.user, true) }; }
   @Put('seller/orders/:id') status(@Req() req: MarketplaceRequest, @Param('id') id: string, @Body() body: { status?: unknown }) { return this.market.orders.update(req.user, id, body.status); }
+  @Put('seller/orders/:id/payment') confirmPayment(@Req() req: MarketplaceRequest, @Param('id') id: string) { return this.market.orders.confirmPayment(req.user, id); }
 }
