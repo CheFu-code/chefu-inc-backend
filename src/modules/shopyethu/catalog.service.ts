@@ -2,9 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import type { Actor, Fulfilment, MarketplaceRepository, Product, Storefront } from './marketplace.types';
 import { exists, integer, photos, seller, text } from './marketplace.validation';
+import type { GooglePlacesService } from './google-places.service';
 
 export class CatalogService {
-  constructor(private readonly repo: MarketplaceRepository) {}
+  constructor(private readonly repo: MarketplaceRepository, private readonly places?: Pick<GooglePlacesService, 'resolve'>) {}
   async page(query = '', category = '', storeId = '', after = '') {
     const filters: [string, string][] = [['published', 'true']];
     if (category) filters.push(['category', category]);
@@ -51,9 +52,27 @@ export class CatalogService {
     return { store, product };
   }
   async saveStore(actor: Actor, body: Record<string, unknown>) {
+    const areaPlaceId = typeof body.areaPlaceId === 'string' && body.areaPlaceId
+      ? text(body.areaPlaceId, 'Operating area', 1, 256)
+      : '';
+    if (areaPlaceId && !/^[A-Za-z0-9_-]+$/.test(areaPlaceId)) {
+      throw new BadRequestException('Choose a valid South African operating area.');
+    }
+    if (areaPlaceId) {
+      if (!this.places) throw new BadRequestException('Location search is temporarily unavailable.');
+      await this.places.resolve(areaPlaceId, body.areaSessionToken);
+    }
     return this.repo.transaction(async tx => {
       const current = await seller(tx, actor);
-      const updated = { ...current, name: text(body.name, 'Store name', 2, 100), description: text(body.description, 'Store description', 10, 2000), area: text(body.area, 'Operating area', 2, 120), updatedAt: new Date().toISOString() };
+      const updated: Storefront = {
+        ...current,
+        name: text(body.name, 'Store name', 2, 100),
+        description: text(body.description, 'Store description', 10, 2000),
+        area: areaPlaceId ? '' : text(body.area, 'Operating area', 2, 120),
+        ...(areaPlaceId ? { areaPlaceId } : {}),
+        updatedAt: new Date().toISOString(),
+      };
+      if (!areaPlaceId) delete updated.areaPlaceId;
       tx.set('stores', actor.uid, updated); return updated;
     });
   }

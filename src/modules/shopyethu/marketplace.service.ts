@@ -5,6 +5,8 @@ import { OrdersService } from './orders.service';
 import { ReportsService } from './reports.service';
 import { FirestoreMarketplaceRepository } from './marketplace.repository';
 import { ApplicationEmailService } from './application-email.service';
+import { OrderEmailService } from './order-email.service';
+import { GooglePlacesService } from './google-places.service';
 
 @Injectable()
 export class MarketplaceService {
@@ -12,11 +14,11 @@ export class MarketplaceService {
   readonly catalog: CatalogService;
   readonly orders: OrdersService;
   readonly reports: ReportsService;
-  constructor(readonly repo: FirestoreMarketplaceRepository, email: ApplicationEmailService) {
+  constructor(readonly repo: FirestoreMarketplaceRepository, email: ApplicationEmailService, orderEmail: OrderEmailService, places?: GooglePlacesService) {
     this.applications = new ApplicationsService(repo,
-      application => email.send(application), application => email.sendApproval(application));
-    this.catalog = new CatalogService(repo);
-    this.orders = new OrdersService(repo);
+      application => email.send(application), application => email.sendApproval(application), places);
+    this.catalog = new CatalogService(repo, places);
+    this.orders = new OrdersService(repo, receipt => orderEmail.send(receipt));
     this.reports = new ReportsService(repo);
   }
 }

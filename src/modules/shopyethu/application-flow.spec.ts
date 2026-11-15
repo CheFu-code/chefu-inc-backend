@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { ApplicationsService } from './applications.service';
 import { applicationFields, applicationHistory } from './application.validation';
 import { TestRepository } from './marketplace.testing';
-import type { Actor, SellerApplication } from './marketplace.types';
+import type { Actor, SellerApplication, Storefront } from './marketplace.types';
 
 const applicant: Actor = { uid: 'application-test', email: 'owner@example.test', roles: [] };
 const staff: Actor = { uid: 'staff-test', email: 'staff@example.test', roles: ['admin'] };
@@ -20,6 +20,7 @@ void test('application fields are validated server-side and invalid submissions 
   const service = new ApplicationsService(repo);
   for (const change of [
     { businessType: 'unknown' }, { businessType: ['individual'] }, { categories: [] }, { categories: ['Other', 'Other'] },
+    { businessType: 'registered-business' },
     { categories: ['unsupported'] }, { phoneConfirmed: false }, { phoneConfirmed: 'true' },
     { phone: 'call me later' }, { phone: '123' }, { phone: '1234567' }, { phone: '082123456' },
     { phone: '08212345678' }, { phone: '0000000000' }, { phone: '+27 082 123 4567' },
@@ -27,6 +28,63 @@ void test('application fields are validated server-side and invalid submissions 
     { collectionArea: '' }, { pickupHours: '' },
   ]) await assert.rejects(service.submit(applicant, { ...fields, ...change }), badRequest);
   assert.equal((await service.account(applicant)).application, null);
+});
+
+void test('Google operating areas are verified and only their Place ID is persisted', async () => {
+  const repo = new TestRepository();
+  const placeId = 'ChIJcapeTown';
+  const sessionToken = '123e4567-e89b-12d3-a456-426614174000';
+  const resolutions: unknown[][] = [];
+  const places = {
+    resolve: async (...args: unknown[]) => {
+      resolutions.push(args);
+      return { placeId, label: 'Cape Town, South Africa' };
+    },
+  };
+  const service = new ApplicationsService(repo, undefined, undefined, places);
+  const submitted = await service.submit(applicant, {
+    ...fields,
+    area: 'Cape Town, South Africa',
+    areaPlaceId: placeId,
+    areaSessionToken: sessionToken,
+  });
+  const stored = await repo.get<SellerApplication>('applications', applicant.uid);
+  assert.deepEqual(resolutions, [[placeId, sessionToken]]);
+  assert.equal(stored?.area, '');
+  assert.equal(stored?.areaPlaceId, placeId);
+  assert.equal(submitted.area, '');
+  await service.review(staff, applicant.uid, { status: 'approved' });
+  const store = await repo.get<Storefront>('stores', applicant.uid);
+  assert.equal(store?.area, '');
+  assert.equal(store?.areaPlaceId, placeId);
+});
+
+void test('registered businesses must submit a certificate owned by their account', async () => {
+  const certificateId = `shopyethu-applications/${applicant.uid}/123e4567-e89b-12d3-a456-426614174000.pdf`;
+  const valid = applicationFields(applicant, {
+    ...fields,
+    businessType: 'registered-business',
+    cipcCertificateId: certificateId,
+    cipcCertificateFormat: 'pdf',
+  });
+  assert.equal(valid.cipcCertificateId, certificateId);
+  assert.equal(valid.cipcCertificateFormat, 'pdf');
+  for (const change of [
+    { cipcCertificateId: '' },
+    { cipcCertificateId: 'shopyethu-applications/someone-else/123e4567-e89b-12d3-a456-426614174000.pdf' },
+    { cipcCertificateFormat: 'exe' },
+  ]) {
+    assert.throws(
+      () => applicationFields(applicant, {
+        ...fields,
+        businessType: 'registered-business',
+        cipcCertificateId: certificateId,
+        cipcCertificateFormat: 'pdf',
+        ...change,
+      }),
+      badRequest,
+    );
+  }
 });
 
 void test('application contact numbers use canonical international format without changing verification status', () => {

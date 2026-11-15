@@ -1,7 +1,8 @@
-import { BadRequestException, Logger } from '@nestjs/common';
+import { BadRequestException, Logger, ServiceUnavailableException } from '@nestjs/common';
 import type { Actor, MarketplaceRepository, SellerApplication, Storefront, ApplicationStatus } from './marketplace.types';
 import { assertAdmin, exists, text } from './marketplace.validation';
 import { applicationFields, applicationHistory } from './application.validation';
+import type { GooglePlacesService } from './google-places.service';
 
 export class ApplicationsService {
   private readonly logger = new Logger(ApplicationsService.name);
@@ -9,6 +10,7 @@ export class ApplicationsService {
     private readonly repo: MarketplaceRepository,
     private readonly confirmation?: (application: SellerApplication) => Promise<void>,
     private readonly approval?: (application: SellerApplication) => Promise<void>,
+    private readonly places?: Pick<GooglePlacesService, 'resolve'>,
   ) {}
   async account(actor: Actor) {
     const [application, store] = await Promise.all([
@@ -18,6 +20,10 @@ export class ApplicationsService {
   }
   async submit(actor: Actor, body: Record<string, unknown>) {
     const fields = applicationFields(actor, body);
+    if (fields.areaPlaceId) {
+      if (!this.places) throw new ServiceUnavailableException('Location search is temporarily unavailable.');
+      await this.places.resolve(fields.areaPlaceId, body.areaSessionToken);
+    }
     const saved = await this.repo.transaction(async tx => {
       const previous = await tx.get<SellerApplication>('applications', actor.uid);
       if (previous && previous.status !== 'more-info') throw new BadRequestException('This application cannot be resubmitted in its current status.');
@@ -54,7 +60,8 @@ export class ApplicationsService {
       tx.set('applications', uid, updated);
       if (status === 'approved' && !existing) tx.set('stores', uid, {
         id: uid, ownerUid: uid, name: application.businessName, description: application.plans,
-        area: application.area, status: 'active', reason: '', updatedAt: updated.updatedAt,
+        area: application.area, ...(application.areaPlaceId ? { areaPlaceId: application.areaPlaceId } : {}),
+        status: 'active', reason: '', updatedAt: updated.updatedAt,
       });
       return updated;
     });

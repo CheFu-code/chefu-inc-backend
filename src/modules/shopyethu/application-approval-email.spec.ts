@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApplicationEmailService } from './application-email.service';
+import { OrderEmailService } from './order-email.service';
 import { ApplicationsService } from './applications.service';
 import { MarketplaceService } from './marketplace.service';
 import { TestRepository } from './marketplace.testing';
@@ -118,7 +119,7 @@ void test('production marketplace service wires both receipt and approval sender
   const email = new ApplicationEmailService();
   t.mock.method(email, 'send', () => { events.push('received'); return Promise.resolve(); });
   t.mock.method(email, 'sendApproval', () => { events.push('approved'); return Promise.resolve(); });
-  const service = new MarketplaceService(repo as unknown as FirestoreMarketplaceRepository, email);
+  const service = new MarketplaceService(repo as unknown as FirestoreMarketplaceRepository, email, new OrderEmailService());
   await service.applications.submit(applicant, fields);
   await service.applications.review(staff, applicant.uid, { status: 'approved' });
   assert.deepEqual(events, ['received', 'approved']);

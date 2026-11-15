@@ -38,6 +38,19 @@ export class CloudinaryStorageService {
     });
   }
 
+  privateDownloadUrl(publicId: string, format: string): string {
+    assertCloudinaryConfigured();
+    const assetId = publicId.endsWith(`.${format}`)
+      ? publicId.slice(0, -(format.length + 1))
+      : publicId;
+    return cloudinary.utils.private_download_url(assetId, format, {
+      resource_type: 'raw',
+      type: 'authenticated',
+      expires_at: Math.floor(Date.now() / 1000) + 300,
+      attachment: true,
+    });
+  }
+
   async delete(publicId: string, resourceType: 'image' | 'video' | 'raw', deliveryType: 'upload' | 'authenticated' = 'upload') {
     assertCloudinaryConfigured();
     const result = await cloudinary.uploader.destroy(publicId, {

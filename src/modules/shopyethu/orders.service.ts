@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Logger } from '@nestjs/common';
 import type { Actor, Fulfilment, MarketplaceRepository, Order, OrderStatus, Product, Storefront } from './marketplace.types';
 import { exists, integer, seller, text } from './marketplace.validation';
+import type { OrderConfirmation } from './order-email.service';
 
 type BasketItem = { productId: string; quantity: number; expectedPriceCents: number };
 const transitions: Record<OrderStatus, OrderStatus[]> = {
@@ -10,7 +11,9 @@ const transitions: Record<OrderStatus, OrderStatus[]> = {
 };
 
 export class OrdersService {
-  constructor(private readonly repo: MarketplaceRepository) {}
+  private readonly logger = new Logger(OrdersService.name);
+  constructor(private readonly repo: MarketplaceRepository,
+    private readonly confirmation?: (receipt: OrderConfirmation) => Promise<void>) {}
   async list(actor: Actor, selling = false) {
     if (selling) await seller(this.repo, actor);
     return (await this.repo.list<Order>('orders', [[selling ? 'sellerUid' : 'buyerUid', actor.uid]])).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -29,11 +32,11 @@ export class OrdersService {
     const address = text(body.address ?? '', 'Collection instructions', 0, 500);
     const signature = createHash('sha256').update(JSON.stringify({ items, fulfilment, contact, address })).digest('hex');
     const reservation = createHash('sha256').update(`${actor.uid}:${key}`).digest('hex');
-    return this.repo.transaction(async tx => {
+    const saved = await this.repo.transaction(async tx => {
       const previous = await tx.get<{ signature: string; orderId: string }>('idempotency', reservation);
       if (previous) {
         if (previous.signature !== signature) throw new ConflictException('This order attempt was already used for different basket details.');
-        return exists(await tx.get<Order>('orders', previous.orderId), 'Order');
+        return { order: exists(await tx.get<Order>('orders', previous.orderId), 'Order'), receipt: null };
       }
       const products = await Promise.all(items.map(item => tx.get<Product>('products', item.productId)));
       const storeId = products[0]?.storeId;
@@ -61,8 +64,14 @@ export class OrdersService {
       products.forEach((product, index) => tx.set('products', product!.id, { ...product, stock: product!.stock - items[index].quantity }));
       tx.set('orders', orderId, order);
       tx.set('idempotency', reservation, { orderId, signature });
-      return order;
+      return { order, receipt: { order, recipientEmail: actor.email, storeName: store.name, collectionArea: store.area } };
     });
+    // Transaction callbacks may run more than once. Only the committed creation sends.
+    if (saved.receipt) {
+      try { await this.confirmation?.(saved.receipt); }
+      catch { this.logger.warn(JSON.stringify({ event: 'shopyethu_order_confirmation_failed', orderId: saved.order.id })); }
+    }
+    return saved.order;
   }
   async update(actor: Actor, orderId: string, next: unknown) {
     return this.repo.transaction(async tx => {

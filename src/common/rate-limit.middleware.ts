@@ -31,14 +31,14 @@ export class RateLimitMiddleware implements NestMiddleware {
       return;
     }
 
-    // Preparing a checkout reserves inventory; give it a smaller budget than
-    // ordinary API reads. Verification/webhooks retain the normal retry budget.
+    const googleAreaPath = /^\/shopyethu\/(?:areas\/[A-Za-z0-9_-]+|application\/areas\/(?:suggestions|resolve))$/.test(request.path);
+    // Google Places proxy routes have a shared per-IP budget to cap upstream usage.
     const isCheckoutInitialization = request.method === 'POST' && request.path.toLowerCase().replace(/\/+$/, '') === '/store/checkout/initialize';
-    const limit = isCheckoutInitialization ? 120 : this.limit;
-    const windowMs = isCheckoutInitialization ? 15 * 60_000 : this.windowMs;
+    const limit = googleAreaPath || isCheckoutInitialization ? 120 : this.limit;
+    const windowMs = googleAreaPath ? 60_000 : isCheckoutInitialization ? 15 * 60_000 : this.windowMs;
     const result = await this.runtimeLimits.reserve({
       collection: 'runtime_api_rate_limits',
-      key: `${getClientIp(request) || 'unknown'}:${request.method}:${isCheckoutInitialization ? '/store/checkout/initialize' : request.path}`,
+      key: `${getClientIp(request) || 'unknown'}:${request.method}:${googleAreaPath ? '/shopyethu/places' : isCheckoutInitialization ? '/store/checkout/initialize' : request.path}`,
       limit,
       windowMs,
     });

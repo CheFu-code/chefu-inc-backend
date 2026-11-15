@@ -9,6 +9,7 @@
     "multer": "^2.4.0"
   },
   "scripts": {
+    "test:account-sessions": "node --import tsx --test src/modules/auth/account-sessions.spec.ts src/modules/auth/account-session-dedup.spec.ts",
     "migrate:phone-contacts": "tsx --env-file-if-exists=.env scripts/migrate-phone-contacts.ts",
     "test:phone-verification": "node --import tsx --test src/modules/phone-verification/*.spec.ts scripts/migrate-phone-contacts.spec.ts",
     "test:shopyethu": "node --import tsx --test src/modules/shopyethu/*.spec.ts",
