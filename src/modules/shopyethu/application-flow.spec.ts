@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApplicationsService } from './applications.service';
-import { applicationHistory } from './application.validation';
+import { applicationFields, applicationHistory } from './application.validation';
 import { TestRepository } from './marketplace.testing';
 import type { Actor, SellerApplication } from './marketplace.types';
 
@@ -15,19 +15,32 @@ const fields = {
 };
 const badRequest = (error: any) => error.getStatus?.() === 400;
 
-test('application fields are validated server-side and invalid submissions never write', async () => {
+void test('application fields are validated server-side and invalid submissions never write', async () => {
   const repo = new TestRepository();
   const service = new ApplicationsService(repo);
   for (const change of [
     { businessType: 'unknown' }, { businessType: ['individual'] }, { categories: [] }, { categories: ['Other', 'Other'] },
     { categories: ['unsupported'] }, { phoneConfirmed: false }, { phoneConfirmed: 'true' },
-    { phone: 'call me later' }, { phone: '123' }, { collectionOffered: null },
+    { phone: 'call me later' }, { phone: '123' }, { phone: '1234567' }, { phone: '082123456' },
+    { phone: '08212345678' }, { phone: '0000000000' }, { phone: '+27 082 123 4567' },
+    { phone: '+999123456789' }, { phone: '+44 20 7946 0958' }, { phone: '0821234567 ext 1' }, { collectionOffered: null },
     { collectionArea: '' }, { pickupHours: '' },
   ]) await assert.rejects(service.submit(applicant, { ...fields, ...change }), badRequest);
   assert.equal((await service.account(applicant)).application, null);
 });
 
-test('server owns email, approval and timeline; review and resubmission preserve submission date', async () => {
+void test('application contact numbers use canonical international format without changing verification status', () => {
+  for (const [input, expected] of [
+    ['082 123 4567', '+27821234567'], ['(011) 234-5678', '+27112345678'],
+    ['+27 82 123 4567', '+27821234567'],
+  ]) {
+    const result = applicationFields(applicant, { ...fields, phone: input });
+    assert.equal(result.phone, expected);
+    assert.equal('phoneVerifiedAt' in result, false);
+  }
+});
+
+void test('server owns email, approval and timeline; review and resubmission preserve submission date', async () => {
   const repo = new TestRepository();
   const service = new ApplicationsService(repo);
   const submitted = await service.submit(applicant, {
@@ -35,6 +48,7 @@ test('server owns email, approval and timeline; review and resubmission preserve
     history: [{ status: 'approved', at: '1900-01-01' }], createdAt: '1900-01-01', contactConfirmedAt: '1900-01-01',
   });
   assert.equal(submitted.email, applicant.email);
+  assert.equal(submitted.phone, '+27821234567');
   assert.equal(submitted.ownerUid, applicant.uid);
   assert.equal(submitted.status, 'pending');
   assert.equal(submitted.history?.length, 1);
@@ -57,7 +71,7 @@ test('server owns email, approval and timeline; review and resubmission preserve
   assert.equal('collectionArea' in account.store!, false);
 });
 
-test('optional collection fields are discarded when collection is declined; old records stay reviewable', async () => {
+void test('optional collection fields are discarded when collection is declined; old records stay reviewable', async () => {
   const repo = new TestRepository();
   const service = new ApplicationsService(repo);
   const first = await service.submit(applicant, { ...fields, collectionOffered: false, collectionArea: { invalid: true }, pickupHours: null });
@@ -73,7 +87,7 @@ test('optional collection fields are discarded when collection is declined; old 
   await service.review(staff, applicant.uid, { status: 'approved' });
 });
 
-test('application history remains bounded without accepting client events', () => {
+void test('application history remains bounded without accepting client events', () => {
   const previous = { status: 'pending', updatedAt: '2026-01-01', reason: '', history: Array.from({ length: 100 }, (_, index) => ({ status: 'pending', at: String(index) })) } as SellerApplication;
   const history = applicationHistory(previous, { status: 'more-info', at: 'server-time', reason: 'Please clarify.' });
   assert.equal(history.length, 100); assert.equal(history[0].at, '1');

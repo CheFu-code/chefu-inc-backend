@@ -7,6 +7,7 @@ import { MarketplaceCustomerController, MarketplacePublicController } from './ma
 import { MarketplaceAdminController } from './marketplace-admin.controller';
 import { CloudinaryStorageModule } from '../../common/cloudinary-storage.module';
 import { ProductPhotoController } from './product-photo.controller';
+import { ApplicationEmailService } from './application-email.service';
 
-@Module({ imports: [AuthModule, CloudinaryStorageModule], providers: [MarketplaceAuthGuard, MarketplaceService, FirestoreMarketplaceRepository], controllers: [MarketplacePublicController, MarketplaceCustomerController, MarketplaceAdminController, ProductPhotoController] })
+@Module({ imports: [AuthModule, CloudinaryStorageModule], providers: [MarketplaceAuthGuard, MarketplaceService, FirestoreMarketplaceRepository, ApplicationEmailService], controllers: [MarketplacePublicController, MarketplaceCustomerController, MarketplaceAdminController, ProductPhotoController] })
 export class ShopYethuModule {}

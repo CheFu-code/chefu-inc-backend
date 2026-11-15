@@ -1,10 +1,11 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
 import type { Actor, MarketplaceRepository, SellerApplication, Storefront, ApplicationStatus } from './marketplace.types';
 import { assertAdmin, exists, text } from './marketplace.validation';
 import { applicationFields, applicationHistory } from './application.validation';
 
 export class ApplicationsService {
-  constructor(private readonly repo: MarketplaceRepository) {}
+  private readonly logger = new Logger(ApplicationsService.name);
+  constructor(private readonly repo: MarketplaceRepository, private readonly confirmation?: (application: SellerApplication) => Promise<void>) {}
   async account(actor: Actor) {
     const [application, store] = await Promise.all([
       this.repo.get<SellerApplication>('applications', actor.uid), this.repo.get<Storefront>('stores', actor.uid),
@@ -13,7 +14,7 @@ export class ApplicationsService {
   }
   async submit(actor: Actor, body: Record<string, unknown>) {
     const fields = applicationFields(actor, body);
-    return this.repo.transaction(async tx => {
+    const saved = await this.repo.transaction(async tx => {
       const previous = await tx.get<SellerApplication>('applications', actor.uid);
       if (previous && previous.status !== 'more-info') throw new BadRequestException('This application cannot be resubmitted in its current status.');
       if (previous?.status === 'more-info' && fields.response.length < 5) throw new BadRequestException('Respond to the information requested by CheFu.');
@@ -28,6 +29,12 @@ export class ApplicationsService {
       tx.set('applications', actor.uid, application);
       return application;
     });
+    // Firestore can repeat transaction callbacks. External side effects belong after commit.
+    try { await this.confirmation?.(saved); }
+    catch {
+      this.logger.warn(JSON.stringify({ event: 'shopyethu_application_confirmation_failed' }));
+    }
+    return saved;
   }
   async review(actor: Actor, uid: string, body: Record<string, unknown>) {
     assertAdmin(actor);

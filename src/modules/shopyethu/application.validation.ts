@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { normalizeContactPhone } from '../auth/phone-contact';
 import { text } from './marketplace.validation';
 import type { Actor, ApplicationEvent, SellerApplication } from './marketplace.types';
 
@@ -12,9 +13,9 @@ export function applicationFields(actor: Actor, body: Record<string, unknown>) {
   }
   if (body.phoneConfirmed !== true) throw new BadRequestException('Confirm your business contact number.');
   if (typeof body.collectionOffered !== 'boolean') throw new BadRequestException('Choose whether you offer collection.');
-  const phone = text(body.phone, 'Phone number', 7, 30);
-  if (!/^\+?[\d\s()-]+$/.test(phone) || phone.replace(/\D/g, '').length < 7 || phone.replace(/\D/g, '').length > 15) {
-    throw new BadRequestException('Enter a valid contact number.');
+  const phone = normalizeContactPhone(text(body.phone, 'Phone number', 7, 30));
+  if (!phone || !/^\+27[1-9]\d{8}$/.test(phone)) {
+    throw new BadRequestException('Enter a complete valid South African contact number.');
   }
   const email = text(actor.email, 'Contact email', 5, 200);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new BadRequestException('Enter a valid contact email.');
