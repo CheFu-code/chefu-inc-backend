@@ -12,21 +12,31 @@ const escapeText = (value: string) => value.replace(/[&<>"']/g, character => ({
 @Injectable()
 export class ApplicationEmailService {
     async send(application: SellerApplication): Promise<void> {
+        return this.sendNotification(application, 'received');
+    }
+
+    async sendApproval(application: SellerApplication): Promise<void> {
+        if (application.status !== 'approved') throw new Error('An approval email requires a saved approval.');
+        return this.sendNotification(application, 'approved');
+    }
+
+    private async sendNotification(application: SellerApplication, event: 'received' | 'approved'): Promise<void> {
         assertResendConfigured();
-        const templateId = "seller-application-received"
-        const idempotencyKey = `shopyethu-application/${createHash('sha256')
+        const approved = event === 'approved';
+        const templateId = approved ? 'seller-account-approval' : 'seller-application-received';
+        const idempotencyKey = `shopyethu-application-${event}/${createHash('sha256')
             .update(`${application.id}:${application.updatedAt}:${application.history?.length || 1}`).digest('hex')}`;
         const submittedAt = new Date(application.updatedAt);
         const body = JSON.stringify({
             from: 'ShopYethu <notifications@chefu.co.za>',
             to: [application.email],
-            subject: 'We received your ShopYethu seller application',
+            subject: approved ? 'Your ShopYethu seller application is approved' : 'We received your ShopYethu seller application',
             template: {
                 id: templateId,
                 variables: {
                     CONTACT_NAME: escapeText(application.contactName),
                     BUSINESS_NAME: escapeText(application.businessName),
-                    SUBMITTED_AT: submittedAt.toLocaleString('en-ZA', {
+                    [approved ? 'APPROVED_AT' : 'SUBMITTED_AT']: submittedAt.toLocaleString('en-ZA', {
                         timeZone: 'Africa/Johannesburg', dateStyle: 'medium', timeStyle: 'short',
                     }),
                     YEAR: submittedAt.getUTCFullYear().toString(),

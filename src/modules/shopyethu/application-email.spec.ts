@@ -18,8 +18,8 @@ const record = (): SellerApplication => ({
   status: 'pending', updatedAt: '2026-11-15T08:15:00Z', reason: '', response: '',
 });
 
-function configure(t: TestContext, templateId: string) {
-  for (const [key, value] of Object.entries({ RESEND_API_KEY: 're_test_only', RESEND_SHOPYETHU_APPLICATION_TEMPLATE_ID: templateId })) {
+function configure(t: TestContext) {
+  for (const [key, value] of Object.entries({ RESEND_API_KEY: 're_test_only' })) {
     const previous = process.env[key];
     process.env[key] = value;
     t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
@@ -27,7 +27,7 @@ function configure(t: TestContext, templateId: string) {
 }
 
 void test('confirmation uses only the published Resend template and escaped variables; retries keep one event identity', async t => {
-  configure(t, 'published-template-id');
+  configure(t);
   const requests: RequestInit[] = [];
   t.mock.method(globalThis, 'fetch', async (url: unknown, init: RequestInit) => {
     assert.equal(url, 'https://api.resend.com/emails');
@@ -42,7 +42,7 @@ void test('confirmation uses only the published Resend template and escaped vari
   assert.equal(body.from, 'ShopYethu <notifications@chefu.co.za>');
   assert.deepEqual(body.to, [actor.email]);
   assert.equal(body.subject, 'We received your ShopYethu seller application');
-  assert.equal(body.template.id, 'published-template-id');
+  assert.equal(body.template.id, 'seller-application-received');
   assert.equal(body.template.variables.CONTACT_NAME, '&lt;b&gt;Test&lt;/b&gt;');
   assert.equal(body.template.variables.BUSINESS_NAME, 'Test &amp; &quot;Products&quot;');
   assert.equal(body.template.variables.SUBMITTED_AT, new Date(application.updatedAt).toLocaleString('en-ZA', {
@@ -58,7 +58,7 @@ void test('confirmation uses only the published Resend template and escaped vari
 });
 
 void test('transient failure retries an identical payload; invalid templates and rate limits do not loop', async t => {
-  configure(t, '');
+  configure(t);
   const requests: RequestInit[] = [];
   let status = 503;
   t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
@@ -71,7 +71,7 @@ void test('transient failure retries an identical payload; invalid templates and
   assert.equal(requests.length, 2);
   assert.equal(requests[0].body, requests[1].body);
   assert.deepEqual(requests[0].headers, requests[1].headers);
-  assert.equal(JSON.parse(String(requests[0].body)).template.id, 'shopyethu-application-received');
+  assert.equal(JSON.parse(String(requests[0].body)).template.id, 'seller-application-received');
   for (status of [404, 422, 429]) {
     const before: number = requests.length;
     await assert.rejects(email.send(record()), new RegExp(`HTTP ${status}`));

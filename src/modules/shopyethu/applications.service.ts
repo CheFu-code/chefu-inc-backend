@@ -5,7 +5,11 @@ import { applicationFields, applicationHistory } from './application.validation'
 
 export class ApplicationsService {
   private readonly logger = new Logger(ApplicationsService.name);
-  constructor(private readonly repo: MarketplaceRepository, private readonly confirmation?: (application: SellerApplication) => Promise<void>) {}
+  constructor(
+    private readonly repo: MarketplaceRepository,
+    private readonly confirmation?: (application: SellerApplication) => Promise<void>,
+    private readonly approval?: (application: SellerApplication) => Promise<void>,
+  ) {}
   async account(actor: Actor) {
     const [application, store] = await Promise.all([
       this.repo.get<SellerApplication>('applications', actor.uid), this.repo.get<Storefront>('stores', actor.uid),
@@ -41,7 +45,7 @@ export class ApplicationsService {
     const status = body.status as ApplicationStatus;
     if (!['more-info', 'approved', 'rejected'].includes(status)) throw new BadRequestException('Invalid review decision.');
     const reason = text(body.reason ?? '', 'Customer-facing reason', status === 'approved' ? 0 : 5, 2000);
-    return this.repo.transaction(async tx => {
+    const saved = await this.repo.transaction(async tx => {
       const application = exists(await tx.get<SellerApplication>('applications', uid), 'Application');
       const existing = await tx.get<Storefront>('stores', uid);
       if (!['pending', 'more-info'].includes(application.status)) throw new BadRequestException('This application has already been decided.');
@@ -54,6 +58,13 @@ export class ApplicationsService {
       });
       return updated;
     });
+    if (saved.status === 'approved') {
+      try { await this.approval?.(saved); }
+      catch {
+        this.logger.warn(JSON.stringify({ event: 'shopyethu_application_approval_email_failed' }));
+      }
+    }
+    return saved;
   }
   async suspend(actor: Actor, uid: string, body: Record<string, unknown>) {
     assertAdmin(actor);

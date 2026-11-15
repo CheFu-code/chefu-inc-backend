@@ -13,7 +13,8 @@ export class MarketplaceService {
   readonly orders: OrdersService;
   readonly reports: ReportsService;
   constructor(readonly repo: FirestoreMarketplaceRepository, email: ApplicationEmailService) {
-    this.applications = new ApplicationsService(repo, application => email.send(application));
+    this.applications = new ApplicationsService(repo,
+      application => email.send(application), application => email.sendApproval(application));
     this.catalog = new CatalogService(repo);
     this.orders = new OrdersService(repo, { collectionEnabled: process.env.SHOPYETHU_PAY_ON_COLLECTION_ENABLED === 'true' });
     this.reports = new ReportsService(repo);
