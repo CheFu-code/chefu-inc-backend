@@ -40,4 +40,3 @@ export interface MarketplaceRepository extends Reader {
   page?<T>(table: string, filters: Filters, after: string, limit: number): Promise<{ items: T[]; nextCursor: string | null }>;
   transaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T>;
 }
-export type MarketplaceConfig = { collectionEnabled: boolean };

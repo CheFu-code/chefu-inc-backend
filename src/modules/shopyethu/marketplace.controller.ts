@@ -5,7 +5,7 @@ import { MarketplaceAuthGuard, MarketplaceRequest } from './marketplace-auth.gua
 @Controller('shopyethu')
 export class MarketplacePublicController {
   constructor(private readonly market: MarketplaceService) {}
-  @Get('config') config() { return { payments: 'not-configured', collectionEnabled: process.env.SHOPYETHU_PAY_ON_COLLECTION_ENABLED === 'true', deliveryCents: 0 }; }
+  @Get('config') config() { return { payments: 'not-configured', collectionEnabled: true, deliveryCents: 0 }; }
   @Get('products') @Header('Cache-Control', 'no-store')
   async products(@Query('q') q = '', @Query('category') category = '', @Query('store') store = '', @Query('after') after = '', @Query('page') page = '') {
     if (page === '1' || after) return this.market.catalog.page(q.slice(0, 120), category.slice(0, 60), store.slice(0, 150), after);

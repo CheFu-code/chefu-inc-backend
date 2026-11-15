@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { BadRequestException, ConflictException, ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
-import type { Actor, Fulfilment, MarketplaceConfig, MarketplaceRepository, Order, OrderStatus, Product, Storefront } from './marketplace.types';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import type { Actor, Fulfilment, MarketplaceRepository, Order, OrderStatus, Product, Storefront } from './marketplace.types';
 import { exists, integer, seller, text } from './marketplace.validation';
 
 type BasketItem = { productId: string; quantity: number; expectedPriceCents: number };
@@ -10,7 +10,7 @@ const transitions: Record<OrderStatus, OrderStatus[]> = {
 };
 
 export class OrdersService {
-  constructor(private readonly repo: MarketplaceRepository, private readonly config: MarketplaceConfig) {}
+  constructor(private readonly repo: MarketplaceRepository) {}
   async list(actor: Actor, selling = false) {
     if (selling) await seller(this.repo, actor);
     return (await this.repo.list<Order>('orders', [[selling ? 'sellerUid' : 'buyerUid', actor.uid]])).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -35,7 +35,6 @@ export class OrdersService {
         if (previous.signature !== signature) throw new ConflictException('This order attempt was already used for different basket details.');
         return exists(await tx.get<Order>('orders', previous.orderId), 'Order');
       }
-      if (!this.config.collectionEnabled) throw new ServiceUnavailableException('Marketplace payment and fulfilment rules are not configured. Ordering is unavailable.');
       const products = await Promise.all(items.map(item => tx.get<Product>('products', item.productId)));
       const storeId = products[0]?.storeId;
       const store = storeId ? await tx.get<Storefront>('stores', storeId) : null;

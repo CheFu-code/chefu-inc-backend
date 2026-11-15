@@ -14,9 +14,10 @@ const staff: Actor = { uid: 'staff-test', email: 'staff@example.test', roles: ['
 const application = { businessName: 'Test business', contactName: 'Test Contact', email: seller.email, phone: '0123456789', area: 'Test area', plans: 'Items supplied only in an isolated unit test.', businessType: 'individual', categories: ['Other'], phoneConfirmed: true, collectionOffered: false };
 const listing = { name: 'Test listing', description: 'This record exists only inside a unit test.', category: 'Other', priceCents: 10000, stock: 3, photos: ['https://example.test/item.jpg'], fulfilment: ['collection'], published: true };
 const status = (expected: number) => (error: any) => error.getStatus?.() === expected;
+
 function setup() {
   const repo = new TestRepository();
-  return { repo, applications: new ApplicationsService(repo), catalog: new CatalogService(repo), orders: new OrdersService(repo, { collectionEnabled: true }), reports: new ReportsService(repo) };
+  return { repo, applications: new ApplicationsService(repo), catalog: new CatalogService(repo), orders: new OrdersService(repo), reports: new ReportsService(repo) };
 }
 async function approved() {
   const context = setup();
@@ -70,14 +71,13 @@ test('published product -> buyer order -> seller updates -> customer history; re
   await assert.rejects(orders.place(buyer, { ...body, contact: 'changed@example.test' }, 'same-key-12345678'), status(409));
 });
 
-test('checkout rejects stale prices, insufficient stock, unconfigured delivery and disabled ordering', async () => {
+test('checkout rejects stale prices, insufficient stock and unsupported delivery', async () => {
   const { catalog, orders, repo } = await approved();
   const product = await catalog.saveProduct(seller, listing);
   const body = { items: [{ productId: product.id, quantity: 1, expectedPriceCents: 9000 }], fulfilment: 'collection', contact: buyer.email };
   await assert.rejects(orders.place(buyer, body, 'price-key-12345678'), status(409));
   await assert.rejects(orders.place(buyer, { ...body, items: [{ ...body.items[0], expectedPriceCents: 10000, quantity: 4 }] }, 'stock-key-12345678'), status(409));
   await assert.rejects(orders.place(buyer, { ...body, fulfilment: 'local-delivery' }, 'delivery-12345678'), status(400));
-  await assert.rejects(new OrdersService(repo, { collectionEnabled: false }).place(buyer, body, 'disabled-12345678'), status(503));
   assert.equal((await repo.get<any>('products', product.id)).stock, 3);
   assert.equal((await orders.list(buyer)).length, 0);
 });

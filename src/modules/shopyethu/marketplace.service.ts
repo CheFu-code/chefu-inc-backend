@@ -16,7 +16,7 @@ export class MarketplaceService {
     this.applications = new ApplicationsService(repo,
       application => email.send(application), application => email.sendApproval(application));
     this.catalog = new CatalogService(repo);
-    this.orders = new OrdersService(repo, { collectionEnabled: process.env.SHOPYETHU_PAY_ON_COLLECTION_ENABLED === 'true' });
+    this.orders = new OrdersService(repo);
     this.reports = new ReportsService(repo);
   }
 }
