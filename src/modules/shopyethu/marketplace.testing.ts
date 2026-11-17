@@ -9,6 +9,18 @@ export class TestRepository implements MarketplaceRepository {
   async list<T>(table: string, filters: Filters = []): Promise<T[]> {
     return [...this.rows].filter(([key, value]) => key.startsWith(`${table}/`) && filters.every(([field, expected]) => String((value as Record<string, unknown>)[field]) === expected)).map(([, value]) => structuredClone(value) as T);
   }
+  async page<T>(table: string, filters: Filters, after: string, limit: number) {
+    const matching = [...this.rows]
+      .filter(([key, value]) => key.startsWith(`${table}/`) &&
+        key.slice(table.length + 1) > after &&
+        filters.every(([field, expected]) => String((value as Record<string, unknown>)[field]) === expected))
+      .sort(([left], [right]) => left.localeCompare(right));
+    const docs = matching.slice(0, limit + 1);
+    return {
+      items: docs.slice(0, limit).map(([, value]) => structuredClone(value) as T),
+      nextCursor: docs.length > limit ? docs[limit - 1][0].slice(table.length + 1) : null,
+    };
+  }
   transaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {
     const run = this.queue.catch(() => undefined).then(async () => {
       const snapshot = new Map(this.rows);

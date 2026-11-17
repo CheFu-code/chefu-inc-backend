@@ -29,7 +29,9 @@ export class MarketplaceCustomerController {
   @Get('orders') async orders(@Req() req: MarketplaceRequest) { return { orders: await this.market.orders.list(req.user) }; }
   @Post('orders') order(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>, @Headers('idempotency-key') key: string) { return this.market.orders.place(req.user, body, key); }
   @Post('reports') report(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>) { return this.market.reports.submit(req.user, body); }
-  @Get('seller/store') mine(@Req() req: MarketplaceRequest) { return this.market.catalog.mine(req.user); }
+  @Get('seller/store') mine(@Req() req: MarketplaceRequest, @Query('page') page = '', @Query('after') after = '') {
+    return page === '1' || after ? this.market.catalog.minePage(req.user, after) : this.market.catalog.mine(req.user);
+  }
   @Get('seller/products/:id') ownProduct(@Req() req: MarketplaceRequest, @Param('id') id: string) { return this.market.catalog.ownProduct(req.user, id); }
   @Put('seller/store') store(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>) { return this.market.catalog.saveStore(req.user, body); }
   @Post('seller/products') createProduct(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>, @Headers('idempotency-key') key?: string) { return this.market.catalog.saveProduct(req.user, body, undefined, key); }

@@ -71,6 +71,15 @@ export class CatalogService {
     ]);
     return { store: { ...store, nameEditable }, products };
   }
+  async minePage(actor: Actor, after = '') {
+    const store = await seller(this.repo, actor);
+    if (!this.repo.page) throw new Error('Marketplace repository does not support cursor pagination.');
+    const [nameEditable, page] = await Promise.all([
+      storeNameEditable(this.repo, store),
+      this.repo.page<Product>('products', [['ownerUid', actor.uid]], after, 24),
+    ]);
+    return { store: { ...store, nameEditable }, products: page.items, nextCursor: page.nextCursor };
+  }
   async ownProduct(actor: Actor, productId: string) {
     const store = await seller(this.repo, actor);
     const product = exists(await this.repo.get<Product>('products', productId), 'Product');
