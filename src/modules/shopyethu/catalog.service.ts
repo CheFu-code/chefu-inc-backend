@@ -4,6 +4,7 @@ import type { Actor, Fulfilment, MarketplaceRepository, Product, Storefront } fr
 import { exists, integer, photos, seller, text } from './marketplace.validation';
 import type { GooglePlacesService } from './google-places.service';
 import { deleteProduct, moveProductToDraft } from './product-actions';
+import { storeNameEditable } from './store-name-policy';
 
 function productFieldsMatch(current: Product, fields: Pick<Product, 'name' | 'description' | 'category' | 'priceCents' | 'stock' | 'photos' | 'fulfilment' | 'published'>, ownerUid: string) {
   const sameArray = <T>(left: T[], right: T[]) => left.length === right.length && left.every((value, index) => value === right[index]);
@@ -65,7 +66,10 @@ export class CatalogService {
   }
   async mine(actor: Actor) {
     const store = await seller(this.repo, actor);
-    return { store, products: await this.repo.list<Product>('products', [['ownerUid', actor.uid]]) };
+    const [nameEditable, products] = await Promise.all([
+      storeNameEditable(this.repo, store), this.repo.list<Product>('products', [['ownerUid', actor.uid]]),
+    ]);
+    return { store: { ...store, nameEditable }, products };
   }
   async ownProduct(actor: Actor, productId: string) {
     const store = await seller(this.repo, actor);
@@ -86,9 +90,14 @@ export class CatalogService {
     }
     return this.repo.transaction(async tx => {
       const current = await seller(tx, actor);
+      const nameEditable = await storeNameEditable(tx, current);
+      const name = text(body.name, 'Store name', 2, 100);
+      if (!nameEditable && name !== current.name) {
+        throw new ForbiddenException('Registered businesses cannot change their store name.');
+      }
       const updated: Storefront = {
         ...current,
-        name: text(body.name, 'Store name', 2, 100),
+        name, nameEditable,
         description: text(body.description, 'Store description', 10, 2000),
         area: areaPlaceId ? '' : text(body.area, 'Operating area', 2, 120),
         ...(areaPlaceId ? { areaPlaceId } : {}),
@@ -97,7 +106,7 @@ export class CatalogService {
       if (!areaPlaceId) delete updated.areaPlaceId;
       if (current.name === updated.name && current.description === updated.description &&
         current.area === updated.area && (current.areaPlaceId || '') === (updated.areaPlaceId || '')) {
-        return current;
+        return { ...current, nameEditable };
       }
       tx.set('stores', actor.uid, updated); return updated;
     });

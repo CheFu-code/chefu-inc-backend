@@ -13,6 +13,7 @@ export type SellerApplication = {
 };
 export type Storefront = {
   id: string; ownerUid: string; name: string; description: string; area: string; areaPlaceId?: string;
+  nameEditable?: boolean;
   status: 'active' | 'suspended'; reason: string; updatedAt: string;
 };
 export type Fulfilment = 'collection' | 'local-delivery';
