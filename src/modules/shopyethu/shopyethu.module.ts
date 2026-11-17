@@ -12,6 +12,7 @@ import { ApplicationAreasController, PublicAreasController } from './google-plac
 import { GooglePlacesService } from './google-places.service';
 import { ApplicationEmailService } from './application-email.service';
 import { OrderEmailService } from './order-email.service';
+import { ShopYethuAppLinksController } from './shopyethu-app-links.controller';
 
-@Module({ imports: [AuthModule, CloudinaryStorageModule], providers: [MarketplaceAuthGuard, MarketplaceService, FirestoreMarketplaceRepository, GooglePlacesService, ApplicationEmailService, OrderEmailService], controllers: [MarketplacePublicController, MarketplaceCustomerController, MarketplaceAdminController, ProductPhotoController, ApplicationProofController, ApplicationAreasController, PublicAreasController] })
+@Module({ imports: [AuthModule, CloudinaryStorageModule], providers: [MarketplaceAuthGuard, MarketplaceService, FirestoreMarketplaceRepository, GooglePlacesService, ApplicationEmailService, OrderEmailService], controllers: [MarketplacePublicController, MarketplaceCustomerController, MarketplaceAdminController, ProductPhotoController, ApplicationProofController, ApplicationAreasController, PublicAreasController, ShopYethuAppLinksController] })
 export class ShopYethuModule {}

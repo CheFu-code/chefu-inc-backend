@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Header, Headers, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Headers, NotFoundException, Param, Post, Put, Query, Redirect, Req, UseGuards } from '@nestjs/common';
 import { MarketplaceService } from './marketplace.service';
 import { MarketplaceAuthGuard, MarketplaceRequest } from './marketplace-auth.guard';
 
@@ -17,6 +17,16 @@ export class MarketplacePublicController {
   @Get('stores/:id') @Header('Cache-Control', 'no-store')
   storefront(@Param('id') id: string, @Query('page') page = '', @Query('view') view = '') {
     return this.market.catalog.storefront(id, page === '1', view === 'compact');
+  }
+  @Get('store/:id') @Header('Cache-Control', 'no-store') @Redirect()
+  shareStore(@Param('id') id: string) {
+    if (!id || id.length > 150) {
+      throw new NotFoundException('Storefront not found.');
+    }
+    return {
+      url: `shopyethu://store/${encodeURIComponent(id)}`,
+      statusCode: 302,
+    };
   }
 }
 
