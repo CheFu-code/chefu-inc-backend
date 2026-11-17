@@ -41,7 +41,7 @@ export class OrdersService {
       const products = await Promise.all(items.map(item => tx.get<Product>('products', item.productId)));
       const storeId = products[0]?.storeId;
       const store = storeId ? await tx.get<Storefront>('stores', storeId) : null;
-      if (!store || store.status !== 'active') throw new ConflictException('This seller is unavailable. Review your basket.');
+      if (!store || store.status !== 'active' || store.sellerPaused) throw new ConflictException('This seller is unavailable. Review your basket.');
       const snapshots = items.map((item, index) => {
         const product = products[index];
         if (!product || !product.published || product.storeId !== storeId) throw new ConflictException('Only available products from one store can be ordered together.');

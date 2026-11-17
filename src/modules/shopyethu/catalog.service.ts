@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
-import type { Actor, Fulfilment, MarketplaceRepository, Product, Storefront } from './marketplace.types';
+import type { Actor, Fulfilment, MarketplaceRepository, Product, SellerApplication, Storefront } from './marketplace.types';
 import { exists, integer, photos, seller, text } from './marketplace.validation';
 import type { GooglePlacesService } from './google-places.service';
 import { deleteProduct, moveProductToDraft } from './product-actions';
@@ -39,6 +39,7 @@ export class CatalogService {
     // Read only stores referenced by this page, without caching permissions/visibility.
     const stores = await this.stores([...new Set(page.items.map(item => item.storeId))]);
     return { products: page.items.filter(product => product.published && stores.get(product.storeId)?.status === 'active' &&
+      !stores.get(product.storeId)?.sellerPaused &&
       `${product.name} ${product.description}`.toLowerCase().includes(query.toLowerCase()))
       .map(product => this.productView(product, stores.get(product.storeId)!, compact)), nextCursor: page.nextCursor };
   }
@@ -49,20 +50,31 @@ export class CatalogService {
     const products = await this.repo.list<Product>('products', filters);
     const stores = await this.stores([...new Set(products.map(item => item.storeId))]);
     return products.filter(product => product.published && stores.get(product.storeId)?.status === 'active' &&
+      !stores.get(product.storeId)?.sellerPaused &&
       `${product.name} ${product.description}`.toLowerCase().includes(query.toLowerCase()))
       .map(product => this.productView(product, stores.get(product.storeId)!, compact));
   }
   async product(productId: string) {
     const product = exists(await this.repo.get<Product>('products', productId), 'Product');
     const store = exists(await this.repo.get<Storefront>('stores', product.storeId), 'Store');
-    if (!product.published || store.status !== 'active') throw new BadRequestException('This listing is no longer available.');
+    if (!product.published || store.status !== 'active' || store.sellerPaused) throw new BadRequestException('This listing is no longer available.');
     return { product, store };
   }
   async storefront(storeId: string, paginated = false, compact = false) {
     const store = exists(await this.repo.get<Storefront>('stores', storeId), 'Store');
-    if (store.status !== 'active') throw new BadRequestException('This store is currently unavailable.');
-    return paginated ? { store, ...await this.page('', '', storeId, '', compact) }
-      : { store, products: await this.browse('', '', storeId, compact) };
+    if (store.status !== 'active' || store.sellerPaused) throw new BadRequestException('This store is currently unavailable.');
+    const application = await this.repo.get<SellerApplication>('applications', store.ownerUid);
+    const storefront = {
+      ...store,
+      verified: Boolean(
+        application?.status === 'approved' &&
+        application.businessType === 'registered-business' &&
+        application.cipcCertificateId &&
+        application.cipcCertificateFormat,
+      ),
+    };
+    return paginated ? { store: storefront, ...await this.page('', '', storeId, '', compact) }
+      : { store: storefront, products: await this.browse('', '', storeId, compact) };
   }
   async mine(actor: Actor) {
     const store = await seller(this.repo, actor);
@@ -79,6 +91,20 @@ export class CatalogService {
       this.repo.page<Product>('products', [['ownerUid', actor.uid]], after, 24),
     ]);
     return { store: { ...store, nameEditable }, products: page.items, nextCursor: page.nextCursor };
+  }
+  async setSellerPaused(actor: Actor, paused: unknown) {
+    if (typeof paused !== 'boolean') throw new BadRequestException('Store pause state must be true or false.');
+    return this.repo.transaction(async tx => {
+      const store = exists(await tx.get<Storefront>('stores', actor.uid), 'Store');
+      if (store.ownerUid !== actor.uid) throw new ForbiddenException('You can only pause your own store.');
+      if (store.status !== 'active') {
+        throw new ForbiddenException(store.reason || 'Your store is suspended by CheFu staff.');
+      }
+      if ((store.sellerPaused ?? false) === paused) return store;
+      const updated = { ...store, sellerPaused: paused, updatedAt: new Date().toISOString() };
+      tx.set('stores', actor.uid, updated);
+      return updated;
+    });
   }
   async ownProduct(actor: Actor, productId: string) {
     const store = await seller(this.repo, actor);

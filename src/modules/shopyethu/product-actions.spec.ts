@@ -109,8 +109,10 @@ void test('a concurrent checkout and deletion leave no oversold or resurrected l
   assert.equal((await orders.list(buyer))[0].status, 'collected');
 });
 
-void test('new product actions inherit marketplace authentication and use the intended methods', () => {
+void test('seller mutations inherit marketplace authentication and use the intended methods', () => {
   assert.ok(Reflect.getMetadata('__guards__', MarketplaceCustomerController).includes(MarketplaceAuthGuard));
+  assert.equal(Reflect.getMetadata('path', MarketplaceCustomerController.prototype.sellerStoreStatus), 'seller/store/status');
+  assert.equal(Reflect.getMetadata('method', MarketplaceCustomerController.prototype.sellerStoreStatus), 2); // PUT
   assert.equal(Reflect.getMetadata('path', MarketplaceCustomerController.prototype.draftProduct), 'seller/products/:id/draft');
   assert.equal(Reflect.getMetadata('method', MarketplaceCustomerController.prototype.draftProduct), 2); // PUT
   assert.equal(Reflect.getMetadata('path', MarketplaceCustomerController.prototype.deleteProduct), 'seller/products/:id');

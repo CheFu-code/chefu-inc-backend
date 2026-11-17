@@ -62,7 +62,7 @@ export class ShopYethuAppLinksController {
                 details: [
                     {
                         appID: `${teamId}.${PACKAGE_NAME}`,
-                        paths: ['/shopyethu/store/*'],
+                        paths: ['/shopyethu/store/*', '/shopyethu/product/*'],
                     },
                 ],
             },
