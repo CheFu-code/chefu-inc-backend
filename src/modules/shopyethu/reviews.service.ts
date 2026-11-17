@@ -81,6 +81,7 @@ export class ReviewsService {
       tx.set('reviews', id, review);
       tx.set('products', product.id, {
         ...product,
+        identityLocked: true,
         reviewCount: (Number.isSafeInteger(product.reviewCount) ? product.reviewCount || 0 : 0) + 1,
         ratingTotal: (Number.isSafeInteger(product.ratingTotal) ? product.ratingTotal || 0 : 0) + rating,
       });

@@ -49,6 +49,33 @@ test('replaying a product save never restores stock changed by a later order', a
   await assert.rejects(catalog.saveProduct(actor, { ...fields, expectedUpdatedAt: saved.updatedAt, expectedStock: 5 }, product.id, 'stale-stock-attempt-123'), status(409));
 });
 
+test('legacy products with reviews keep identity locked while price and stock remain editable', async () => {
+  const { catalog, repo } = await setup();
+  const product = await catalog.saveProduct(actor, fields);
+  await repo.transaction(async tx => {
+    tx.set('products', product.id, { ...product, reviewCount: 1, ratingTotal: 5 });
+  });
+
+  await assert.rejects(catalog.saveProduct(actor, {
+    ...fields,
+    name: 'A different product',
+    expectedUpdatedAt: product.updatedAt,
+    expectedStock: product.stock,
+  }, product.id), status(409));
+
+  const updated = await catalog.saveProduct(actor, {
+    ...fields,
+    priceCents: 3000,
+    stock: 7,
+    expectedUpdatedAt: product.updatedAt,
+    expectedStock: product.stock,
+  }, product.id);
+  assert.equal(updated.identityLocked, true);
+  assert.equal(updated.reviewCount, 1);
+  assert.equal(updated.priceCents, 3000);
+  assert.equal(updated.stock, 7);
+});
+
 test('retry keys are account-scoped; suspended sellers and unrelated owners remain blocked', async () => {
   const { catalog, repo } = await setup();
   const other: Actor = { uid: 'other-product-test', email: 'other@example.test', roles: [] };

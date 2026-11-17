@@ -43,6 +43,7 @@ export type Storefront = {
     description: string;
     area: string;
     areaPlaceId?: string;
+    verified?: boolean;
     nameEditable?: boolean;
     sellerPaused?: boolean;
     status: "active" | "suspended";
@@ -66,6 +67,7 @@ export type Product = {
     photos: string[];
     published: boolean;
     fulfilment: Fulfilment[];
+    identityLocked?: boolean;
     reviewCount?: number;
     ratingTotal?: number;
     updatedAt: string;

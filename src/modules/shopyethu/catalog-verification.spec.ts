@@ -32,12 +32,19 @@ void test('public storefront verification reflects approved registered-business 
   await repo.transaction(async tx => {
     tx.set('stores', seller.uid, store);
     tx.set('applications', seller.uid, application);
+    tx.set('products', 'verified-product', {
+      id: 'verified-product', storeId: seller.uid, ownerUid: seller.uid,
+      name: 'Verified product', description: 'A test product.',
+      category: 'Other', priceCents: 1000, stock: 1, photos: [],
+      published: true, fulfilment: ['collection'], updatedAt: store.updatedAt,
+    });
   });
 
   const catalog = new CatalogService(repo);
   const verified = await catalog.storefront(seller.uid);
   assert.equal(verified.store.verified, true);
   assert.equal('cipcCertificateId' in verified.store, false);
+  assert.equal((await catalog.page('', '', '', '', false, { includeStoreVerification: true })).products[0].storeVerified, true);
 
   for (const updatedApplication of [
     { ...application, status: 'pending' as const },
@@ -50,5 +57,6 @@ void test('public storefront verification reflects approved registered-business 
     });
     const result = await catalog.storefront(seller.uid);
     assert.equal(result.store.verified, false);
+    assert.equal((await catalog.page('', '', '', '', false, { includeStoreVerification: true })).products[0].storeVerified, false);
   }
 });

@@ -3,6 +3,7 @@ import type { Actor, MarketplaceRepository, SellerApplication, Storefront, Appli
 import { assertAdmin, exists, text } from './marketplace.validation';
 import { applicationFields, applicationHistory } from './application.validation';
 import type { GooglePlacesService } from './google-places.service';
+import { isVerifiedSeller } from './seller-verification';
 
 export class ApplicationsService {
     private readonly logger = new Logger(ApplicationsService.name);
@@ -61,12 +62,15 @@ export class ApplicationsService {
             const now = new Date().toISOString();
             const updated = { ...application, status, reason, updatedAt: now, history: applicationHistory(application, { status, reason, at: now }) };
             tx.set('applications', uid, updated);
-            if (status === 'approved' && !existing) tx.set('stores', uid, {
-                id: uid, ownerUid: uid, name: application.businessName, description: application.plans,
-                nameEditable: application.businessType !== 'registered-business',
-                area: application.area, ...(application.areaPlaceId ? { areaPlaceId: application.areaPlaceId } : {}),
-                status: 'active', reason: '', updatedAt: updated.updatedAt,
-            });
+            if (status === 'approved') tx.set('stores', uid, existing
+                ? { ...existing, verified: isVerifiedSeller(updated) }
+                : {
+                    id: uid, ownerUid: uid, name: application.businessName, description: application.plans,
+                    nameEditable: application.businessType !== 'registered-business',
+                    verified: isVerifiedSeller(updated),
+                    area: application.area, ...(application.areaPlaceId ? { areaPlaceId: application.areaPlaceId } : {}),
+                    status: 'active', reason: '', updatedAt: updated.updatedAt,
+                });
             return updated;
         });
         if (saved.status === 'approved') {

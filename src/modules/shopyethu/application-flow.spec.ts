@@ -57,6 +57,7 @@ void test('Google operating areas are verified and only their Place ID is persis
   const store = await repo.get<Storefront>('stores', applicant.uid);
   assert.equal(store?.area, '');
   assert.equal(store?.areaPlaceId, placeId);
+  assert.equal(store?.verified, false);
 });
 
 void test('registered businesses must submit a certificate owned by their account', async () => {
@@ -85,6 +86,21 @@ void test('registered businesses must submit a certificate owned by their accoun
       badRequest,
     );
   }
+});
+
+void test('approved registered-business storefronts persist their verified badge status', async () => {
+  const repo = new TestRepository();
+  const service = new ApplicationsService(repo);
+  const certificateId = `shopyethu-applications/${applicant.uid}/123e4567-e89b-12d3-a456-426614174000.pdf`;
+  await service.submit(applicant, {
+    ...fields,
+    businessType: 'registered-business',
+    cipcCertificateId: certificateId,
+    cipcCertificateFormat: 'pdf',
+  });
+  await service.review(staff, applicant.uid, { status: 'approved' });
+  const store = await repo.get<Storefront>('stores', applicant.uid);
+  assert.equal(store?.verified, true);
 });
 
 void test('application contact numbers use canonical international format without changing verification status', () => {

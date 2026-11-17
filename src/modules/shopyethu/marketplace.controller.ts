@@ -42,6 +42,7 @@ export class MarketplacePublicController {
         @Query("page") page = "",
         @Query("view") view = "",
         @Query("sort") sort = "newest",
+        @Query("includeStoreVerification") includeStoreVerification = "",
     ) {
         const compact = view === "compact";
         if (page === "1" || after)
@@ -51,7 +52,10 @@ export class MarketplacePublicController {
                 store.slice(0, 150),
                 after,
                 compact,
-                { sort: sort.slice(0, 20) },
+                {
+                    sort: sort.slice(0, 20),
+                    includeStoreVerification: includeStoreVerification === "1",
+                },
             );
         return {
             products: await this.market.catalog.browse(
@@ -90,11 +94,15 @@ export class MarketplacePublicController {
         @Param("id") id: string,
         @Query("page") page = "",
         @Query("view") view = "",
+        @Query("sort") sort = "newest",
+        @Query("includeStoreVerification") includeStoreVerification = "",
     ) {
         return this.market.catalog.storefront(
             id,
             page === "1",
             view === "compact",
+            sort.slice(0, 20),
+            includeStoreVerification === "1",
         );
     }
     @Get("store/:id")

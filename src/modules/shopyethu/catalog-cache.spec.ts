@@ -77,7 +77,7 @@ void test('catalogue groups unique store visibility reads through the batch read
   const data = new TestRepository();
   await data.transaction(async tx => {
     for (let id = 0; id < 3; id++) {
-      tx.set('stores', `seller-${id}`, { id: `seller-${id}`, name: `Store ${id}`, status: 'active' });
+      tx.set('stores', `seller-${id}`, { id: `seller-${id}`, name: `Store ${id}`, status: 'active', verified: false });
       tx.set('products', String(id), { id: String(id), storeId: `seller-${id}`, published: true, category: 'Other', name: 'Test product', description: 'Only in tests.' });
     }
   });
@@ -118,6 +118,8 @@ void test('catalogue discovery sorts by price and keeps sort-order cursor pagina
   const highToLow = await catalog.page('', 'Other', '', '', true, { sort: 'price-high' });
   assert.deepEqual(lowToHigh.products.map(product => product.id), ['low', 'mid', 'high']);
   assert.deepEqual(highToLow.products.map(product => product.id), ['high', 'mid', 'low']);
+  const storeSorted = await catalog.storefront('seller', true, true, 'price-low');
+  assert.deepEqual(storeSorted.products.map(product => product.id), ['low', 'mid', 'high']);
   await assert.rejects(catalog.page('', '', '', '', true, { sort: 'invalid' }), (error: any) => error.getStatus?.() === 400);
 
   const orderOptions: PageOptions = {

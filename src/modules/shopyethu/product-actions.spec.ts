@@ -25,6 +25,16 @@ async function setup() {
   return { repo, catalog, orders, product, body: { items: [{ productId: product.id, quantity: 2, expectedPriceCents: fields.priceCents }], fulfilment: 'collection', contact: 'buyer@example.test', address: '' } };
 }
 
+void test('a product owner cannot order from their own store or consume its stock', async () => {
+  const { repo, orders, product, body } = await setup();
+  await assert.rejects(
+    orders.place(owner, { ...body, contact: owner.email }, 'self-order-owner-12345'),
+    status(409),
+  );
+  assert.equal((await repo.get<Product>('products', product.id))?.stock, fields.stock);
+  assert.equal((await orders.list(owner)).length, 0);
+});
+
 void test('moving to draft changes only publication and a repeated action adds no writes', async () => {
   const { repo, catalog, orders, product, body } = await setup();
   await orders.place(buyer, body, 'draft-checkout-12345');

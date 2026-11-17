@@ -72,6 +72,44 @@ test('published product -> buyer order -> seller updates -> customer history; re
   await assert.rejects(orders.place(buyer, { ...body, contact: 'changed@example.test' }, 'same-key-12345678'), status(409));
 });
 
+test('a successful order locks product identity while leaving price and stock editable', async () => {
+  const { catalog, orders, repo } = await approved();
+  const product = await catalog.saveProduct(seller, listing);
+  const order = await orders.place(buyer, {
+    items: [{ productId: product.id, quantity: 1, expectedPriceCents: listing.priceCents }],
+    fulfilment: 'collection',
+    contact: buyer.email,
+  }, 'identity-lock-order-123');
+  const ordered = await repo.get<any>('products', product.id);
+  assert.equal(ordered.identityLocked, true);
+
+  for (const change of [
+    { name: 'A different product' },
+    { description: 'This is a different product description.' },
+    { category: 'Different category' },
+    { photos: ['https://example.test/different-item.jpg'] },
+  ]) {
+    await assert.rejects(catalog.saveProduct(seller, {
+      ...listing,
+      ...change,
+      expectedUpdatedAt: ordered.updatedAt,
+      expectedStock: ordered.stock,
+    }, product.id), status(409));
+  }
+
+  const saved = await catalog.saveProduct(seller, {
+    ...listing,
+    priceCents: 12000,
+    stock: 7,
+    expectedUpdatedAt: ordered.updatedAt,
+    expectedStock: ordered.stock,
+  }, product.id);
+  assert.equal(saved.identityLocked, true);
+  assert.equal(saved.priceCents, 12000);
+  assert.equal(saved.stock, 7);
+  assert.equal(order.items[0].productId, product.id);
+});
+
 test('checkout rejects stale prices, insufficient stock and unsupported delivery', async () => {
   const { catalog, orders, repo } = await approved();
   const product = await catalog.saveProduct(seller, listing);
@@ -113,6 +151,7 @@ test('product reviews require the buyer’s completed order, verify item members
   assert.equal((await reviews.list(product.id)).averageRating, 5);
   assert.equal((await reviews.list(product.id)).reviewCount, 1);
   assert.deepEqual((await reviews.reviewedProducts(buyer, order.id)).reviewedProductIds, [product.id]);
+  assert.equal((await repo.get<any>('products', product.id)).identityLocked, true);
   await assert.rejects(reviews.create(buyer, product.id, {
     orderId: order.id, rating: 4,
   }), status(409));
