@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { CatalogService } from './catalog.service';
 import { TestRepository } from './marketplace.testing';
 
-test('single-product editing requires an active owner, including access to private drafts', async () => {
+void test('single-product editing requires an active owner, including access to private drafts', async () => {
   const repo = new TestRepository();
   const catalog = new CatalogService(repo);
   const owner = { uid: 'read-owner', email: 'owner@example.test', roles: [] };
@@ -19,7 +19,7 @@ test('single-product editing requires an active owner, including access to priva
   await assert.rejects(catalog.ownProduct(owner, 'private-product'), (cause: any) => cause.getStatus() === 403);
 });
 
-test('seller inventory uses bounded owner-scoped cursor pages', async () => {
+void test('seller inventory uses bounded owner-scoped cursor pages', async () => {
   const repo = new TestRepository();
   const catalog = new CatalogService(repo);
   const owner = { uid: 'paged-owner', email: 'owner@example.test', roles: [] };
