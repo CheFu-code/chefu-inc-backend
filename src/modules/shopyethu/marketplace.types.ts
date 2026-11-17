@@ -50,6 +50,10 @@ export type Storefront = {
     updatedAt: string;
 };
 export type Fulfilment = "collection" | "local-delivery";
+export type CatalogueSort = "newest" | "price-low" | "price-high";
+export type PageOptions = {
+    order?: { field: "updatedAt" | "createdAt" | "priceCents"; direction: "asc" | "desc" };
+};
 export type Product = {
     id: string;
     storeId: string;
@@ -62,7 +66,19 @@ export type Product = {
     photos: string[];
     published: boolean;
     fulfilment: Fulfilment[];
+    reviewCount?: number;
+    ratingTotal?: number;
     updatedAt: string;
+};
+export type ProductReview = {
+    id: string;
+    productId: string;
+    orderId: string;
+    buyerUid: string;
+    rating: number;
+    comment: string;
+    verifiedPurchase: true;
+    createdAt: string;
 };
 export type OrderStatus =
     | "placed"
@@ -129,6 +145,7 @@ export interface MarketplaceRepository extends BatchReader {
         filters: Filters,
         after: string,
         limit: number,
+        options?: PageOptions,
     ): Promise<{ items: T[]; nextCursor: string | null }>;
     transaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T>;
 }

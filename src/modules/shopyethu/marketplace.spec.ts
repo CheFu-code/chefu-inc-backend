@@ -5,6 +5,7 @@ import { ApplicationsService } from './applications.service';
 import { CatalogService } from './catalog.service';
 import { OrdersService } from './orders.service';
 import { ReportsService } from './reports.service';
+import { ReviewsService } from './reviews.service';
 import type { Actor } from './marketplace.types';
 
 const buyer: Actor = { uid: 'buyer-test', email: 'buyer@example.test', roles: [] };
@@ -17,7 +18,7 @@ const status = (expected: number) => (error: any) => error.getStatus?.() === exp
 
 function setup() {
   const repo = new TestRepository();
-  return { repo, applications: new ApplicationsService(repo), catalog: new CatalogService(repo), orders: new OrdersService(repo), reports: new ReportsService(repo) };
+  return { repo, applications: new ApplicationsService(repo), catalog: new CatalogService(repo), orders: new OrdersService(repo), reports: new ReportsService(repo), reviews: new ReviewsService(repo) };
 }
 async function approved() {
   const context = setup();
@@ -80,6 +81,47 @@ test('checkout rejects stale prices, insufficient stock and unsupported delivery
   await assert.rejects(orders.place(buyer, { ...body, fulfilment: 'local-delivery' }, 'delivery-12345678'), status(400));
   assert.equal((await repo.get<any>('products', product.id)).stock, 3);
   assert.equal((await orders.list(buyer)).length, 0);
+});
+
+test('product reviews require the buyer’s completed order, verify item membership and prevent duplicate ratings', async () => {
+  const { catalog, orders, reviews, repo } = await approved();
+  const product = await catalog.saveProduct(seller, listing);
+  const otherProduct = await catalog.saveProduct(seller, { ...listing, name: 'Another listing' });
+  const order = await orders.place(buyer, {
+    items: [{ productId: product.id, quantity: 1, expectedPriceCents: 10000 }],
+    fulfilment: 'collection', contact: buyer.email,
+  }, 'review-order-12345678');
+
+  await assert.rejects(reviews.create(buyer, product.id, {
+    orderId: order.id, rating: 5, comment: 'Great quality.',
+  }), status(409));
+  await assert.rejects(reviews.create(other, product.id, {
+    orderId: order.id, rating: 5,
+  }), status(403));
+
+  for (const state of ['accepted', 'preparing', 'ready']) await orders.update(seller, order.id, state);
+  await orders.confirmPayment(seller, order.id);
+  await orders.update(seller, order.id, 'collected');
+  await assert.rejects(reviews.create(buyer, otherProduct.id, {
+    orderId: order.id, rating: 4,
+  }), status(400));
+
+  const review = await reviews.create(buyer, product.id, {
+    orderId: order.id, rating: 5, comment: 'Great quality.',
+  });
+  assert.equal(review.verifiedPurchase, true);
+  assert.equal((await reviews.list(product.id)).averageRating, 5);
+  assert.equal((await reviews.list(product.id)).reviewCount, 1);
+  assert.deepEqual((await reviews.reviewedProducts(buyer, order.id)).reviewedProductIds, [product.id]);
+  await assert.rejects(reviews.create(buyer, product.id, {
+    orderId: order.id, rating: 4,
+  }), status(409));
+  await assert.rejects(reviews.reviewedProducts(other, order.id), status(403));
+
+  const edited = await catalog.saveProduct(seller, { ...listing, stock: 2 }, product.id);
+  assert.equal(edited.reviewCount, 1);
+  assert.equal(edited.ratingTotal, 5);
+  assert.equal((await repo.get<any>('products', product.id)).reviewCount, 1);
 });
 
 test('seller ownership, status transitions, cancellation restocking, suspension and report access fail closed', async () => {

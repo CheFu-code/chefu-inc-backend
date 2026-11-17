@@ -5,6 +5,7 @@ import { CatalogService } from './catalog.service';
 import { FirestoreMarketplaceRepository } from './marketplace.repository';
 import { TestRepository } from './marketplace.testing';
 import { OrdersService } from './orders.service';
+import type { PageOptions } from './marketplace.types';
 import { readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 
@@ -100,6 +101,34 @@ void test('catalogue groups unique store visibility reads through the batch read
   assert.equal(batchCalls, 1);
 });
 
+void test('catalogue discovery sorts by price and keeps sort-order cursor pagination stable', async () => {
+  const repo = new TestRepository();
+  await repo.transaction(async tx => {
+    tx.set('stores', 'seller', { id: 'seller', name: 'Test store', status: 'active' });
+    for (const [id, priceCents] of [['mid', 2000], ['low', 1000], ['high', 3000]] as const) {
+      tx.set('products', id, {
+        id, storeId: 'seller', published: true, category: 'Other', name: `${id} listing`,
+        description: 'Only in tests.', priceCents, stock: 1, photos: [],
+        fulfilment: ['collection'], updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+    }
+  });
+  const catalog = new CatalogService(repo);
+  const lowToHigh = await catalog.page('', 'Other', '', '', true, { sort: 'price-low' });
+  const highToLow = await catalog.page('', 'Other', '', '', true, { sort: 'price-high' });
+  assert.deepEqual(lowToHigh.products.map(product => product.id), ['low', 'mid', 'high']);
+  assert.deepEqual(highToLow.products.map(product => product.id), ['high', 'mid', 'low']);
+  await assert.rejects(catalog.page('', '', '', '', true, { sort: 'invalid' }), (error: any) => error.getStatus?.() === 400);
+
+  const orderOptions: PageOptions = {
+    order: { field: 'priceCents', direction: 'asc' },
+  };
+  const first = await repo.page<any>('products', [['published', 'true']], '', 1, orderOptions);
+  const second = await repo.page<any>('products', [['published', 'true']], first.nextCursor!, 1, orderOptions);
+  assert.equal(first.items[0].id, 'low');
+  assert.equal(second.items[0].id, 'mid');
+});
+
 void test('compact catalogue responses keep searchable summaries but omit descriptions and extra photo URLs', async t => {
   const repo = new TestRepository();
   const products = Array.from({ length: 24 }, (_, productIndex) => ({
@@ -121,9 +150,9 @@ void test('compact catalogue responses keep searchable summaries but omit descri
   assert.equal(full.products.length, 24);
   assert.equal(full.products[0].description.length, 3999);
   assert.equal(compact.products[0].description, '');
-  assert.deepEqual(compact.products[0].photos, [products[0].photos[0]]);
+  assert.deepEqual(compact.products[0].photos, [full.products[0].photos[0]]);
   assert.equal(storePage.products[0].description, '');
-  assert.deepEqual(storePage.products[0].photos, [products[0].photos[0]]);
+  assert.deepEqual(storePage.products[0].photos, [full.products[0].photos[0]]);
   const fullBytes = Buffer.byteLength(JSON.stringify(full));
   const compactBytes = Buffer.byteLength(JSON.stringify(compact));
   const fullGzipBytes = gzipSync(JSON.stringify(full)).length;
@@ -153,6 +182,32 @@ void test('Firestore batch reader deduplicates references and makes one batch re
   assert.deepEqual([...stores.keys()], ['one', 'two']);
 });
 
+void test('Firestore sorted cursors carry both ordered field and document ID', async () => {
+  const orderings: unknown[][] = [], cursors: unknown[][] = [];
+  const docs = [
+    { id: 'one', get: (field: string) => field === 'priceCents' ? 100 : null, data: () => ({ id: 'one', priceCents: 100 }) },
+    { id: 'two', get: (field: string) => field === 'priceCents' ? 200 : null, data: () => ({ id: 'two', priceCents: 200 }) },
+  ];
+  const collection = () => {
+    const query = {
+      where: () => query,
+      orderBy: (...args: unknown[]) => { orderings.push(args); return query; },
+      startAfter: (...args: unknown[]) => { cursors.push(args); return query; },
+      limit: () => query,
+      get: async () => ({ docs, size: docs.length }),
+    };
+    return query;
+  };
+  const repo = new FirestoreMarketplaceRepository({ db: () => ({ collection }) } as any);
+  const options: PageOptions = { order: { field: 'priceCents', direction: 'asc' } };
+  const first = await repo.page<any>('products', [['published', 'true']], '', 1, options);
+  assert.equal(first.items[0].id, 'one');
+  assert.equal(typeof first.nextCursor, 'string');
+  await repo.page<any>('products', [['published', 'true']], first.nextCursor!, 1, options);
+  assert.deepEqual(cursors, [[100, 'one']]);
+  assert.equal(orderings.length, 4);
+});
+
 void test('a confirmed order is recovered by its original key after a seller suspension; new orders remain blocked', async () => {
   const repo = new TestRepository(), actor = { uid: 'buyer', email: 'test@example.test', roles: [] };
   await repo.transaction(async tx => {
@@ -173,5 +228,12 @@ void test('catalogue composite indexes cover category, store and combined cursor
   for (const fields of [['published', 'category'], ['published', 'storeId'], ['published', 'category', 'storeId']]) {
     assert.ok(indexes.some((index: any) => index.collectionGroup === 'shopyethu_products' &&
       index.fields.map((field: any) => field.fieldPath).join(',') === fields.join(',')));
+  }
+  assert.ok(indexes.some((index: any) => index.collectionGroup === 'shopyethu_reviews' &&
+    index.fields.map((field: any) => field.fieldPath).join(',') === 'productId,createdAt'));
+  for (const sortField of ['updatedAt', 'priceCents']) {
+    assert.ok(indexes.some((index: any) => index.collectionGroup === 'shopyethu_products' &&
+      index.fields.some((field: any) => field.fieldPath === 'published') &&
+      index.fields.some((field: any) => field.fieldPath === sortField)));
   }
 });

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
-import type { Actor, Fulfilment, MarketplaceRepository, Product, SellerApplication, Storefront } from './marketplace.types';
+import type { Actor, CatalogueSort, Fulfilment, MarketplaceRepository, PageOptions, Product, SellerApplication, Storefront } from './marketplace.types';
 import { exists, integer, photos, seller, text } from './marketplace.validation';
 import type { GooglePlacesService } from './google-places.service';
 import { deleteProduct, moveProductToDraft } from './product-actions';
@@ -30,12 +30,31 @@ export class CatalogService {
     if (this.repo.getMany) return this.repo.getMany<Storefront>('stores', ids);
     return new Map(await Promise.all(ids.map(async id => [id, await this.repo.get<Storefront>('stores', id)] as const)));
   }
-  async page(query = '', category = '', storeId = '', after = '', compact = false) {
+  async page(query = '', category = '', storeId = '', after = '', compact = false,
+    discovery: { sort?: string } = {}) {
+    const sort = (discovery.sort || 'newest') as CatalogueSort;
+    if (!['newest', 'price-low', 'price-high'].includes(sort)) {
+      throw new BadRequestException('Choose a valid product sort order.');
+    }
+    const options: PageOptions = {
+      order: sort === 'newest'
+        ? { field: 'updatedAt', direction: 'desc' }
+        : { field: 'priceCents', direction: sort === 'price-low' ? 'asc' : 'desc' },
+    };
     const filters: [string, string][] = [['published', 'true']];
     if (category) filters.push(['category', category]);
     if (storeId) filters.push(['storeId', storeId]);
-    const page = this.repo.page ? await this.repo.page<Product>('products', filters, after, 24)
-      : { items: await this.repo.list<Product>('products', filters), nextCursor: null };
+    const page = this.repo.page
+      ? await this.repo.page<Product>('products', filters, after, 24, options)
+      : {
+        items: (await this.repo.list<Product>('products', filters)).sort((left, right) => {
+        const field = options.order!.field === 'priceCents' ? 'priceCents' : 'updatedAt';
+          const a = left[field], b = right[field];
+          const compared = a < b ? -1 : a > b ? 1 : left.id.localeCompare(right.id);
+          return options.order!.direction === 'desc' ? -compared : compared;
+        }),
+        nextCursor: null,
+      };
     // Read only stores referenced by this page, without caching permissions/visibility.
     const stores = await this.stores([...new Set(page.items.map(item => item.storeId))]);
     return { products: page.items.filter(product => product.published && stores.get(product.storeId)?.status === 'active' &&
@@ -182,7 +201,12 @@ export class CatalogService {
         if (reservation) tx.set('idempotency', reservation, { productId: targetId, signature });
         return current;
       }
-      const product: Product = { ...fields, id: targetId, ownerUid: actor.uid, storeId: actor.uid, updatedAt: new Date().toISOString() };
+      const product: Product = {
+        ...fields,
+        ...(current?.reviewCount !== undefined ? { reviewCount: current.reviewCount } : {}),
+        ...(current?.ratingTotal !== undefined ? { ratingTotal: current.ratingTotal } : {}),
+        id: targetId, ownerUid: actor.uid, storeId: actor.uid, updatedAt: new Date().toISOString(),
+      };
       tx.set('products', targetId, product);
       if (reservation) tx.set('idempotency', reservation, { productId: targetId, signature });
       return product;

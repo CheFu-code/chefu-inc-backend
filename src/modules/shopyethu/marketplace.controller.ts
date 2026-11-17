@@ -41,6 +41,7 @@ export class MarketplacePublicController {
         @Query("after") after = "",
         @Query("page") page = "",
         @Query("view") view = "",
+        @Query("sort") sort = "newest",
     ) {
         const compact = view === "compact";
         if (page === "1" || after)
@@ -50,6 +51,7 @@ export class MarketplacePublicController {
                 store.slice(0, 150),
                 after,
                 compact,
+                { sort: sort.slice(0, 20) },
             );
         return {
             products: await this.market.catalog.browse(
@@ -64,6 +66,11 @@ export class MarketplacePublicController {
     @Header("Cache-Control", "no-store")
     product(@Param("id") id: string) {
         return this.market.catalog.product(id);
+    }
+    @Get("products/:id/reviews")
+    @Header("Cache-Control", "no-store")
+    reviews(@Param("id") id: string, @Query("after") after = "") {
+        return this.market.reviews.list(id, after);
     }
     @Get("product/:id")
     @Header("Cache-Control", "no-store")
@@ -133,6 +140,18 @@ export class MarketplaceCustomerController {
     }
     @Get("orders") async orders(@Req() req: MarketplaceRequest) {
         return { orders: await this.market.orders.list(req.user) };
+    }
+    @Get("orders/:id/reviews")
+    reviewedProducts(@Req() req: MarketplaceRequest, @Param("id") id: string) {
+        return this.market.reviews.reviewedProducts(req.user, id);
+    }
+    @Post("products/:id/reviews")
+    reviewProduct(
+        @Req() req: MarketplaceRequest,
+        @Param("id") id: string,
+        @Body() body: Record<string, unknown>,
+    ) {
+        return this.market.reviews.create(req.user, id, body);
     }
     @Post("orders") order(
         @Req() req: MarketplaceRequest,
