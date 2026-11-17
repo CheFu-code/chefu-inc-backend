@@ -104,7 +104,7 @@ void test('transaction callback retries send once, failed commits never send, an
   const repeating = {
     get: repo.get.bind(repo), list: repo.list.bind(repo),
     transaction: async <T>(work: Parameters<TestRepository['transaction']>[0]): Promise<T> => {
-      await work({ get: async () => null, set() {} }); // Firestore's discarded first attempt.
+      await work({ get: async () => null, set() {}, delete() { assert.fail('Submission must not delete records'); } }); // Firestore's discarded first attempt.
       return repo.transaction(work) as Promise<T>;
     },
   };

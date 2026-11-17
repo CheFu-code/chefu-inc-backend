@@ -93,7 +93,7 @@ void test('database callback retries send once; a failed commit never sends and 
   const { repo, body } = await setup(); let sent = 0;
   const repeating = { get: repo.get.bind(repo), list: repo.list.bind(repo),
     transaction: async <T>(work: (tx: Transaction) => Promise<T>) => {
-      await work({ get: repo.get.bind(repo), set() {} }); // Discarded Firestore attempt.
+      await work({ get: repo.get.bind(repo), set() {}, delete() { assert.fail('Checkout must not delete records'); } }); // Discarded Firestore attempt.
       return repo.transaction(work);
     },
   };

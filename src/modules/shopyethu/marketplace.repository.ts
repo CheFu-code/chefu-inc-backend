@@ -64,6 +64,7 @@ export class FirestoreMarketplaceRepository implements MarketplaceRepository {
         return doc.exists ? doc.data() as V : null;
       },
       set: (table, id, data) => { changed.add(table); native.set(db.collection(collection(table)).doc(documentId(id)), data); },
+      delete: (table, id) => { changed.add(table); native.delete(db.collection(collection(table)).doc(documentId(id))); },
     }));
     if (changed.has('products') || changed.has('stores')) this.publicProducts.invalidate();
     return result;

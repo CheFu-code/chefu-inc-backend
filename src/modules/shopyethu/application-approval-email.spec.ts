@@ -99,7 +99,7 @@ void test('approval survives mail failure; failed database commit sends nothing;
   const repeating = new ApplicationsService({
     get: repo.get.bind(repo), list: repo.list.bind(repo),
     transaction: async <T>(work: (tx: Transaction) => Promise<T>) => {
-      await work({ get: repo.get.bind(repo), set() {} });
+      await work({ get: repo.get.bind(repo), set() {}, delete() { assert.fail('Approval must not delete records'); } });
       return repo.transaction(work);
     },
   }, undefined, notify);

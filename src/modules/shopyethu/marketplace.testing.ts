@@ -12,16 +12,17 @@ export class TestRepository implements MarketplaceRepository {
   transaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {
     const run = this.queue.catch(() => undefined).then(async () => {
       const snapshot = new Map(this.rows);
-      const pending: [string, object][] = [];
+      const pending: [string, object | null][] = [];
       const tx: Transaction = {
         get: async <V>(table: string, id: string) => {
           if (pending.length) throw new Error('Firestore transactions must read before writing.');
           return structuredClone(snapshot.get(`${table}/${id}`) ?? null) as V | null;
         },
         set: (table, id, value) => { pending.push([`${table}/${id}`, structuredClone(value)]); },
+        delete: (table, id) => { pending.push([`${table}/${id}`, null]); },
       };
       const result = await work(tx);
-      pending.forEach(([key, value]) => snapshot.set(key, value));
+      pending.forEach(([key, value]) => { if (value === null) snapshot.delete(key); else snapshot.set(key, value); });
       this.rows = snapshot;
       this.writes += pending.length;
       return result;

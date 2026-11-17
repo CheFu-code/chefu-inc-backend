@@ -3,6 +3,7 @@ import { BadRequestException, ConflictException, ForbiddenException } from '@nes
 import type { Actor, Fulfilment, MarketplaceRepository, Product, Storefront } from './marketplace.types';
 import { exists, integer, photos, seller, text } from './marketplace.validation';
 import type { GooglePlacesService } from './google-places.service';
+import { deleteProduct, moveProductToDraft } from './product-actions';
 
 function productFieldsMatch(current: Product, fields: Pick<Product, 'name' | 'description' | 'category' | 'priceCents' | 'stock' | 'photos' | 'fulfilment' | 'published'>, ownerUid: string) {
   const sameArray = <T>(left: T[], right: T[]) => left.length === right.length && left.every((value, index) => value === right[index]);
@@ -15,6 +16,8 @@ function productFieldsMatch(current: Product, fields: Pick<Product, 'name' | 'de
 
 export class CatalogService {
   constructor(private readonly repo: MarketplaceRepository, private readonly places?: Pick<GooglePlacesService, 'resolve'>) {}
+  draftProduct(actor: Actor, productId: string) { return moveProductToDraft(this.repo, actor, productId); }
+  deleteProduct(actor: Actor, productId: string) { return deleteProduct(this.repo, actor, productId); }
   private productView(product: Product, store: Storefront, compact: boolean) {
     return {
       ...product,

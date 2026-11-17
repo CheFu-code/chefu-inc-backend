@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Header, Headers, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Headers, Param, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { MarketplaceService } from './marketplace.service';
 import { MarketplaceAuthGuard, MarketplaceRequest } from './marketplace-auth.guard';
 
@@ -34,6 +34,8 @@ export class MarketplaceCustomerController {
   @Put('seller/store') store(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>) { return this.market.catalog.saveStore(req.user, body); }
   @Post('seller/products') createProduct(@Req() req: MarketplaceRequest, @Body() body: Record<string, unknown>, @Headers('idempotency-key') key?: string) { return this.market.catalog.saveProduct(req.user, body, undefined, key); }
   @Put('seller/products/:id') updateProduct(@Req() req: MarketplaceRequest, @Param('id') id: string, @Body() body: Record<string, unknown>, @Headers('idempotency-key') key?: string) { return this.market.catalog.saveProduct(req.user, body, id, key); }
+  @Put('seller/products/:id/draft') draftProduct(@Req() req: MarketplaceRequest, @Param('id') id: string) { return this.market.catalog.draftProduct(req.user, id); }
+  @Delete('seller/products/:id') deleteProduct(@Req() req: MarketplaceRequest, @Param('id') id: string) { return this.market.catalog.deleteProduct(req.user, id); }
   @Get('seller/orders') async incoming(@Req() req: MarketplaceRequest) { return { orders: await this.market.orders.list(req.user, true) }; }
   @Put('seller/orders/:id') status(@Req() req: MarketplaceRequest, @Param('id') id: string, @Body() body: { status?: unknown }) { return this.market.orders.update(req.user, id, body.status); }
   @Put('seller/orders/:id/payment') confirmPayment(@Req() req: MarketplaceRequest, @Param('id') id: string) { return this.market.orders.confirmPayment(req.user, id); }
