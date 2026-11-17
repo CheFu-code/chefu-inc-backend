@@ -7,6 +7,7 @@ import {
     Headers,
     NotFoundException,
     Param,
+    Patch,
     Post,
     Put,
     Query,
@@ -19,6 +20,7 @@ import {
     MarketplaceAuthGuard,
     MarketplaceRequest,
 } from "./marketplace-auth.guard";
+import { NotificationsService } from "../notifications/notifications.service";
 
 @Controller("shopyethu")
 export class MarketplacePublicController {
@@ -105,9 +107,23 @@ export class MarketplacePublicController {
 @Controller("shopyethu")
 @UseGuards(MarketplaceAuthGuard)
 export class MarketplaceCustomerController {
-    constructor(private readonly market: MarketplaceService) {}
+    constructor(
+        private readonly market: MarketplaceService,
+        private readonly notifications: NotificationsService,
+    ) {}
     @Get("me") me(@Req() req: MarketplaceRequest) {
         return this.market.applications.account(req.user);
+    }
+    @Get("notifications/preferences")
+    notificationPreferences(@Req() req: MarketplaceRequest) {
+        return this.notifications.getShopYethuPreferences(req.user);
+    }
+    @Patch("notifications/preferences")
+    updateNotificationPreferences(
+        @Req() req: MarketplaceRequest,
+        @Body() body: unknown,
+    ) {
+        return this.notifications.updateShopYethuPreferences(req.user, body);
     }
     @Post("application") application(
         @Req() req: MarketplaceRequest,

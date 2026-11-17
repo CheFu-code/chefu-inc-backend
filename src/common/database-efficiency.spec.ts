@@ -85,6 +85,38 @@ test('unchanged notification preferences use one read and zero writes; real chan
   assert.equal(counts.reads, 2, 'invalid patches fail before accessing Firestore');
 });
 
+void test('ShopYethu notification preferences stay separate and skip unchanged writes', async () => {
+  const { rows, counts, firebase } = fixture();
+  rows.set(`users/${user.email}`, { emailPreferences: { marketing: false, security: true } });
+  const service = new NotificationsService(firebase);
+
+  const initial = await service.getShopYethuPreferences(user);
+  assert.equal(initial.configured, false);
+  assert.deepEqual(initial.preferences, {
+    orderUpdates: true,
+    sellerUpdates: true,
+    accountSecurityAlerts: true,
+  });
+  await service.updateShopYethuPreferences(user, { orderUpdates: true });
+  assert.deepEqual(counts, { reads: 2, writes: 0 });
+
+  const result = await service.updateShopYethuPreferences(user, { orderUpdates: false });
+  assert.equal(result.preferences.orderUpdates, false);
+  assert.equal(result.preferences.sellerUpdates, true);
+  assert.equal(result.configured, true);
+  assert.deepEqual(rows.get(`users/${user.email}`).emailPreferences, {
+    marketing: false,
+    security: true,
+  });
+  assert.deepEqual(
+    rows.get(`users/${user.email}`).shopYethuNotificationPreferences,
+    result.preferences,
+  );
+  assert.deepEqual(counts, { reads: 3, writes: 1 });
+  await assert.rejects(service.updateShopYethuPreferences(user, { marketing: false }));
+  assert.equal(counts.reads, 3, 'invalid patches fail before accessing Firestore');
+});
+
 test('Academy settings use one read, preserve unpatched preferences, and skip identical saves', async () => {
   const { rows, counts, firebase } = fixture();
   rows.set(`users/${user.email}`, { notifications: true, useBiometrics: false, emailPreferences: { marketing: true, security: true } });

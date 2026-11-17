@@ -13,6 +13,20 @@ export type NotificationPreferenceKey =
 
 export type NotificationPreferences = Record<NotificationPreferenceKey, boolean>;
 
+export const shopYethuNotificationPreferenceKeys = [
+  'orderUpdates',
+  'sellerUpdates',
+  'accountSecurityAlerts',
+] as const;
+
+export type ShopYethuNotificationPreferenceKey =
+  (typeof shopYethuNotificationPreferenceKeys)[number];
+
+export type ShopYethuNotificationPreferences = Record<
+  ShopYethuNotificationPreferenceKey,
+  boolean
+>;
+
 export const defaultNotificationPreferences: NotificationPreferences = {
   activity: false,
   general: false,
@@ -21,6 +35,12 @@ export const defaultNotificationPreferences: NotificationPreferences = {
   courseReminders: true,
   aiCourseCompletion: true,
   weeklyProgressSummary: false,
+};
+
+export const defaultShopYethuNotificationPreferences: ShopYethuNotificationPreferences = {
+  orderUpdates: true,
+  sellerUpdates: true,
+  accountSecurityAlerts: true,
 };
 
 export function normalizeNotificationPreferences(
@@ -43,6 +63,26 @@ export function normalizeNotificationPreferences(
   );
 }
 
+export function normalizeShopYethuNotificationPreferences(
+  value: unknown,
+): ShopYethuNotificationPreferences {
+  const source =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Partial<Record<ShopYethuNotificationPreferenceKey, unknown>>)
+      : {};
+
+  return shopYethuNotificationPreferenceKeys.reduce<ShopYethuNotificationPreferences>(
+    (prefs, key) => ({
+      ...prefs,
+      [key]:
+        typeof source[key] === 'boolean'
+          ? Boolean(source[key])
+          : defaultShopYethuNotificationPreferences[key],
+    }),
+    { ...defaultShopYethuNotificationPreferences },
+  );
+}
+
 export function sanitizePreferencePatch(value: unknown) {
   const source =
     value && typeof value === 'object'
@@ -51,6 +91,23 @@ export function sanitizePreferencePatch(value: unknown) {
 
   return notificationPreferenceKeys.reduce<
     Partial<Record<NotificationPreferenceKey, boolean>>
+  >((patch, key) => {
+    if (typeof source[key] === 'boolean') {
+      patch[key] = Boolean(source[key]);
+    }
+
+    return patch;
+  }, {});
+}
+
+export function sanitizeShopYethuPreferencePatch(value: unknown) {
+  const source =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Partial<Record<ShopYethuNotificationPreferenceKey, unknown>>)
+      : {};
+
+  return shopYethuNotificationPreferenceKeys.reduce<
+    Partial<Record<ShopYethuNotificationPreferenceKey, boolean>>
   >((patch, key) => {
     if (typeof source[key] === 'boolean') {
       patch[key] = Boolean(source[key]);
