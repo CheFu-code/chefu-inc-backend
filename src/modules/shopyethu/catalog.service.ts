@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { normalizeContactPhone, phoneContact } from '../auth/phone-contact';
 import type { Actor, CatalogueSort, Fulfilment, MarketplaceRepository, PageOptions, Product, SellerApplication, Storefront } from './marketplace.types';
 import { exists, integer, photos, seller, text } from './marketplace.validation';
 import type { GooglePlacesService } from './google-places.service';
@@ -26,6 +27,22 @@ function productIdentityMatches(current: Product, fields: Pick<Product, 'name' |
 
 export class CatalogService {
     constructor(private readonly repo: MarketplaceRepository, private readonly places?: Pick<GooglePlacesService, 'resolve'>) { }
+    private async sharedAccountPhone(actor: Actor) {
+        const profile = await this.repo.get<Record<string, unknown>>('accountProfiles', actor.email);
+        const contact = phoneContact(profile || {});
+        return {
+            phone: contact.phone,
+            phoneVerificationRequired: contact.phoneVerificationRequired,
+            whatsappAvailable: profile?.whatsappAvailable === true,
+        };
+    }
+    private async publicStoreContact(email: string) {
+        const profile = await this.repo.get<Record<string, unknown>>('accountProfiles', email);
+        const phone = normalizeContactPhone(phoneContact(profile || {}).phone);
+        return phone
+            ? { phone, whatsappAvailable: profile?.whatsappAvailable === true }
+            : {};
+    }
     draftProduct(actor: Actor, productId: string) { return moveProductToDraft(this.repo, actor, productId); }
     deleteProduct(actor: Actor, productId: string) { return deleteProduct(this.repo, actor, productId); }
     private productView(product: Product, store: Storefront, compact: boolean, storeVerified?: boolean) {
@@ -111,14 +128,17 @@ export class CatalogService {
         const product = exists(await this.repo.get<Product>('products', productId), 'Product');
         const store = exists(await this.repo.get<Storefront>('stores', product.storeId), 'Store');
         if (!product.published || store.status !== 'active' || store.sellerPaused) throw new BadRequestException('This listing is no longer available.');
-        return { product, store };
+        const application = await this.repo.get<SellerApplication>('applications', store.ownerUid);
+        return { product, store: { ...store, verified: isVerifiedSeller(application) } };
     }
     async storefront(storeId: string, paginated = false, compact = false, sort = 'newest', includeStoreVerification = false) {
         const store = exists(await this.repo.get<Storefront>('stores', storeId), 'Store');
         if (store.status !== 'active' || store.sellerPaused) throw new BadRequestException('This store is currently unavailable.');
         const application = await this.repo.get<SellerApplication>('applications', store.ownerUid);
+        const contact = application?.email ? await this.publicStoreContact(application.email) : {};
         const storefront = {
             ...store,
+            ...contact,
             verified: isVerifiedSeller(application),
         };
         return paginated ? { store: storefront, ...await this.page('', '', storeId, '', compact, { sort, includeStoreVerification }) }
@@ -126,19 +146,27 @@ export class CatalogService {
     }
     async mine(actor: Actor) {
         const store = await seller(this.repo, actor);
-        const [nameEditable, products] = await Promise.all([
-            storeNameEditable(this.repo, store), this.repo.list<Product>('products', [['ownerUid', actor.uid]]),
+        const [nameEditable, products, accountPhone] = await Promise.all([
+            storeNameEditable(this.repo, store),
+            this.repo.list<Product>('products', [['ownerUid', actor.uid]]),
+            this.sharedAccountPhone(actor),
         ]);
-        return { store: { ...store, nameEditable }, products };
+        return { store: { ...store, nameEditable }, products, ...accountPhone };
     }
     async minePage(actor: Actor, after = '') {
         const store = await seller(this.repo, actor);
         if (!this.repo.page) throw new Error('Marketplace repository does not support cursor pagination.');
-        const [nameEditable, page] = await Promise.all([
+        const [nameEditable, page, accountPhone] = await Promise.all([
             storeNameEditable(this.repo, store),
             this.repo.page<Product>('products', [['ownerUid', actor.uid]], after, 24),
+            this.sharedAccountPhone(actor),
         ]);
-        return { store: { ...store, nameEditable }, products: page.items, nextCursor: page.nextCursor };
+        return {
+            store: { ...store, nameEditable },
+            products: page.items,
+            nextCursor: page.nextCursor,
+            ...accountPhone,
+        };
     }
     async setSellerPaused(actor: Actor, paused: unknown) {
         if (typeof paused !== 'boolean') throw new BadRequestException('Store pause state must be true or false.');
@@ -164,6 +192,20 @@ export class CatalogService {
         const areaPlaceId = typeof body.areaPlaceId === 'string' && body.areaPlaceId
             ? text(body.areaPlaceId, 'Operating area', 1, 256)
             : '';
+        let phone: string | undefined;
+        let whatsappAvailable: boolean | undefined;
+        if (body.phone !== undefined) {
+            phone = normalizeContactPhone(text(body.phone, 'Contact number', 7, 30)) || undefined;
+            if (!phone || !/^\+27[1-9]\d{8}$/.test(phone)) {
+                throw new BadRequestException('Enter a complete valid South African contact number.');
+            }
+            if (typeof body.whatsappAvailable !== 'boolean') {
+                throw new BadRequestException('Choose whether this number is available on WhatsApp.');
+            }
+            whatsappAvailable = body.whatsappAvailable;
+        } else if (body.whatsappAvailable !== undefined) {
+            throw new BadRequestException('Provide a contact number with the WhatsApp setting.');
+        }
         if (areaPlaceId && !/^[A-Za-z0-9_-]+$/.test(areaPlaceId)) {
             throw new BadRequestException('Choose a valid South African operating area.');
         }
@@ -173,25 +215,74 @@ export class CatalogService {
         }
         return this.repo.transaction(async tx => {
             const current = await seller(tx, actor);
+            const application = await tx.get<SellerApplication>('applications', actor.uid);
+            const profile = await tx.get<Record<string, unknown>>('accountProfiles', actor.email);
+            const sharedContact = phoneContact(profile || {});
+            const sharedPhone = phone ?? sharedContact.phone;
+            const sharedWhatsapp = phone !== undefined
+                ? whatsappAvailable === true
+                : profile?.whatsappAvailable === true;
+            const samePhone = phone !== undefined && phone === sharedContact.phone;
+            const keepVerification = samePhone && !!sharedContact.phoneVerifiedAt;
+            const updateAccountProfile = phone !== undefined && (
+                phone !== sharedContact.phone ||
+                sharedWhatsapp !== (profile?.whatsappAvailable === true) ||
+                sharedContact.phoneVerificationRequired
+            );
+            const applicationPhone = application?.phone
+                ? normalizeContactPhone(application.phone) || application.phone
+                : '';
+            const syncApplicationPhone = !!application && !!sharedPhone &&
+                (applicationPhone !== sharedPhone || phone !== undefined && !samePhone);
             const nameEditable = await storeNameEditable(tx, current);
             const name = text(body.name, 'Store name', 2, 100);
             if (!nameEditable && name !== current.name) {
                 throw new ForbiddenException('Registered businesses cannot change their store name.');
             }
+            const description = text(body.description, 'Store description', 10, 2000);
+            const area = areaPlaceId ? '' : text(body.area, 'Operating area', 2, 120);
+            const storeChanged = current.name !== name ||
+                current.description !== description ||
+                current.area !== area ||
+                (current.areaPlaceId || '') !== (areaPlaceId || '');
+            if (!storeChanged && !syncApplicationPhone && !updateAccountProfile) {
+                return { ...current, nameEditable };
+            }
+            const now = new Date().toISOString();
             const updated: Storefront = {
                 ...current,
                 name, nameEditable,
-                description: text(body.description, 'Store description', 10, 2000),
-                area: areaPlaceId ? '' : text(body.area, 'Operating area', 2, 120),
+                description,
+                area,
                 ...(areaPlaceId ? { areaPlaceId } : {}),
-                updatedAt: new Date().toISOString(),
+                updatedAt: now,
             };
             if (!areaPlaceId) delete updated.areaPlaceId;
-            if (current.name === updated.name && current.description === updated.description &&
-                current.area === updated.area && (current.areaPlaceId || '') === (updated.areaPlaceId || '')) {
-                return { ...current, nameEditable };
+            if (storeChanged) tx.set('stores', actor.uid, updated);
+            if (updateAccountProfile && phone !== undefined) {
+                tx.set('accountProfiles', actor.email, {
+                    ...(profile || {}),
+                    phone,
+                    ...(typeof profile?.phoneNumber === 'string'
+                        ? { phoneNumber: phone }
+                        : {}),
+                    whatsappAvailable: sharedWhatsapp,
+                    phoneContactSchemaVersion: 1,
+                    phoneMigrationConflict: false,
+                    phoneVerifiedAt: keepVerification ? profile?.phoneVerifiedAt : null,
+                    phoneVerifiedFor: keepVerification ? profile?.phoneVerifiedFor : null,
+                });
             }
-            tx.set('stores', actor.uid, updated); return updated;
+            if (syncApplicationPhone && application && sharedPhone) {
+                tx.set('applications', actor.uid, {
+                    ...application,
+                    phone: sharedPhone,
+                    phoneConfirmed: true,
+                    contactConfirmedAt: now,
+                    updatedAt: now,
+                });
+            }
+            return storeChanged ? updated : { ...current, nameEditable };
         });
     }
     async saveProduct(actor: Actor, body: Record<string, unknown>, productId?: string, rawKey?: unknown) {

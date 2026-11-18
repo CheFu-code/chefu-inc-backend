@@ -44,6 +44,7 @@ void test('public storefront verification reflects approved registered-business 
   const verified = await catalog.storefront(seller.uid);
   assert.equal(verified.store.verified, true);
   assert.equal('cipcCertificateId' in verified.store, false);
+  assert.equal((await catalog.product('verified-product')).store.verified, true);
   assert.equal((await catalog.page('', '', '', '', false, { includeStoreVerification: true })).products[0].storeVerified, true);
 
   for (const updatedApplication of [
@@ -57,6 +58,55 @@ void test('public storefront verification reflects approved registered-business 
     });
     const result = await catalog.storefront(seller.uid);
     assert.equal(result.store.verified, false);
+    assert.equal((await catalog.product('verified-product')).store.verified, false);
     assert.equal((await catalog.page('', '', '', '', false, { includeStoreVerification: true })).products[0].storeVerified, false);
   }
+});
+
+void test('public storefront exposes a valid shared phone and WhatsApp availability only', async () => {
+  const seller: Actor = { uid: 'seller-contact-test', email: 'contact@example.test', roles: [] };
+  const repo = new TestRepository();
+  const store: Storefront = {
+    id: seller.uid, ownerUid: seller.uid, name: 'Contact test store',
+    description: 'A business description long enough for validation.',
+    area: 'Cape Town', status: 'active', reason: '', updatedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const application: SellerApplication = {
+    id: seller.uid,
+    ownerUid: seller.uid,
+    businessName: store.name,
+    contactName: 'Test contact',
+    email: seller.email,
+    phone: '0821234567',
+    area: store.area,
+    plans: store.description,
+    response: '',
+    status: 'pending',
+    reason: '',
+    updatedAt: store.updatedAt,
+  };
+  await repo.transaction(async tx => {
+    tx.set('stores', seller.uid, store);
+    tx.set('applications', seller.uid, application);
+    tx.set('accountProfiles', seller.email, {
+      phone: '+27821234567',
+      whatsappAvailable: true,
+    });
+  });
+
+  const catalog = new CatalogService(repo);
+  const publicStore = (await catalog.storefront(seller.uid)).store;
+  assert.equal(publicStore.phone, '+27821234567');
+  assert.equal(publicStore.whatsappAvailable, true);
+  assert.equal('phoneVerificationRequired' in publicStore, false);
+
+  await repo.transaction(async tx => {
+    tx.set('accountProfiles', seller.email, {
+      phone: 'not-a-phone-number',
+      whatsappAvailable: true,
+    });
+  });
+  const invalidContact = (await catalog.storefront(seller.uid)).store;
+  assert.equal(invalidContact.phone, undefined);
+  assert.equal(invalidContact.whatsappAvailable, undefined);
 });

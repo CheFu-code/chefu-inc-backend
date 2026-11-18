@@ -43,6 +43,8 @@ export type Storefront = {
     description: string;
     area: string;
     areaPlaceId?: string;
+    phone?: string;
+    whatsappAvailable?: boolean;
     verified?: boolean;
     nameEditable?: boolean;
     sellerPaused?: boolean;

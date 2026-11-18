@@ -4,7 +4,7 @@ import type { Filters, MarketplaceRepository, PageOptions, Transaction } from '.
 import { FieldPath } from 'firebase-admin/firestore';
 import { CatalogReadCache } from './catalog-read-cache';
 
-const collection = (table: string) => `shopyethu_${table}`;
+const collection = (table: string) => table === 'accountProfiles' ? 'users' : `shopyethu_${table}`;
 function documentId(id: string) {
   if (!id || id.length > 150 || /[/\\]/.test(id) || ['.', '..'].includes(id)) throw new BadRequestException('Invalid reference.');
   return id;
