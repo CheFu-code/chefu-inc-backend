@@ -56,7 +56,7 @@ test('session reuse checks current admin roles without trusting session metadata
   assert.deepEqual(await controller.getSessionStatus('admin', req, response()), { authenticated: true, ...phoneContact({}) });
 });
 
-test('OAuth independently revalidates reused cookies and only issues codes for registered PKCE requests', async () => {
+test('OAuth authorization with a saved phone contact issues the registered PKCE code without a phone gate', async () => {
   const service: any = Object.create(OAuthService.prototype);
   const codes: any[] = [];
   let revoked = false;
@@ -70,7 +70,7 @@ test('OAuth independently revalidates reused cookies and only issues codes for r
         if (revoked) throw new Error('revoked');
         return { uid: 'uid', email: 'alice@example.test', auth_time: 123 };
       } }),
-      db: () => ({ collection: () => ({ doc: () => ({ get: async () => ({ data: () => ({}) }), set: async (data: unknown) => { codes.push(data); } }) }) }),
+      db: () => ({ collection: () => ({ doc: () => ({ get: async () => ({ data: () => ({ phone: '+27821234567' }) }), set: async (data: unknown) => { codes.push(data); } }) }) }),
     },
   });
   const params = { client_id: client.id, redirect_uri: client.redirectUris[0], response_type: 'code', code_challenge: 'a'.repeat(43), code_challenge_method: 'S256', scope: 'openid profile', state: 'state-that-is-long-enough', nonce: 'nonce-that-is-long-enough' };

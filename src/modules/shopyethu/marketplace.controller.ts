@@ -117,6 +117,22 @@ export class MarketplacePublicController {
             statusCode: 302,
         };
     }
+    @Get("order/:id/:qrToken")
+    @Header("Cache-Control", "no-store")
+    @Redirect()
+    async shareOrder(
+        @Param("id") id: string,
+        @Param("qrToken") qrToken: string,
+    ) {
+        if (!id || id.length > 150 || !qrToken || qrToken.length > 150) {
+            throw new NotFoundException("Order not found.");
+        }
+        await this.market.orders.assertCurrentQrToken(id, qrToken);
+        return {
+            url: `shopyethu://order/${encodeURIComponent(id)}?qrToken=${encodeURIComponent(qrToken)}`,
+            statusCode: 302,
+        };
+    }
 }
 
 @Controller("shopyethu")
@@ -148,6 +164,14 @@ export class MarketplaceCustomerController {
     }
     @Get("orders") async orders(@Req() req: MarketplaceRequest) {
         return { orders: await this.market.orders.list(req.user) };
+    }
+    @Get("orders/:id")
+    orderDetails(
+        @Req() req: MarketplaceRequest,
+        @Param("id") id: string,
+        @Query("qrToken") qrToken?: string,
+    ) {
+        return this.market.orders.getForParty(req.user, id, qrToken);
     }
     @Get("orders/:id/reviews")
     reviewedProducts(@Req() req: MarketplaceRequest, @Param("id") id: string) {
@@ -237,6 +261,10 @@ export class MarketplaceCustomerController {
         @Body() body: { status?: unknown },
     ) {
         return this.market.orders.update(req.user, id, body.status);
+    }
+    @Post("seller/orders/:id/qr")
+    regenerateOrderQr(@Req() req: MarketplaceRequest, @Param("id") id: string) {
+        return this.market.orders.regenerateQrToken(req.user, id);
     }
     @Put("seller/orders/:id/payment") confirmPayment(
         @Req() req: MarketplaceRequest,

@@ -28,3 +28,20 @@ void test('product share redirects reject empty or oversized product IDs', () =>
   assert.throws(() => controller.shareProduct(''));
   assert.throws(() => controller.shareProduct('a'.repeat(151)));
 });
+
+void test('order QR redirects validate and preserve the current token in the app link', async () => {
+  let validated: string[] | undefined;
+  const orderController = new MarketplacePublicController({
+    orders: {
+      async assertCurrentQrToken(id: string, token: string) {
+        validated = [id, token];
+      },
+    },
+  } as unknown as MarketplaceService);
+
+  assert.deepEqual(await orderController.shareOrder('order/one', 'current-token'), {
+    url: 'shopyethu://order/order%2Fone?qrToken=current-token',
+    statusCode: 302,
+  });
+  assert.deepEqual(validated, ['order/one', 'current-token']);
+});

@@ -72,6 +72,70 @@ test('published product -> buyer order -> seller updates -> customer history; re
   await assert.rejects(orders.place(buyer, { ...body, contact: 'changed@example.test' }, 'same-key-12345678'), status(409));
 });
 
+void test('seller can return an unpaid collection order from ready to preparing', async () => {
+  const { catalog, orders } = await approved();
+  const product = await catalog.saveProduct(seller, listing);
+  const order = await orders.place(buyer, {
+    items: [{ productId: product.id, quantity: 1, expectedPriceCents: listing.priceCents }],
+    fulfilment: 'collection',
+    contact: buyer.email,
+  }, 'ready-backtrack-123456');
+
+  await orders.update(seller, order.id, 'accepted');
+  await orders.update(seller, order.id, 'preparing');
+  await orders.update(seller, order.id, 'ready');
+  const returned = await orders.update(seller, order.id, 'preparing');
+  assert.equal(returned.status, 'preparing');
+  assert.deepEqual(returned.history.map(event => event.status), [
+    'placed', 'accepted', 'preparing', 'ready', 'preparing',
+  ]);
+
+  await orders.update(seller, order.id, 'ready');
+  await orders.confirmPayment(seller, order.id);
+  await assert.rejects(orders.update(seller, order.id, 'preparing'), status(400));
+});
+
+void test('only the order buyer and seller can retrieve order details', async () => {
+  const { catalog, orders } = await approved();
+  const product = await catalog.saveProduct(seller, listing);
+  const order = await orders.place(buyer, {
+    items: [{ productId: product.id, quantity: 1, expectedPriceCents: listing.priceCents }],
+    fulfilment: 'collection',
+    contact: buyer.email,
+  }, 'private-order-detail-123');
+
+  assert.equal((await orders.getForParty(buyer, order.id)).id, order.id);
+  assert.equal((await orders.getForParty(seller, order.id)).id, order.id);
+  await assert.rejects(orders.getForParty(other, order.id), status(404));
+});
+
+test('only the owning seller can regenerate an order QR and prior QR tokens are revoked', async () => {
+  const { catalog, orders } = await approved();
+  const product = await catalog.saveProduct(seller, listing);
+  const order = await orders.place(buyer, {
+    items: [{ productId: product.id, quantity: 1, expectedPriceCents: listing.priceCents }],
+    fulfilment: 'collection',
+    contact: buyer.email,
+  }, 'qr-rotation-order-123');
+  const originalToken = order.qrToken || order.reference;
+
+  await orders.assertCurrentQrToken(order.id, originalToken);
+  assert.equal((await orders.getForParty(buyer, order.id, originalToken)).id, order.id);
+  await assert.rejects(orders.regenerateQrToken(buyer, order.id), status(403));
+  await assert.rejects(orders.regenerateQrToken(other, order.id), status(403));
+
+  const updated = await orders.regenerateQrToken(seller, order.id);
+  assert.ok(updated.qrToken);
+  assert.notEqual(updated.qrToken, originalToken);
+  await orders.assertCurrentQrToken(order.id, updated.qrToken!);
+  await assert.rejects(orders.assertCurrentQrToken(order.id, originalToken), status(404));
+  await assert.rejects(orders.getForParty(buyer, order.id, originalToken), status(404));
+  assert.equal(
+    (await orders.getForParty(buyer, order.id, updated.qrToken)).qrToken,
+    updated.qrToken,
+  );
+});
+
 test('a successful order locks product identity while leaving price and stock editable', async () => {
   const { catalog, orders, repo } = await approved();
   const product = await catalog.saveProduct(seller, listing);

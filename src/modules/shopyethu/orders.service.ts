@@ -1,5 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { BadRequestException, ConflictException, ForbiddenException, Logger } from '@nestjs/common';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { BadRequestException, ConflictException, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
 import type { Actor, Fulfilment, MarketplaceRepository, Order, OrderStatus, Product, Storefront } from './marketplace.types';
 import { exists, integer, seller, text } from './marketplace.validation';
 import type { OrderConfirmation } from './order-email.service';
@@ -7,7 +7,7 @@ import type { OrderConfirmation } from './order-email.service';
 type BasketItem = { productId: string; quantity: number; expectedPriceCents: number };
 const transitions: Record<OrderStatus, OrderStatus[]> = {
     placed: ['accepted', 'cancelled'], accepted: ['preparing', 'cancelled'], preparing: ['ready', 'dispatched'],
-    ready: ['collected'], dispatched: ['completed'], completed: [], collected: [], cancelled: [],
+    ready: ['collected', 'preparing'], dispatched: ['completed'], completed: [], collected: [], cancelled: [],
 };
 
 export class OrdersService {
@@ -17,6 +17,41 @@ export class OrdersService {
     async list(actor: Actor, selling = false) {
         if (selling) await seller(this.repo, actor);
         return (await this.repo.list<Order>('orders', [[selling ? 'sellerUid' : 'buyerUid', actor.uid]])).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    }
+    async getForParty(actor: Actor, orderId: string, qrToken?: string) {
+        const order = exists(await this.repo.get<Order>('orders', orderId), 'Order');
+        if (order.buyerUid !== actor.uid && order.sellerUid !== actor.uid) {
+            throw new NotFoundException('Order was not found.');
+        }
+        if (qrToken !== undefined && !this.matchesQrToken(order, qrToken)) {
+            throw new NotFoundException('Order was not found.');
+        }
+        return order;
+    }
+    async assertCurrentQrToken(orderId: string, qrToken: string) {
+        const order = exists(await this.repo.get<Order>('orders', orderId), 'Order');
+        if (!this.matchesQrToken(order, qrToken)) {
+            throw new NotFoundException('Order was not found.');
+        }
+    }
+    private matchesQrToken(order: Order, qrToken: string) {
+        const expected = Buffer.from(order.qrToken || order.reference);
+        const provided = Buffer.from(qrToken);
+        return expected.length === provided.length && timingSafeEqual(expected, provided);
+    }
+    async regenerateQrToken(actor: Actor, orderId: string) {
+        return this.repo.transaction(async tx => {
+            await seller(tx, actor);
+            const order = exists(await tx.get<Order>('orders', orderId), 'Order');
+            if (order.sellerUid !== actor.uid) throw new NotFoundException('Order was not found.');
+            const updated: Order = {
+                ...order,
+                qrToken: randomBytes(32).toString('base64url'),
+                updatedAt: new Date().toISOString(),
+            };
+            tx.set('orders', orderId, updated);
+            return updated;
+        });
     }
     async place(actor: Actor, body: Record<string, unknown>, rawKey: unknown) {
         const key = text(rawKey, 'Idempotency key', 16, 120);
@@ -95,6 +130,7 @@ export class OrdersService {
             if (order.sellerUid !== actor.uid) throw new ForbiddenException('This order belongs to another store.');
             const status = next as OrderStatus;
             if (!transitions[order.status].includes(status)) throw new BadRequestException('This status change is not allowed.');
+            if (order.status === 'ready' && status === 'preparing' && order.paymentStatus === 'paid-on-collection') throw new BadRequestException('A paid order cannot be moved back to preparing.');
             if ((status === 'dispatched' && order.fulfilment !== 'local-delivery') || (status === 'ready' && order.fulfilment !== 'collection')) throw new BadRequestException('Choose the status matching this order’s fulfilment.');
             if (status === 'collected' && (order.fulfilment !== 'collection' || order.paymentStatus !== 'paid-on-collection')) throw new BadRequestException('Confirm payment before marking this order collected.');
             const restock = status === 'cancelled' ? await Promise.all(order.items.map(item => tx.get<Product>('products', item.productId))) : [];

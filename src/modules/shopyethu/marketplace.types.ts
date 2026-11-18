@@ -115,6 +115,7 @@ export type Order = {
     status: OrderStatus;
     paymentStatus: "not-collected" | "paid-on-collection";
     paymentNote: string;
+    qrToken?: string;
     paymentReceivedAt?: string;
     paymentReceivedBy?: string;
     createdAt: string;
