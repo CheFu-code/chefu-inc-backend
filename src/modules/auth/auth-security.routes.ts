@@ -458,14 +458,6 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
                         detectedCountryUpdatedAt: FieldValue.delete(),
                         lastLoginAt: FieldValue.delete(),
                         language: FieldValue.delete(),
-                        learningGoal: FieldValue.delete(),
-                        skillLevel: FieldValue.delete(),
-                        learningInterests: FieldValue.delete(),
-                        weeklyLearningGoal: FieldValue.delete(),
-                        lessonStyle: FieldValue.delete(),
-                        defaultCourseDifficulty: FieldValue.delete(),
-                        preferredContentFormat: FieldValue.delete(),
-                        aiTutorSuggestions: FieldValue.delete(),
                         privacy: FieldValue.delete(),
                         onboardingComplete: FieldValue.delete(),
                         appGuideComplete: FieldValue.delete(),
@@ -1237,18 +1229,8 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
             };
         }
 
-        if (body.academyProfile) {
-            Object.assign(
-                updates,
-                this.normalizeAcademyProfileUpdates(body.academyProfile),
-                {
-                    apps: {
-                        academy: {
-                            enabled: true,
-                        },
-                    },
-                },
-            );
+        if (body.privacy !== undefined) {
+            updates.privacy = this.normalizePrivacyUpdates(body.privacy);
         }
 
         Object.assign(updates, this.serverDetectedCountryUpdates(request));

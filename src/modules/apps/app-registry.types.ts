@@ -1,5 +1,4 @@
 export type ChefuAppId =
-    | "academy"
     | "admin"
     | "quantum"
     | "merchant"

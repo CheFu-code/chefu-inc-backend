@@ -63,7 +63,7 @@ void test('public storefront verification reflects approved registered-business 
   }
 });
 
-void test('public storefront exposes a valid shared phone and WhatsApp availability only', async () => {
+void test('public storefront exposes a valid marketplace phone and WhatsApp status only', async () => {
   const seller: Actor = { uid: 'seller-contact-test', email: 'contact@example.test', roles: [] };
   const repo = new TestRepository();
   const store: Storefront = {
@@ -78,6 +78,7 @@ void test('public storefront exposes a valid shared phone and WhatsApp availabil
     contactName: 'Test contact',
     email: seller.email,
     phone: '0821234567',
+    whatsappAvailable: true,
     area: store.area,
     plans: store.description,
     response: '',
@@ -88,10 +89,6 @@ void test('public storefront exposes a valid shared phone and WhatsApp availabil
   await repo.transaction(async tx => {
     tx.set('stores', seller.uid, store);
     tx.set('applications', seller.uid, application);
-    tx.set('accountProfiles', seller.email, {
-      phone: '+27821234567',
-      whatsappAvailable: true,
-    });
   });
 
   const catalog = new CatalogService(repo);
@@ -101,9 +98,9 @@ void test('public storefront exposes a valid shared phone and WhatsApp availabil
   assert.equal('phoneVerificationRequired' in publicStore, false);
 
   await repo.transaction(async tx => {
-    tx.set('accountProfiles', seller.email, {
+    tx.set('applications', seller.uid, {
+      ...application,
       phone: 'not-a-phone-number',
-      whatsappAvailable: true,
     });
   });
   const invalidContact = (await catalog.storefront(seller.uid)).store;

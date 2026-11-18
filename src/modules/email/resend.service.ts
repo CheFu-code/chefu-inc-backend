@@ -866,7 +866,7 @@ export class ResendService {
         return {
             from: this.fromAddress,
             to: [data.email],
-            subject: "Security alert: Chefu Academy API key revoked",
+            subject: "Security alert: Chefu API key revoked",
             template: {
                 id: this.apiKeyCompromisedTemplateId,
                 variables: {

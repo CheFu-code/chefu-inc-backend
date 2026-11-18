@@ -4,7 +4,6 @@ import { assertAdmin, exists, text } from './marketplace.validation';
 import { applicationFields, applicationHistory } from './application.validation';
 import type { GooglePlacesService } from './google-places.service';
 import { isVerifiedSeller } from './seller-verification';
-import { phoneContact } from '../auth/phone-contact';
 
 export class ApplicationsService {
     private readonly logger = new Logger(ApplicationsService.name);
@@ -31,9 +30,6 @@ export class ApplicationsService {
         }
         const saved = await this.repo.transaction(async tx => {
             const previous = await tx.get<SellerApplication>('applications', actor.uid);
-            const profile = fields.whatsappAvailable === undefined
-                ? undefined
-                : await tx.get<Record<string, unknown>>('accountProfiles', actor.email);
             if (previous && previous.status !== 'more-info') throw new BadRequestException('This application cannot be resubmitted in its current status.');
             if (previous?.status === 'more-info' && fields.response.length < 5) throw new BadRequestException('Respond to the information requested by CheFu.');
             const now = new Date().toISOString();
@@ -45,28 +41,6 @@ export class ApplicationsService {
                 history: previous ? applicationHistory(previous, event) : [event],
             };
             tx.set('applications', actor.uid, application);
-            if (fields.whatsappAvailable !== undefined) {
-                const existingContact = phoneContact(profile || {});
-                const keepVerification =
-                    fields.phone === existingContact.phone &&
-                    !!existingContact.phoneVerifiedAt;
-                tx.set('accountProfiles', actor.email, {
-                    ...(profile || {}),
-                    phone: fields.phone,
-                    ...(typeof profile?.phoneNumber === 'string'
-                        ? { phoneNumber: fields.phone }
-                        : {}),
-                    whatsappAvailable: fields.whatsappAvailable,
-                    phoneContactSchemaVersion: 1,
-                    phoneMigrationConflict: false,
-                    phoneVerifiedAt: keepVerification
-                        ? existingContact.phoneVerifiedAt
-                        : null,
-                    phoneVerifiedFor: keepVerification
-                        ? existingContact.phoneVerifiedFor
-                        : null,
-                });
-            }
             return application;
         });
         // Firestore can repeat transaction callbacks. External side effects belong after commit.
@@ -88,13 +62,21 @@ export class ApplicationsService {
             const now = new Date().toISOString();
             const updated = { ...application, status, reason, updatedAt: now, history: applicationHistory(application, { status, reason, at: now }) };
             tx.set('applications', uid, updated);
+            const applicationContact = typeof application.whatsappAvailable === 'boolean'
+                ? { phone: application.phone, whatsappAvailable: application.whatsappAvailable }
+                : {};
             if (status === 'approved') tx.set('stores', uid, existing
-                ? { ...existing, verified: isVerifiedSeller(updated) }
+                ? {
+                    ...existing,
+                    verified: isVerifiedSeller(updated),
+                    ...(!existing.phone ? applicationContact : {}),
+                }
                 : {
                     id: uid, ownerUid: uid, name: application.businessName, description: application.plans,
                     nameEditable: application.businessType !== 'registered-business',
                     verified: isVerifiedSeller(updated),
                     area: application.area, ...(application.areaPlaceId ? { areaPlaceId: application.areaPlaceId } : {}),
+                    ...applicationContact,
                     status: 'active', reason: '', updatedAt: updated.updatedAt,
                 });
             return updated;

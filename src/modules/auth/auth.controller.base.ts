@@ -26,7 +26,7 @@ import { ChefuAppId } from '../apps/app-registry';
 import { AppsService } from '../apps/apps.service';
 import { ResendService } from '../email/resend.service';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
-import { AcademyProfileUpdate, FirebaseDecodedToken, ProfilePictureUpdate, ProfileUpdateBody, SignInAlertDecision } from './auth-controller.types';
+import { FirebaseDecodedToken, ProfilePictureUpdate, ProfileUpdateBody, SignInAlertDecision } from './auth-controller.types';
 import { readAuthUserProfile } from './auth-user-profile';
 import {
     isTrustedDeviceInvalidatedByCredentialChange
@@ -767,14 +767,6 @@ export class AuthControllerBase {
                 createdAt: null,
                 lastLoginAt: null,
                 language: 'en',
-                learningGoal: '',
-                skillLevel: null,
-                learningInterests: [],
-                weeklyLearningGoal: 3,
-                lessonStyle: null,
-                defaultCourseDifficulty: null,
-                preferredContentFormat: null,
-                aiTutorSuggestions: true,
                 privacy: this.normalizePrivacy(null),
                 onboardingComplete: false,
                 appGuideComplete: false,
@@ -825,32 +817,6 @@ export class AuthControllerBase {
             createdAt: this.timestampToIso(data.createdAt),
             lastLoginAt: this.timestampToIso(data.lastLoginAt),
             language: this.stringValue(data.language) || 'en',
-            learningGoal: this.stringValue(data.learningGoal),
-            skillLevel: this.enumValue(data.skillLevel, [
-                'beginner',
-                'intermediate',
-                'advanced',
-            ]),
-            learningInterests: Array.isArray(data.learningInterests)
-                ? data.learningInterests.map(String).slice(0, 12)
-                : [],
-            weeklyLearningGoal: this.numberValue(data.weeklyLearningGoal, 3),
-            lessonStyle: this.enumValue(data.lessonStyle, [
-                'short',
-                'detailed',
-                'example-heavy',
-            ]),
-            defaultCourseDifficulty: this.enumValue(data.defaultCourseDifficulty, [
-                'beginner',
-                'intermediate',
-                'advanced',
-            ]),
-            preferredContentFormat: this.enumValue(data.preferredContentFormat, [
-                'text',
-                'examples',
-                'quizzes',
-            ]),
-            aiTutorSuggestions: data.aiTutorSuggestions !== false,
             privacy: this.normalizePrivacy(data.privacy),
             onboardingComplete: data.onboardingComplete === true,
             appGuideComplete: data.appGuideComplete === true,
@@ -864,82 +830,6 @@ export class AuthControllerBase {
     }
 
 
-    protected normalizeAcademyProfileUpdates(profile: AcademyProfileUpdate) {
-        const updates: Record<string, unknown> = {};
-
-        if (profile.bio !== undefined) {
-            updates.bio = profile.bio.trim().slice(0, 280);
-        }
-
-        if (profile.language !== undefined) {
-            updates.language = profile.language.trim().toLowerCase().slice(0, 12) || 'en';
-        }
-
-        if (profile.learningGoal !== undefined) {
-            updates.learningGoal = profile.learningGoal.trim().slice(0, 160);
-        }
-
-        const skillLevel = this.enumValue(profile.skillLevel, [
-            'beginner',
-            'intermediate',
-            'advanced',
-        ]);
-        if (skillLevel) updates.skillLevel = skillLevel;
-
-        if (Array.isArray(profile.learningInterests)) {
-            updates.learningInterests = profile.learningInterests
-                .map(interest => String(interest).trim())
-                .filter(Boolean)
-                .slice(0, 12);
-        }
-
-        if (profile.weeklyLearningGoal !== undefined) {
-            const weeklyGoal = Number(profile.weeklyLearningGoal);
-            updates.weeklyLearningGoal = Number.isFinite(weeklyGoal)
-                ? Math.min(Math.max(Math.round(weeklyGoal), 1), 21)
-                : 3;
-        }
-
-        const lessonStyle = this.enumValue(profile.lessonStyle, [
-            'short',
-            'detailed',
-            'example-heavy',
-        ]);
-        if (lessonStyle) updates.lessonStyle = lessonStyle;
-
-        const defaultCourseDifficulty = this.enumValue(
-            profile.defaultCourseDifficulty,
-            ['beginner', 'intermediate', 'advanced'],
-        );
-        if (defaultCourseDifficulty) {
-            updates.defaultCourseDifficulty = defaultCourseDifficulty;
-        }
-
-        const preferredContentFormat = this.enumValue(
-            profile.preferredContentFormat,
-            ['text', 'examples', 'quizzes'],
-        );
-        if (preferredContentFormat) {
-            updates.preferredContentFormat = preferredContentFormat;
-        }
-
-        if (profile.aiTutorSuggestions !== undefined) {
-            updates.aiTutorSuggestions = Boolean(profile.aiTutorSuggestions);
-        }
-
-        if (profile.privacy) {
-            updates.privacy = this.normalizePrivacyUpdates(profile.privacy);
-        }
-
-        if (profile.emailPreferences) {
-            updates.emailPreferences = this.normalizeEmailPreferences(
-                profile.emailPreferences,
-            );
-        }
-
-        return updates;
-    }
-
     protected normalizeEmailPreferences(value: unknown) {
         const prefs =
             value && typeof value === 'object' && !Array.isArray(value)
@@ -951,9 +841,6 @@ export class AuthControllerBase {
             general: prefs.general === true,
             marketing: prefs.marketing === true,
             security: prefs.security !== false,
-            courseReminders: prefs.courseReminders !== false,
-            aiCourseCompletion: prefs.aiCourseCompletion === true,
-            weeklyProgressSummary: prefs.weeklyProgressSummary === true,
         };
     }
 
@@ -965,10 +852,7 @@ export class AuthControllerBase {
 
         return {
             publicProfile: privacy.publicProfile === true,
-            showCompletedCourses: privacy.showCompletedCourses === true,
             showCountry: privacy.showCountry !== false,
-            personalizedAiRecommendations:
-                privacy.personalizedAiRecommendations !== false,
         };
     }
 
@@ -981,9 +865,7 @@ export class AuthControllerBase {
 
         for (const key of [
             'publicProfile',
-            'showCompletedCourses',
             'showCountry',
-            'personalizedAiRecommendations',
         ]) {
             if (typeof privacy[key] === 'boolean') {
                 updates[key] = privacy[key] as boolean;

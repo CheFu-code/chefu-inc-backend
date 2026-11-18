@@ -4,28 +4,6 @@ export type FirebaseDecodedToken = Awaited<
     ReturnType<ReturnType<FirebaseAdminService['auth']>['verifyIdToken']>
 >;
 
-export type AcademyProfileUpdate = {
-    bio?: string;
-    country?: string;
-    countryCode?: string;
-    language?: string;
-    learningGoal?: string;
-    skillLevel?: string;
-    learningInterests?: string[];
-    weeklyLearningGoal?: number;
-    lessonStyle?: string;
-    defaultCourseDifficulty?: string;
-    preferredContentFormat?: string;
-    aiTutorSuggestions?: boolean;
-    privacy?: {
-        publicProfile?: boolean;
-        showCompletedCourses?: boolean;
-        showCountry?: boolean;
-        personalizedAiRecommendations?: boolean;
-    };
-    emailPreferences?: Record<string, boolean>;
-};
-
 export type ProfileUpdateBody = {
     gender?: string;
     fullname?: string;
@@ -48,7 +26,7 @@ export type ProfileUpdateBody = {
     emailPreferences?: {
         security?: boolean;
     };
-    academyProfile?: AcademyProfileUpdate;
+    privacy?: { publicProfile?: boolean; showCountry?: boolean };
 };
 
 export type ProfilePictureUpdate = {

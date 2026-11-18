@@ -30,11 +30,6 @@ export const CHEFU_APPS: ChefuApp[] = [
         origins: ["https://shopyethu-admin.chefu.co.za"],
     },
     {
-        id: "academy",
-        name: "Chefu Academy",
-        origins: ["https://academy.chefu.co.za"],
-    },
-    {
         id: "root",
         name: "Chefu Technologies",
         origins: [
@@ -87,34 +82,6 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
             "https://myaccount.chefu.co.za/auth/callback",
         ],
         scopes: ["openid", "profile", "email", "apps:read"],
-    },
-    {
-        id: "chefu-academy-web",
-        appId: "academy",
-        name: "Chefu Academy",
-        redirectUris: ["https://academy.chefu.co.za/auth/callback"],
-        scopes: [
-            "openid",
-            "profile",
-            "email",
-            "courses:read",
-            "videos:read",
-            "keys:manage",
-        ],
-    },
-    {
-        id: "chefu-academy-mobile",
-        appId: "academy",
-        name: "Chefu Academy Mobile",
-        redirectUris: ["chefu-academy://auth/sso"],
-        scopes: [
-            "openid",
-            "profile",
-            "email",
-            "courses:read",
-            "videos:read",
-            "keys:manage",
-        ],
     },
     {
         id: "chefu-admin-web",

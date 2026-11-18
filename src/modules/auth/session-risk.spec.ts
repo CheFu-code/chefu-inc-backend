@@ -6,7 +6,7 @@ test('known device with ordinary browser has low advisory risk', () => {
   assert.deepEqual(assessSessionRisk({
     trustedDevice: true,
     userAgent: 'Mozilla/5.0',
-    appId: 'academy',
+    appId: 'root',
   }), { score: 0, level: 'low', reasons: [] });
 });
 

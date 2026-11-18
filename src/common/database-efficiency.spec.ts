@@ -3,10 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { InFlightReads } from './in-flight-reads';
 import { NotificationsService } from '../modules/notifications/notifications.service';
-import { AcademyMobileService } from '../modules/academy-mobile/academy-mobile.service';
 import { ApiKeyService } from '../modules/api-key/api-key.service';
-import { AcademySdkApiKeysService } from '../modules/academy-sdk/services/academy-sdk-api-keys.service';
-import { AcademySdkCatalogService } from '../modules/academy-sdk/services/academy-sdk-catalog.service';
 import { CloudenceFoldersService } from '../modules/cloudence/cloudence-folders.service';
 import { QuantumAgentDataService } from '../modules/quantum/agent/agent-data.service';
 import { QuantumAgentToolsService } from '../modules/quantum/agent/agent-tools.service';
@@ -51,10 +48,10 @@ test('simultaneous reads share work; later reads and failures are not cached', a
   const reads = new InFlightReads();
   let loads = 0;
   const load = async () => ++loads;
-  const first = reads.run('course-a', load);
-  assert.equal(reads.run('course-a', load), first);
-  assert.deepEqual(await Promise.all([first, reads.run('course-b', load)]), [1, 2]);
-  assert.equal(await reads.run('course-a', load), 3);
+  const first = reads.run('resource-a', load);
+  assert.equal(reads.run('resource-a', load), first);
+  assert.deepEqual(await Promise.all([first, reads.run('resource-b', load)]), [1, 2]);
+  assert.equal(await reads.run('resource-a', load), 3);
   await assert.rejects(reads.run('failed', async () => { throw new Error('offline'); }));
   assert.equal(await reads.run('failed', load), 4);
 });
@@ -117,35 +114,15 @@ void test('ShopYethu notification preferences stay separate and skip unchanged w
   assert.equal(counts.reads, 3, 'invalid patches fail before accessing Firestore');
 });
 
-test('Academy settings use one read, preserve unpatched preferences, and skip identical saves', async () => {
-  const { rows, counts, firebase } = fixture();
-  rows.set(`users/${user.email}`, { notifications: true, useBiometrics: false, emailPreferences: { marketing: true, security: true } });
-  const service = new AcademyMobileService(firebase);
-  await service.updateSettings(user, { useBiometrics: false });
-  assert.deepEqual(counts, { reads: 1, writes: 0 });
-  const result = await service.updateSettings(user, { emailPreferences: { marketing: false } });
-  assert.equal(result.emailPreferences.marketing, false);
-  assert.equal(result.emailPreferences.security, true);
-  assert.equal(result.useBiometrics, false);
-  assert.deepEqual(counts, { reads: 2, writes: 1 });
-  await service.updateSettings(user, { emailPreferences: { marketing: false } });
-  assert.deepEqual(counts, { reads: 3, writes: 1 });
-});
-
 test('repeat API key revocation saves writes without bypassing ownership checks', async () => {
-  for (const sdk of [false, true]) {
-    const { rows, counts, firebase } = fixture();
-    rows.set('api_keys/key', { active: true, userId: user.uid, ownerUid: user.uid });
-    const service = sdk ? new AcademySdkApiKeysService(firebase, {} as any) : new ApiKeyService(firebase);
-    const revoke = (identity = user) => sdk
-      ? (service as AcademySdkApiKeysService).revokeApiKey(identity, 'key')
-      : (service as ApiKeyService).revokeApiKey(identity.uid, 'key');
-    await revoke();
-    await revoke();
-    assert.deepEqual(counts, { reads: 2, writes: 1 });
-    await assert.rejects(revoke({ ...user, uid: 'bob' }));
-    assert.equal(counts.writes, 1);
-  }
+  const { rows, counts, firebase } = fixture();
+  rows.set('api_keys/key', { active: true, userId: user.uid, ownerUid: user.uid });
+  const service = new ApiKeyService(firebase);
+  await service.revokeApiKey(user.uid, 'key');
+  await service.revokeApiKey(user.uid, 'key');
+  assert.deepEqual(counts, { reads: 2, writes: 1 });
+  await assert.rejects(service.revokeApiKey('bob', 'key'));
+  assert.equal(counts.writes, 1);
 });
 
 test('identical message edits preserve timestamps and do not write', async () => {
@@ -194,15 +171,8 @@ test('unchanged product updates and repeated archives skip product and duplicate
   assert.equal(counts.writes, writes);
 });
 
-test('concurrent course and tool catalog reads share queries without caching later changes', async () => {
+test('concurrent tool catalog reads share queries without caching later changes', async () => {
   const { rows, counts, firebase, db } = fixture();
-  rows.set('course/course-a', { courseTitle: 'Original' });
-  const service = new AcademySdkCatalogService(firebase);
-  await Promise.all([service.getCourseById('course-a'), service.getCourseById('course-a')]);
-  assert.equal(counts.reads, 1);
-  rows.set('course/course-a', { courseTitle: 'Updated' });
-  assert.equal((await service.getCourseById('course-a')).courseTitle, 'Updated');
-  assert.equal(counts.reads, 2);
   const originalCollection = db.collection;
   let catalogReads = 0;
   db.collection = (path: string) => path === 'quantum_agent_tools' ? { get: async () => {

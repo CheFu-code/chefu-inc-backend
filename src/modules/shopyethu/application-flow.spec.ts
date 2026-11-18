@@ -115,15 +115,19 @@ void test('application contact numbers use canonical international format withou
   }
 });
 
-void test('seller application saves the chosen WhatsApp status with the shared contact number', async () => {
+void test('seller application stores its separate contact and publishes it on approval', async () => {
   for (const whatsappAvailable of [true, false]) {
     const repo = new TestRepository();
     const service = new ApplicationsService(repo);
     const submitted = await service.submit(applicant, { ...fields, whatsappAvailable });
     const profile = await repo.get<Record<string, unknown>>('accountProfiles', applicant.email);
     assert.equal(submitted.whatsappAvailable, whatsappAvailable);
-    assert.equal(profile?.phone, '+27821234567');
-    assert.equal(profile?.whatsappAvailable, whatsappAvailable);
+    assert.equal(submitted.phone, '+27821234567');
+    assert.equal(profile, null);
+    await service.review(staff, applicant.uid, { status: 'approved' });
+    const store = await repo.get<Storefront>('stores', applicant.uid);
+    assert.equal(store?.phone, '+27821234567');
+    assert.equal(store?.whatsappAvailable, whatsappAvailable);
   }
 });
 

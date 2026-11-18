@@ -3,9 +3,6 @@ export const notificationPreferenceKeys = [
   'general',
   'marketing',
   'security',
-  'courseReminders',
-  'aiCourseCompletion',
-  'weeklyProgressSummary',
 ] as const;
 
 export type NotificationPreferenceKey =
@@ -32,9 +29,6 @@ export const defaultNotificationPreferences: NotificationPreferences = {
   general: false,
   marketing: false,
   security: true,
-  courseReminders: true,
-  aiCourseCompletion: true,
-  weeklyProgressSummary: false,
 };
 
 export const defaultShopYethuNotificationPreferences: ShopYethuNotificationPreferences = {

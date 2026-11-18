@@ -1,12 +1,9 @@
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
 import { RateLimitMiddleware } from './common/rate-limit.middleware';
 import { RequestLoggerMiddleware } from './common/request-logger.middleware';
-import { AcademySdkModule } from './modules/academy-sdk/academy-sdk.module';
-import { AcademyMobileModule } from './modules/academy-mobile/academy-mobile.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AppsModule } from './modules/apps/apps.module';
 import { AuthModule } from './modules/auth/auth.module';
-import { CoursesModule } from './modules/courses/courses.module';
 import { EmailModule } from './modules/email/email.module';
 import { FirebaseAdminModule } from './modules/firebase-admin/firebase-admin.module';
 import { HealthController } from './modules/health/health.controller';
@@ -35,9 +32,6 @@ const sharedServiceModules = [
 ];
 
 const productModules = [
-  AcademyMobileModule,
-  AcademySdkModule,
-  CoursesModule,
   QuantumModule,
   ProductsModule,
   SubmissionsModule,

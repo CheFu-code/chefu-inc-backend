@@ -57,17 +57,19 @@ void test('unchanged store details do not write another Firestore document', asy
   assert.equal(repo.writes, 0);
 });
 
-void test('store saves sync a verified shared account phone to the private seller application', async () => {
+void test('store contact updates use the marketplace store instead of the shared SSO profile', async () => {
   const seller: Actor = { uid: 'seller-contact-test', email: 'seller@example.test', roles: [] };
   const repo = new TestRepository();
   const store: Storefront = {
     id: seller.uid, ownerUid: seller.uid, name: 'Test business',
     description: 'A business description long enough for validation.',
-    area: 'Cape Town', status: 'active', reason: '', updatedAt: '2026-01-01T00:00:00.000Z',
+    area: 'Cape Town', phone: '+27821234567', whatsappAvailable: false,
+    status: 'active', reason: '', updatedAt: '2026-01-01T00:00:00.000Z',
   };
   const application: SellerApplication = {
     id: seller.uid, ownerUid: seller.uid, businessName: store.name,
     contactName: 'Test contact', email: seller.email, phone: '+27821234567',
+    whatsappAvailable: false,
     area: store.area, plans: store.description, response: '', status: 'approved',
     reason: '', updatedAt: store.updatedAt, phoneConfirmed: true,
   };
@@ -84,68 +86,40 @@ void test('store saves sync a verified shared account phone to the private selle
     name: store.name,
     description: store.description,
     area: store.area,
+    phone: '083 123 4567',
+    whatsappAvailable: true,
   });
+  const updatedStore = await repo.get<Storefront>('stores', seller.uid);
   const updatedApplication = await repo.get<SellerApplication>('applications', seller.uid);
-  assert.equal(updatedApplication?.phone, '+27831234567');
-  assert.equal(updatedApplication?.phoneConfirmed, true);
-  assert.ok(updatedApplication?.contactConfirmedAt);
-  assert.equal(updated.updatedAt, store.updatedAt);
-  assert.equal('phone' in (await repo.get<Storefront>('stores', seller.uid))!, false);
+  const profile = await repo.get<Record<string, unknown>>('accountProfiles', seller.email);
+  assert.equal(updated.phone, '+27831234567');
+  assert.equal(updated.whatsappAvailable, true);
+  assert.equal(updatedStore?.phone, '+27831234567');
+  assert.equal(updatedStore?.whatsappAvailable, true);
+  assert.equal(updatedApplication?.phone, '+27821234567');
+  assert.equal(updatedApplication?.whatsappAvailable, false);
+  assert.equal(profile?.phone, '+27831234567');
+  assert.equal(profile?.whatsappAvailable, undefined);
 });
 
-void test('store saves sync an unverified shared account phone to seller contact details', async () => {
-  const seller: Actor = { uid: 'seller-unverified-contact-test', email: 'seller@example.test', roles: [] };
-  const repo = new TestRepository();
-  const store: Storefront = {
-    id: seller.uid, ownerUid: seller.uid, name: 'Test business',
-    description: 'A business description long enough for validation.',
-    area: 'Cape Town', status: 'active', reason: '', updatedAt: '2026-01-01T00:00:00.000Z',
-  };
-  const application: SellerApplication = {
-    id: seller.uid, ownerUid: seller.uid, businessName: store.name,
-    contactName: 'Test contact', email: seller.email, phone: '+27821234567',
-    area: store.area, plans: store.description, response: '', status: 'approved',
-    reason: '', updatedAt: store.updatedAt, phoneConfirmed: true,
-  };
-  await repo.transaction(async tx => {
-    tx.set('stores', seller.uid, store);
-    tx.set('applications', seller.uid, application);
-    tx.set('accountProfiles', seller.email, { phone: '+27831234567' });
-  });
-  await new CatalogService(repo).saveStore(seller, {
-    name: store.name,
-    description: store.description,
-    area: store.area,
-  });
-  assert.equal(
-    (await repo.get<SellerApplication>('applications', seller.uid))?.phone,
-    '+27831234567',
-  );
-});
-
-void test('seller inventory includes the shared account phone for its client cache', async () => {
+void test('seller inventory includes the marketplace contact for its client cache', async () => {
   const seller: Actor = { uid: 'seller-inventory-phone-test', email: 'seller@example.test', roles: [] };
   const repo = new TestRepository();
   await repo.transaction(async tx => {
     tx.set('stores', seller.uid, {
       id: seller.uid, ownerUid: seller.uid, name: 'Test business',
       description: 'A business description long enough for validation.',
-      area: 'Cape Town', nameEditable: true, status: 'active', reason: '',
+      area: 'Cape Town', nameEditable: true, phone: '+27821234567',
+      whatsappAvailable: true, status: 'active', reason: '',
       updatedAt: '2026-01-01T00:00:00.000Z',
-    });
-    tx.set('accountProfiles', seller.email, {
-      phone: '+27821234567',
-      phoneVerifiedAt: '2026-01-02T00:00:00.000Z',
-      phoneVerifiedFor: '+27821234567',
     });
   });
   const inventory = await new CatalogService(repo).minePage(seller);
   assert.equal(inventory.phone, '+27821234567');
-  assert.equal(inventory.phoneVerificationRequired, false);
-  assert.equal(inventory.whatsappAvailable, false);
+  assert.equal(inventory.whatsappAvailable, true);
 });
 
-void test('store saves the shared phone and WhatsApp flag without retaining stale verification proof', async () => {
+void test('store contact can be set without changing shared SSO phone verification data', async () => {
   const seller: Actor = { uid: 'seller-whatsapp-test', email: 'seller@example.test', roles: [] };
   const repo = new TestRepository();
   const store: Storefront = {
@@ -163,12 +137,6 @@ void test('store saves the shared phone and WhatsApp flag without retaining stal
   await repo.transaction(async tx => {
     tx.set('stores', seller.uid, store);
     tx.set('applications', seller.uid, application);
-    tx.set('accountProfiles', seller.email, {
-      phone: '+27821234567',
-      phoneVerifiedAt: '2026-01-02T00:00:00.000Z',
-      phoneVerifiedFor: '+27821234567',
-      whatsappAvailable: false,
-    });
   });
   await new CatalogService(repo).saveStore(seller, {
     name: store.name,
@@ -179,9 +147,9 @@ void test('store saves the shared phone and WhatsApp flag without retaining stal
   });
   const profile = await repo.get<Record<string, unknown>>('accountProfiles', seller.email);
   const updatedApplication = await repo.get<SellerApplication>('applications', seller.uid);
-  assert.equal(profile?.phone, '+27831234567');
-  assert.equal(profile?.whatsappAvailable, true);
-  assert.equal(profile?.phoneVerifiedAt, null);
-  assert.equal(profile?.phoneVerifiedFor, null);
-  assert.equal(updatedApplication?.phone, '+27831234567');
+  const updatedStore = await repo.get<Storefront>('stores', seller.uid);
+  assert.equal(profile, null);
+  assert.equal(updatedApplication?.phone, '+27821234567');
+  assert.equal(updatedStore?.phone, '+27831234567');
+  assert.equal(updatedStore?.whatsappAvailable, true);
 });
