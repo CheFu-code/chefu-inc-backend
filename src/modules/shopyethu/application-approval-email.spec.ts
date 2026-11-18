@@ -13,7 +13,7 @@ const applicant: Actor = { uid: 'approval-email-test', email: 'applicant@example
 const staff: Actor = { uid: 'approval-staff-test', email: 'staff@example.test', roles: ['admin'] };
 const fields = {
   businessName: 'Test business', businessType: 'individual', categories: ['Other'],
-  contactName: 'Test Contact', phone: '0821234567', phoneConfirmed: true, area: 'Cape Town',
+  contactName: 'Test Contact', phone: '0821234567', area: 'Cape Town',
   plans: 'Locally made items for an isolated test.', collectionOffered: false,
 };
 

@@ -28,7 +28,6 @@ export function applicationFields(actor: Actor, body: Record<string, unknown>) {
     body.categories.some(value => typeof value !== 'string' || !categories.includes(value)) || new Set(body.categories).size !== body.categories.length) {
     throw new BadRequestException('Choose at least one valid product category.');
   }
-  if (body.phoneConfirmed !== true) throw new BadRequestException('Confirm your business contact number.');
   if (typeof body.collectionOffered !== 'boolean') throw new BadRequestException('Choose whether you offer collection.');
   if (body.whatsappAvailable !== undefined && typeof body.whatsappAvailable !== 'boolean') {
     throw new BadRequestException('Choose whether this number is available on WhatsApp.');
@@ -51,7 +50,6 @@ export function applicationFields(actor: Actor, body: Record<string, unknown>) {
     ...(cipcCertificateId && cipcCertificateFormat ? { cipcCertificateId, cipcCertificateFormat } : {}),
     categories: body.categories as string[],
     contactName: text(body.contactName, 'Contact name', 2, 100), email, phone,
-    phoneConfirmed: true,
     ...(typeof body.whatsappAvailable === 'boolean' ? { whatsappAvailable: body.whatsappAvailable } : {}),
     area: areaPlaceId ? '' : text(body.area, 'Operating area', 2, 120),
     ...(areaPlaceId ? { areaPlaceId } : {}),

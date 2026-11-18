@@ -36,7 +36,7 @@ export class ApplicationsService {
             const event = { status: 'pending' as const, at: now, ...(previous ? { response: fields.response } : {}) };
             const application: SellerApplication = {
                 ...fields, id: actor.uid, ownerUid: actor.uid, status: 'pending', reason: previous?.reason || '',
-                updatedAt: now, contactConfirmedAt: now,
+                updatedAt: now,
                 ...(!previous ? { createdAt: now } : previous.createdAt ? { createdAt: previous.createdAt } : {}),
                 history: previous ? applicationHistory(previous, event) : [event],
             };

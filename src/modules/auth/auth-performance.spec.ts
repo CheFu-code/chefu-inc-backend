@@ -15,7 +15,7 @@ import { phoneContact } from './phone-contact';
 const logger = { log() {}, warn() {}, error() {} };
 const request: any = { ip: '127.0.0.1', headers: {}, cookies: {}, socket: {} };
 
-test('session reuse validates the cookie and reads current phone state without writes', async () => {
+test('session reuse validates the cookie and returns its contact profile without writes', async () => {
   const controller: any = Object.create(AuthSessionRoutes.prototype);
   const calls: unknown[][] = [];
   let decoded: any = { uid: 'uid', email: 'alice@example.test', email_verified: true };
@@ -407,13 +407,13 @@ test('trusted-device verification overlaps only the final profile read, never th
   assert.equal(state.res.cookies.length, 2);
 });
 
-test('password and passkey session completion derives phone requirements from the existing profile load', async () => {
+test('password and passkey session completion returns the saved contact from the existing profile load', async () => {
   const state = sessionSetup();
   let reads = 0;
   state.controller.getUserProfile = async () => {
     reads++; return { roles: ['user'], fullname: 'Alice', securityEmailsEnabled: false, phone: '+27821234567' };
   };
   const result = await state.signIn();
-  assert.equal(result.phoneVerificationRequired, true);
+  assert.equal(result.phone, '+27821234567');
   assert.equal(reads, 1);
 });

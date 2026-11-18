@@ -8,7 +8,6 @@ import { EmailModule } from './modules/email/email.module';
 import { FirebaseAdminModule } from './modules/firebase-admin/firebase-admin.module';
 import { HealthController } from './modules/health/health.controller';
 import { NotificationsModule } from './modules/notifications/notifications.module';
-import { PhoneVerificationModule } from './modules/phone-verification/phone-verification.module';
 import { QuantumModule } from './modules/quantum/quantum.module';
 import { ProductsModule } from './modules/products/products.module';
 import { SubmissionsModule } from './modules/submissions/submissions.module';
@@ -28,7 +27,6 @@ const sharedServiceModules = [
   AiModule,
   EmailModule,
   NotificationsModule,
-  PhoneVerificationModule,
 ];
 
 const productModules = [

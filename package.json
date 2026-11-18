@@ -10,9 +10,8 @@
   },
   "scripts": {
     "test:account-sessions": "node --import tsx --test src/modules/auth/account-sessions.spec.ts src/modules/auth/account-session-dedup.spec.ts",
-    "migrate:phone-contacts": "tsx --env-file-if-exists=.env scripts/migrate-phone-contacts.ts",
     "migrate:shopyethu-product-identity-locks": "tsx --env-file-if-exists=.env scripts/migrate-shopyethu-product-identity-locks.ts",
-    "test:phone-verification": "node --import tsx --test src/modules/phone-verification/*.spec.ts scripts/migrate-phone-contacts.spec.ts",
+    "test:phone-contact": "node --import tsx --test src/modules/auth/phone-contact.spec.ts",
     "test:shopyethu": "node --import tsx --test src/modules/shopyethu/*.spec.ts",
     "test:checkout": "node --import tsx --test src/modules/store/*.spec.ts scripts/migrate-store-payments.spec.ts",
     "migrate:store": "tsx --env-file-if-exists=.env scripts/migrate-store-payments.ts",
@@ -65,7 +64,6 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "sanitize-html": "^2.17.7",
-    "twilio": "^6.3.0",
     "typescript": "^5.9.3",
     "validator": "^13.15.35"
   },

@@ -71,15 +71,13 @@ void test('store contact updates use the marketplace store instead of the shared
     contactName: 'Test contact', email: seller.email, phone: '+27821234567',
     whatsappAvailable: false,
     area: store.area, plans: store.description, response: '', status: 'approved',
-    reason: '', updatedAt: store.updatedAt, phoneConfirmed: true,
+    reason: '', updatedAt: store.updatedAt,
   };
   await repo.transaction(async tx => {
     tx.set('stores', seller.uid, store);
     tx.set('applications', seller.uid, application);
     tx.set('accountProfiles', seller.email, {
       phone: '+27831234567',
-      phoneVerifiedAt: '2026-01-02T00:00:00.000Z',
-      phoneVerifiedFor: '+27831234567',
     });
   });
   const updated = await new CatalogService(repo).saveStore(seller, {
@@ -119,7 +117,7 @@ void test('seller inventory includes the marketplace contact for its client cach
   assert.equal(inventory.whatsappAvailable, true);
 });
 
-void test('store contact can be set without changing shared SSO phone verification data', async () => {
+void test('store contact updates do not alter the shared SSO profile', async () => {
   const seller: Actor = { uid: 'seller-whatsapp-test', email: 'seller@example.test', roles: [] };
   const repo = new TestRepository();
   const store: Storefront = {
@@ -132,7 +130,7 @@ void test('store contact can be set without changing shared SSO phone verificati
     id: seller.uid, ownerUid: seller.uid, businessName: store.name,
     contactName: 'Test contact', email: seller.email, phone: '+27821234567',
     area: store.area, plans: store.description, response: '', status: 'approved',
-    reason: '', updatedAt: store.updatedAt, phoneConfirmed: true,
+    reason: '', updatedAt: store.updatedAt,
   };
   await repo.transaction(async tx => {
     tx.set('stores', seller.uid, store);

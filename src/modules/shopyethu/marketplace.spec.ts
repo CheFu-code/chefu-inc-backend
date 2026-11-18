@@ -12,7 +12,7 @@ const buyer: Actor = { uid: 'buyer-test', email: 'buyer@example.test', roles: []
 const seller: Actor = { uid: 'seller-test', email: 'seller@example.test', roles: [] };
 const other: Actor = { uid: 'other-test', email: 'other@example.test', roles: [] };
 const staff: Actor = { uid: 'staff-test', email: 'staff@example.test', roles: ['admin'] };
-const application = { businessName: 'Test business', contactName: 'Test Contact', email: seller.email, phone: '0123456789', area: 'Test area', plans: 'Items supplied only in an isolated unit test.', businessType: 'individual', categories: ['Other'], phoneConfirmed: true, collectionOffered: false };
+const application = { businessName: 'Test business', contactName: 'Test Contact', email: seller.email, phone: '0123456789', area: 'Test area', plans: 'Items supplied only in an isolated unit test.', businessType: 'individual', categories: ['Other'], collectionOffered: false };
 const listing = { name: 'Test listing', description: 'This record exists only inside a unit test.', category: 'Other', priceCents: 10000, stock: 3, photos: ['https://example.test/item.jpg'], fulfilment: ['collection'], published: true };
 const status = (expected: number) => (error: any) => error.getStatus?.() === expected;
 

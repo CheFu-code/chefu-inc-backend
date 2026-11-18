@@ -100,7 +100,6 @@ void test('a successful saved-account switch preserves the previous session for 
     __session_account_0: 'alice-session', __session_account_meta_0: 'alice-meta',
     __session: 'bob-session', __session_meta: 'bob-meta',
   });
-  assert.equal(switched.phoneVerificationRequired, true);
 });
 
 void test('a saved account can be restored when no active session cookie exists', async () => {

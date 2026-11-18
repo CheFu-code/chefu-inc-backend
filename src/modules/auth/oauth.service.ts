@@ -29,7 +29,6 @@ import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { SecurityEventsService } from './security-events.service';
 import { SESSION_COOKIE_NAME } from './session.constants';
 import { sharedGender } from './shared-profile';
-import { assertPhoneVerified, isPhoneRecoveryRequest, phoneContact } from './phone-contact';
 import { readAuthUserProfile } from './auth-user-profile';
 
 type OAuthCodeDocument = {
@@ -376,11 +375,6 @@ export class OAuthService {
     }
 
     const scopes = this.resolveScopes(params.scope, client);
-    if (decoded.email && phoneContact(await readAuthUserProfile(this.firebaseAdmin, decoded.email, request)).phoneVerificationRequired) {
-      const verifyUrl = new URL(this.buildLoginRedirect(params, client));
-      verifyUrl.pathname = '/verify-phone';
-      return { redirectTo: verifyUrl.toString() };
-    }
     const code = this.randomToken(32);
     const issuedAt = Date.now();
     const expiresAt = issuedAt + this.authorizationCodeTtlMs;
@@ -669,9 +663,6 @@ export class OAuthService {
       dpop,
       request,
     });
-    if (claims.email && !isPhoneRecoveryRequest(request?.path)) {
-      assertPhoneVerified(await readAuthUserProfile(this.firebaseAdmin, claims.email, request));
-    }
     return claims as OAuthAccessTokenClaims;
   }
 
@@ -686,7 +677,6 @@ export class OAuthService {
     }
 
     await this.securityEvents.assertTokenNotRevoked(claims);
-    if (claims.email) assertPhoneVerified(await readAuthUserProfile(this.firebaseAdmin, claims.email));
     return claims as OAuthAccessTokenClaims;
   }
 
@@ -770,11 +760,6 @@ export class OAuthService {
       if (current.revokedAt || current.expiresAt <= now) {
         throw new UnauthorizedException('Refresh token is no longer valid.');
       }
-      if (current.email) {
-        const profile = await transaction.get(this.firebaseAdmin.db().collection('users').doc(current.email));
-        assertPhoneVerified(profile.data() || {});
-      }
-
       const absoluteExpiresAt =
         this.persistentMobileClientIds.has(current.clientId)
           ? current.absoluteExpiresAt ?? now + this.mobileRefreshTokenTtlMs
@@ -1854,7 +1839,6 @@ export class OAuthService {
       .collection('users')
       .doc(email)
       .get();
-    assertPhoneVerified(snapshot.data() || {});
     const roles = snapshot.data()?.roles;
     return Array.isArray(roles) ? roles.map(String) : [];
   }

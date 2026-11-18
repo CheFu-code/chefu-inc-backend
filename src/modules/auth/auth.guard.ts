@@ -22,7 +22,6 @@ import {
 } from './session.constants';
 import { SessionSignerService } from './session-signer.service';
 import { readAuthUserProfile } from './auth-user-profile';
-import { assertPhoneVerified, isPhoneRecoveryRequest } from './phone-contact';
 
 type RequestWithUser = Request & {
   user?: AuthenticatedUser;
@@ -92,9 +91,6 @@ export class AuthGuard implements CanActivate {
         }),
       );
       throw new UnauthorizedException('Authentication required.');
-    }
-    if (request.user?.email && !isPhoneRecoveryRequest(request.path)) {
-      assertPhoneVerified(await readAuthUserProfile(this.firebaseAdmin, request.user.email, request));
     }
     return true;
   }

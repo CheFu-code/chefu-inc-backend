@@ -95,7 +95,6 @@ void test('public storefront exposes a valid marketplace phone and WhatsApp stat
   const publicStore = (await catalog.storefront(seller.uid)).store;
   assert.equal(publicStore.phone, '+27821234567');
   assert.equal(publicStore.whatsappAvailable, true);
-  assert.equal('phoneVerificationRequired' in publicStore, false);
 
   await repo.transaction(async tx => {
     tx.set('applications', seller.uid, {

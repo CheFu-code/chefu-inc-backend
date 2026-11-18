@@ -59,7 +59,6 @@ export class GlobalExceptionFilter implements ExceptionFilter {
             [
               'attemptsRemaining',
               'code',
-              'phoneVerificationRequired',
               'mfaInfo',
               'mfaPendingCredential',
               'mfaRequired',

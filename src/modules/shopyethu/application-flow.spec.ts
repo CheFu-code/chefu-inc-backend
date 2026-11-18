@@ -9,7 +9,7 @@ const applicant: Actor = { uid: 'application-test', email: 'owner@example.test',
 const staff: Actor = { uid: 'staff-test', email: 'staff@example.test', roles: ['admin'] };
 const fields = {
   businessName: 'Unit test business', businessType: 'individual', categories: ['Other', 'Home & Living'],
-  contactName: 'Test Contact', phone: '+27 82 123 4567', phoneConfirmed: true, area: 'Test operating area',
+  contactName: 'Test Contact', phone: '+27 82 123 4567', area: 'Test operating area',
   plans: 'Products described only for isolated unit tests.', collectionOffered: true,
   collectionArea: 'Test pickup suburb', pickupHours: 'Weekdays 09:00–17:00',
 };
@@ -21,7 +21,7 @@ void test('application fields are validated server-side and invalid submissions 
   for (const change of [
     { businessType: 'unknown' }, { businessType: ['individual'] }, { categories: [] }, { categories: ['Other', 'Other'] },
     { businessType: 'registered-business' },
-    { categories: ['unsupported'] }, { phoneConfirmed: false }, { phoneConfirmed: 'true' },
+    { categories: ['unsupported'] },
     { phone: 'call me later' }, { phone: '123' }, { phone: '1234567' }, { phone: '082123456' },
     { phone: '08212345678' }, { phone: '0000000000' }, { phone: '+27 082 123 4567' },
     { phone: '+999123456789' }, { phone: '+44 20 7946 0958' }, { phone: '0821234567 ext 1' },
@@ -104,14 +104,13 @@ void test('approved registered-business storefronts persist their verified badge
   assert.equal(store?.verified, true);
 });
 
-void test('application contact numbers use canonical international format without changing verification status', () => {
+void test('application contact numbers use canonical international format', () => {
   for (const [input, expected] of [
     ['082 123 4567', '+27821234567'], ['(011) 234-5678', '+27112345678'],
     ['+27 82 123 4567', '+27821234567'],
   ]) {
     const result = applicationFields(applicant, { ...fields, phone: input });
     assert.equal(result.phone, expected);
-    assert.equal('phoneVerifiedAt' in result, false);
   }
 });
 
@@ -136,15 +135,16 @@ void test('server owns email, approval and timeline; review and resubmission pre
   const service = new ApplicationsService(repo);
   const submitted = await service.submit(applicant, {
     ...fields, email: 'forged@example.test', status: 'approved', ownerUid: staff.uid,
-    history: [{ status: 'approved', at: '1900-01-01' }], createdAt: '1900-01-01', contactConfirmedAt: '1900-01-01',
+    history: [{ status: 'approved', at: '1900-01-01' }], createdAt: '1900-01-01',
   });
   assert.equal(submitted.email, applicant.email);
   assert.equal(submitted.phone, '+27821234567');
+  assert.equal('phoneConfirmed' in submitted, false);
+  assert.equal('contactConfirmedAt' in submitted, false);
   assert.equal(submitted.ownerUid, applicant.uid);
   assert.equal(submitted.status, 'pending');
   assert.equal(submitted.history?.length, 1);
   assert.equal(submitted.createdAt, submitted.updatedAt);
-  assert.equal(submitted.contactConfirmedAt, submitted.updatedAt);
   const requested = await service.review(staff, applicant.uid, { status: 'more-info', reason: 'Please clarify pickup availability.' });
   assert.equal(requested.history?.[1].reason, 'Please clarify pickup availability.');
   const response = 'Pickup is available on weekdays only.';
