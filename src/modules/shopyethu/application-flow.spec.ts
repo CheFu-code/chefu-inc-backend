@@ -24,7 +24,8 @@ void test('application fields are validated server-side and invalid submissions 
     { categories: ['unsupported'] }, { phoneConfirmed: false }, { phoneConfirmed: 'true' },
     { phone: 'call me later' }, { phone: '123' }, { phone: '1234567' }, { phone: '082123456' },
     { phone: '08212345678' }, { phone: '0000000000' }, { phone: '+27 082 123 4567' },
-    { phone: '+999123456789' }, { phone: '+44 20 7946 0958' }, { phone: '0821234567 ext 1' }, { collectionOffered: null },
+    { phone: '+999123456789' }, { phone: '+44 20 7946 0958' }, { phone: '0821234567 ext 1' },
+    { whatsappAvailable: 'yes' }, { collectionOffered: null },
     { collectionArea: '' }, { pickupHours: '' },
   ]) await assert.rejects(service.submit(applicant, { ...fields, ...change }), badRequest);
   assert.equal((await service.account(applicant)).application, null);
@@ -111,6 +112,18 @@ void test('application contact numbers use canonical international format withou
     const result = applicationFields(applicant, { ...fields, phone: input });
     assert.equal(result.phone, expected);
     assert.equal('phoneVerifiedAt' in result, false);
+  }
+});
+
+void test('seller application saves the chosen WhatsApp status with the shared contact number', async () => {
+  for (const whatsappAvailable of [true, false]) {
+    const repo = new TestRepository();
+    const service = new ApplicationsService(repo);
+    const submitted = await service.submit(applicant, { ...fields, whatsappAvailable });
+    const profile = await repo.get<Record<string, unknown>>('accountProfiles', applicant.email);
+    assert.equal(submitted.whatsappAvailable, whatsappAvailable);
+    assert.equal(profile?.phone, '+27821234567');
+    assert.equal(profile?.whatsappAvailable, whatsappAvailable);
   }
 });
 

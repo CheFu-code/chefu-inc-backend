@@ -30,6 +30,9 @@ export function applicationFields(actor: Actor, body: Record<string, unknown>) {
   }
   if (body.phoneConfirmed !== true) throw new BadRequestException('Confirm your business contact number.');
   if (typeof body.collectionOffered !== 'boolean') throw new BadRequestException('Choose whether you offer collection.');
+  if (body.whatsappAvailable !== undefined && typeof body.whatsappAvailable !== 'boolean') {
+    throw new BadRequestException('Choose whether this number is available on WhatsApp.');
+  }
   const phone = normalizeContactPhone(text(body.phone, 'Phone number', 7, 30));
   if (!phone || !/^\+27[1-9]\d{8}$/.test(phone)) {
     throw new BadRequestException('Enter a complete valid South African contact number.');
@@ -49,6 +52,7 @@ export function applicationFields(actor: Actor, body: Record<string, unknown>) {
     categories: body.categories as string[],
     contactName: text(body.contactName, 'Contact name', 2, 100), email, phone,
     phoneConfirmed: true,
+    ...(typeof body.whatsappAvailable === 'boolean' ? { whatsappAvailable: body.whatsappAvailable } : {}),
     area: areaPlaceId ? '' : text(body.area, 'Operating area', 2, 120),
     ...(areaPlaceId ? { areaPlaceId } : {}),
     plans: text(body.plans, 'What you plan to sell', 10, 2000),

@@ -29,6 +29,7 @@ export type SellerApplication = {
     cipcCertificateId?: string;
     cipcCertificateFormat?: "pdf" | "jpg" | "png" | "webp";
     phoneConfirmed?: boolean;
+    whatsappAvailable?: boolean;
     contactConfirmedAt?: string;
     collectionOffered?: boolean;
     collectionArea?: string;
