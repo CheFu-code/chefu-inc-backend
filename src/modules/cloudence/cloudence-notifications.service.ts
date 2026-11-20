@@ -51,6 +51,21 @@ export class CloudenceNotificationsService {
     return { saved: true };
   }
 
+  async getPreferences(userId: string) {
+    const preferences = (
+      await this.firebase
+        .db()
+        .collection(PREFERENCE_COLLECTION)
+        .doc(userId)
+        .get()
+    ).data();
+    return {
+      quotaAlertsEnabled: preferences?.quotaAlertsEnabled !== false,
+      collaboratorActivityEnabled:
+        preferences?.collaboratorActivityEnabled !== false,
+    };
+  }
+
   async notifyQuotaReached(userId: string, percentage: number) {
     await this.sendToUser(userId, "quota", {
       title: "Storage almost full",

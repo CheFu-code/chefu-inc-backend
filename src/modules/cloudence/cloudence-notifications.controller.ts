@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  Get,
   Put,
   Req,
   UnauthorizedException,
@@ -19,6 +20,11 @@ type AuthenticatedRequest = Request & { user?: AuthenticatedUser };
 @UseGuards(AuthGuard)
 export class CloudenceNotificationsController {
   constructor(private readonly notifications: CloudenceNotificationsService) {}
+
+  @Get("preferences")
+  getPreferences(@Req() request: AuthenticatedRequest) {
+    return this.notifications.getPreferences(this.requireUser(request).uid);
+  }
 
   @Put("device")
   registerDevice(
