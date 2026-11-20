@@ -5,6 +5,7 @@ import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { CloudenceFileDocument } from './cloudence.types';
 import { COLLECTION } from './cloudence.constants';
+import { isSharingExpiredForUser } from './cloudence-sharing';
 
 export type FolderSection = 'documents' | 'images' | 'media' | 'others';
 export type CloudenceFolder = { id: string; name: string; section: FolderSection; createdAt: string };
@@ -74,7 +75,7 @@ export class CloudenceFoldersService {
   assertReadable(file: CloudenceFileDocument | undefined, user: AuthenticatedUser): asserts file is CloudenceFileDocument {
     if (!file || file.isDeleted) throw new NotFoundException('File was not found.');
     if (file.ownerId !== user.uid && (!user.email || !file.users.some((email) => email.toLowerCase() === user.email.toLowerCase()) ||
-      (file.shareExpiresAt && Date.parse(file.shareExpiresAt) <= Date.now()))) throw new ForbiddenException('You do not have permission to organize this file.');
+      isSharingExpiredForUser(file, user.email))) throw new ForbiddenException('You do not have permission to organize this file.');
   }
 
   private place(state: FolderSettings, file: CloudenceFileDocument, folderId: unknown) {

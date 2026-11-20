@@ -38,6 +38,7 @@ import {
   MAX_STORAGE_BYTES,
   QUOTA_COLLECTION,
 } from "./cloudence.constants";
+import { isSharingExpiredForUser } from "./cloudence-sharing";
 
 type StorageQuota = Record<
   CloudenceFileType,
@@ -418,9 +419,10 @@ export class CloudenceService {
         continue;
       if (input.section && folderSection(file.type) !== input.section) continue;
       // Non-owners cannot see file if the share expiration has passed
-      if (file.ownerId !== user.uid && file.shareExpiresAt) {
-        if (new Date(file.shareExpiresAt) <= now) continue;
-      }
+      if (
+        file.ownerId !== user.uid &&
+        isSharingExpiredForUser(file, userEmail, now.getTime())
+      ) continue;
       if (targetTypes.length && !targetTypes.includes(file.type)) continue;
       if (search && !file.name.toLowerCase().includes(search)) continue;
       documents.push(file);
@@ -495,7 +497,9 @@ export class CloudenceService {
       input.addUsers !== undefined ||
       input.removeUsers !== undefined;
     const action =
-      changesRecipients || input.shareExpiresAt !== undefined
+      changesRecipients ||
+      input.shareExpiresAt !== undefined ||
+      input.userExpiration !== undefined
         ? "share"
         : "rename";
     if (
@@ -549,7 +553,7 @@ export class CloudenceService {
       input.removeUsers !== undefined
         ? normalizeRecipients(input.removeUsers)
         : [];
-    if (changesRecipients) {
+    if (changesRecipients || input.userExpiration !== undefined) {
       // Rate limit: max 30 share operations per minute per user
       const rateLimit = await this.runtimeLimits.reserve({
         collection: "cloudence_share_limits",
@@ -582,6 +586,36 @@ export class CloudenceService {
       }
     }
 
+    let userExpiration: { email: string; expiresAt: string | null } | undefined;
+    if (input.userExpiration !== undefined) {
+      const email = String(input.userExpiration?.email ?? "")
+        .trim()
+        .toLowerCase();
+      const value = input.userExpiration?.expiresAt;
+      if (!EMAIL_REGEX.test(email)) {
+        throw new BadRequestException("Choose a valid collaborator email.");
+      }
+      if (value !== null && typeof value !== "string") {
+        throw new BadRequestException("Expiration must be a date or null.");
+      }
+      let expiresAt: string | null = null;
+      if (value) {
+        const timestamp = Date.parse(value);
+        if (!Number.isFinite(timestamp)) {
+          throw new BadRequestException(
+            "User expiration must be a valid ISO date string.",
+          );
+        }
+        if (timestamp <= Date.now()) {
+          throw new BadRequestException(
+            "Sharing expiration must be in the future.",
+          );
+        }
+        expiresAt = new Date(timestamp).toISOString();
+      }
+      userExpiration = { email, expiresAt };
+    }
+
     const [updated] = await this.withOwnerProfiles([
       {
         ...file!,
@@ -604,10 +638,31 @@ export class CloudenceService {
             : [...new Set([...current!.users, ...additions])].filter(
                 (email) => !removals.includes(email),
               );
+        if (
+          userExpiration &&
+          !nextUsers.some(
+            (email) => email.trim().toLowerCase() === userExpiration!.email,
+          )
+        ) {
+          throw new BadRequestException(
+            "This collaborator no longer has access to the file.",
+          );
+        }
         if (changesRecipients && nextUsers.length > MAX_SHARE_RECIPIENTS) {
           throw new BadRequestException(
             `A file can be shared with a maximum of ${MAX_SHARE_RECIPIENTS} users.`,
           );
+        }
+        const shareExpiresAtByUser = Object.fromEntries(
+          Object.entries(current!.shareExpiresAtByUser ?? {}).filter(
+            ([email]) =>
+              nextUsers.some(
+                (recipient) => recipient.trim().toLowerCase() === email,
+              ),
+          ),
+        ) as Record<string, string | null>;
+        if (userExpiration) {
+          shareExpiresAtByUser[userExpiration.email] = userExpiration.expiresAt;
         }
         const next = {
           ...current!,
@@ -617,9 +672,10 @@ export class CloudenceService {
           ...(input.shareExpiresAt !== undefined
             ? { shareExpiresAt: shareExpiresAt || FieldValue.delete() }
             : {}),
+          shareExpiresAtByUser,
           updatedAt: updated.updatedAt,
         };
-        transaction.set(ref, next);
+        transaction.update(ref, next);
         return {
           saved: {
             ...next,
@@ -627,6 +683,7 @@ export class CloudenceService {
               input.shareExpiresAt !== undefined
                 ? shareExpiresAt
                 : current!.shareExpiresAt,
+            shareExpiresAtByUser,
           } as CloudenceFileDocument,
           previousUsers,
         };
@@ -643,11 +700,12 @@ export class CloudenceService {
         ),
       );
     }
-    if (changesRecipients) {
+    if (changesRecipients || userExpiration) {
       void this.logAudit(user, "file.shared", id, {
         previousUsers: file!.users,
         updatedUsers: saved.users,
         shareExpiresAt,
+        ...(userExpiration ? { userExpiration } : {}),
       }).catch((err) =>
         this.logger.warn(
           `Audit log (file.shared) failed: ${err instanceof Error ? err.message : err}`,
@@ -860,11 +918,7 @@ export class CloudenceService {
       throw new ForbiddenException(
         "You do not have permission to access this file.",
       );
-    if (
-      !isOwner &&
-      file.shareExpiresAt &&
-      Date.parse(file.shareExpiresAt) <= Date.now()
-    ) {
+    if (!isOwner && isSharingExpiredForUser(file, email)) {
       throw new ForbiddenException("Sharing access for this file has expired.");
     }
     if (file.deliveryType !== "authenticated") {
@@ -1367,6 +1421,9 @@ export class CloudenceService {
       createdAt: file.createdAt,
       updatedAt: file.updatedAt,
       shareExpiresAt: file.shareExpiresAt,
+      ...(file.ownerId === user.uid && file.shareExpiresAtByUser
+        ? { shareExpiresAtByUser: file.shareExpiresAtByUser }
+        : {}),
     };
   }
 

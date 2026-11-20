@@ -27,6 +27,7 @@ export type CloudenceFileDocument = {
   deletedBy?: string;
   sha256?: string;
   shareExpiresAt?: string;
+  shareExpiresAtByUser?: Record<string, string | null>;
 };
 
 /** Kept for backward-compat; dataBase64 is no longer used — upload now accepts multipart via multer. */
@@ -41,6 +42,7 @@ export type UpdateCloudenceFileInput = {
   addUsers?: string[];
   removeUsers?: string[];
   shareExpiresAt?: string;
+  userExpiration?: { email: string; expiresAt: string | null };
 };
 
 /**
@@ -65,4 +67,5 @@ export type CloudenceFileResponse = {
   createdAt: string;
   updatedAt: string;
   shareExpiresAt?: string;
+  shareExpiresAtByUser?: Record<string, string | null>;
 };

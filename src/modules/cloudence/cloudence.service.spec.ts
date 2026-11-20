@@ -76,7 +76,7 @@ function fixture(files: CloudenceFileDocument[] = []) {
       for (let retry = 0; retry < 20; retry++) {
         const reads = new Map<string, number>();
         let queryEpoch: number | undefined;
-        const writes: Array<{ key: string; data: Record<string, unknown> }> = [];
+        const writes: Array<{ key: string; data: Record<string, unknown>; merge?: boolean }> = [];
         const transaction = {
           get: async (target: { key?: string; get(): Promise<unknown> }) => {
             if (target.key) {
@@ -89,10 +89,11 @@ function fixture(files: CloudenceFileDocument[] = []) {
             return target.get();
           },
           set: (ref: { key: string }, data: Record<string, unknown>) => { writes.push({ key: ref.key, data }); },
+          update: (ref: { key: string }, data: Record<string, unknown>) => { writes.push({ key: ref.key, data, merge: true }); },
         };
         const result = await operation(transaction);
         if ([...reads].some(([key, version]) => (versions.get(key) || 0) !== version) || (queryEpoch !== undefined && queryEpoch !== epoch)) continue;
-        writes.forEach(({ key, data }) => write(key, data));
+        writes.forEach(({ key, data, merge }) => write(key, data, merge));
         return result;
       }
       throw new Error('Transaction retry limit exceeded');
