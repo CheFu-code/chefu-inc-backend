@@ -11,3 +11,11 @@ test('ShopYethu web keeps central sessions and Android has an exact native PKCE 
     redirectUris: ['shopyethu://sso-callback'], scopes: ['openid', 'profile', 'email'],
   });
 });
+
+test('Cloudence mobile is a public OIDC client with only its exact native callback', () => {
+  assert.deepEqual(resolveOauthClient('cloudence-mobile'), {
+    id: 'cloudence-mobile', appId: 'cloudence', name: 'Cloudence Mobile',
+    redirectUris: ['cloudence://sso-callback'], scopes: ['openid', 'profile', 'email'],
+  });
+  assert.equal(resolveOauthClient('cloudence-mobile-secret'), null);
+});

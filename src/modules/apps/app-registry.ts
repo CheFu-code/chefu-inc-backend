@@ -135,6 +135,13 @@ export const CHEFU_OAUTH_CLIENTS: ChefuOauthClient[] = [
         redirectUris: ["https://cloudence.chefu.co.za/auth/callback"],
         scopes: ["openid", "profile", "email"],
     },
+    {
+        id: "cloudence-mobile",
+        appId: "cloudence",
+        name: "Cloudence Mobile",
+        redirectUris: ["cloudence://sso-callback"],
+        scopes: ["openid", "profile", "email"],
+    },
 ];
 
 export function registeredAppOrigins() {
