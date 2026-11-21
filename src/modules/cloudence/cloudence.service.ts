@@ -39,6 +39,7 @@ import {
   QUOTA_COLLECTION,
 } from "./cloudence.constants";
 import { isSharingExpiredForUser } from "./cloudence-sharing";
+import { findOwnedDuplicatesByHash } from "./cloudence-deduplication";
 
 type StorageQuota = Record<
   CloudenceFileType,
@@ -140,6 +141,30 @@ export class CloudenceService {
 
     // Compute cryptographic SHA-256 integrity checksum
     const sha256 = createHash("sha256").update(buffer).digest("hex");
+    const type = this.fileType(name, contentType);
+    const extension = this.extension(name);
+    const folderSettings = folderId ? await this.folders.read(user) : undefined;
+    if (folderId) {
+      this.folders.validateDestination(
+        folderSettings!,
+        folderSection(type),
+        folderId,
+      );
+    }
+
+    const [duplicate] = await findOwnedDuplicatesByHash(
+      this.firebaseAdmin.db(),
+      user.uid,
+      sha256,
+    );
+    if (duplicate) {
+      const existingFolder = folderSettings?.placements[duplicate.id];
+      return {
+        ...this.toResponse(this.sanitizeFileForUser(duplicate, user), user),
+        ...(existingFolder ? { folderId: existingFolder } : {}),
+        duplicate: true,
+      };
+    }
 
     // Enforce 2GB user storage quota before upload
     let currentUsage = await this.getOwnedStorageBytes(user.uid);
@@ -154,14 +179,6 @@ export class CloudenceService {
       );
     }
 
-    const type = this.fileType(name, contentType);
-    const extension = this.extension(name);
-    if (folderId)
-      this.folders.validateDestination(
-        await this.folders.read(user),
-        folderSection(type),
-        folderId,
-      );
     const result = await this.cloudinaryStorage.uploadBuffer(buffer, {
       public_id: `chefu/cloudence/${user.uid}/${randomUUID()}`,
       resource_type: "auto",

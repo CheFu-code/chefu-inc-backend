@@ -133,6 +133,14 @@
       "collectionGroup": "cloudenceFiles",
       "queryScope": "COLLECTION",
       "fields": [
+        { "fieldPath": "ownerId", "order": "ASCENDING" },
+        { "fieldPath": "sha256", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "cloudenceFiles",
+      "queryScope": "COLLECTION",
+      "fields": [
         { "fieldPath": "users", "arrayConfig": "CONTAINS" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]

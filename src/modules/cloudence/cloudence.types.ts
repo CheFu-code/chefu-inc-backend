@@ -52,6 +52,8 @@ export type UpdateCloudenceFileInput = {
  * leakage at the API boundary regardless of what the frontend does.
  */
 export type CloudenceFileResponse = {
+  /** Set only by upload responses when an identical copy already exists in the target location. */
+  duplicate?: boolean;
   /** Personal folder placement for the requesting user, when section context is supplied. */
   folderId?: string | null;
   isOwner: boolean;
