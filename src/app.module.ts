@@ -16,11 +16,13 @@ import { CloudenceModule } from './modules/cloudence/cloudence.module';
 import { LiftWiseModule } from './modules/liftwise/liftwise.module';
 import { StoreModule } from './modules/store/store.module';
 import { ShopYethuModule } from './modules/shopyethu/shopyethu.module';
+import { UserManagementModule } from './modules/user-management/user-management.module';
 
 const platformModules = [
   AppsModule,
   FirebaseAdminModule,
   AuthModule,
+  UserManagementModule,
 ];
 
 const sharedServiceModules = [
