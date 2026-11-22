@@ -6,6 +6,7 @@ import { Request, Response } from 'express';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { registeredAppOrigins } from '../modules/apps/app-registry';
 import {
   configureCors,
   createCookieCsrfMiddleware,
@@ -17,17 +18,17 @@ const allowedOrigins = ['https://myaccount.chefu.co.za'];
 @Module({})
 class HttpSecurityTestModule {}
 
-async function startTestServer(trustedProxyAddresses: string[] = []) {
+async function startTestServer(trustedProxyAddresses: string[] = [], origins = allowedOrigins) {
   const app = await NestFactory.create<NestExpressApplication>(
     HttpSecurityTestModule,
     { bodyParser: false, logger: false },
   );
   app.set('trust proxy', trustedProxyAddresses);
-  configureCors(app, allowedOrigins);
+  configureCors(app, origins);
   app.use(express.json());
   app.use(cookieParser());
   app.use(createSecurityHeadersMiddleware());
-  app.use(createCookieCsrfMiddleware(allowedOrigins));
+  app.use(createCookieCsrfMiddleware(origins));
   app.use((request: Request, response: Response) => {
     response.json({
       ip: request.ip,
@@ -131,6 +132,41 @@ void test('HTTP security middleware enforces CORS and cookie CSRF while preservi
       ip: '127.0.0.1',
       rawBodyCaptured: false,
     });
+  } finally {
+    await server.app.close();
+  }
+});
+
+void test('deployed admin host passes credentialed preflights and cookie mutation origin checks', async () => {
+  const origin = 'https://admin.chefu.co.za';
+  const server = await startTestServer([], registeredAppOrigins());
+  try {
+    for (const method of ['GET', 'PATCH']) {
+      const response = await fetch(`${server.baseUrl}/admin/user-management/session`, {
+        method: 'OPTIONS',
+        headers: {
+          Origin: origin,
+          'Access-Control-Request-Method': method,
+          'Access-Control-Request-Headers': 'content-type,x-chefu-app',
+        },
+      });
+      assert.equal(response.status, 204);
+      assert.equal(response.headers.get('access-control-allow-origin'), origin);
+      assert.equal(response.headers.get('access-control-allow-credentials'), 'true');
+      assert.match(response.headers.get('access-control-allow-headers') || '', /x-chefu-app/i);
+      assert.ok(response.headers.get('access-control-allow-methods')?.includes(method));
+    }
+    const mutation = await fetch(`${server.baseUrl}/probe`, {
+      method: 'PATCH',
+      headers: { Origin: origin, Cookie: '__session=test-session', 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(mutation.status, 200);
+    const untrusted = await fetch(`${server.baseUrl}/probe`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://admin.chefu.co.za.evil.example', 'Access-Control-Request-Method': 'GET' },
+    });
+    assert.equal(untrusted.headers.get('access-control-allow-origin'), null);
   } finally {
     await server.app.close();
   }

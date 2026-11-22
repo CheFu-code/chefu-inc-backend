@@ -31,9 +31,11 @@ email-prefix search and pagination run on the server. CSV exports the visible
 page, with quoting and spreadsheet formula protection. No full user collection
 scan or settled permission cache is introduced.
 
-Production account return URLs for `app=admin` allow `https://internal.chefu.co.za`.
-If this console uses another host, update CheFu Account's redirect policy and the
-backend app registry/CORS configuration deliberately before deployment.
+Production account return URLs for `app=admin` allow `https://admin.chefu.co.za`
+and the existing `https://internal.chefu.co.za`. Both origins are registered in
+the backend CORS/CSRF allowlist. Deploy both the API and CheFu Account changes
+to enable the admin host; changing only this console does not update either
+service's production allowlist.
 
 Local development: API `:4000`, CheFu Account `:3001`, console `:3000`. Set the
 console's `NEXT_PUBLIC_API_BASE_URL` and `NEXT_PUBLIC_ACCOUNT_APP_URL` accordingly.

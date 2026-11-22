@@ -41,7 +41,7 @@ export const CHEFU_APPS: ChefuApp[] = [
     {
         id: "admin",
         name: "Chefu Admin",
-        origins: ["https://internal.chefu.co.za"],
+        origins: ["https://internal.chefu.co.za", "https://admin.chefu.co.za"],
     },
     {
         id: "quantum",
