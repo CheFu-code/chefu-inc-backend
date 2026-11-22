@@ -13,6 +13,13 @@ request, regardless of signed session metadata.
 - `GET /users?limit=25&cursor=<email>&search=<email-prefix>`: central profile
   pagination in email order, joined to Firebase Auth for verification/status.
   Maximum page size is 100; missing Firebase accounts show `Unavailable`.
+  Each user includes an `apps` array derived from the existing central profile's
+  `apps` map: app ID, registered display name, enabled status, and first/last activity
+  dates. Revoked apps remain visible as sign-in history. No extra reads are needed.
+  Gender uses the saved central profile value and the shared account normalizer;
+  missing values are returned as `null` and never inferred.
+  `country` contains the saved country name/code, or a detected-country fallback
+  explicitly marked with `source: detected`. Missing country data returns null.
 - `GET /summary?days=7|30|90`: Firestore aggregate counts and UTC registration
   intervals. Active means `lastLoginAt` within 30 days. New means `createdAt`
   within 30 days. Accounts with no historical timestamp are included in total,

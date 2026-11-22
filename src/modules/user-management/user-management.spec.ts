@@ -91,6 +91,9 @@ test("user pages join only the requested profiles to Auth and return a stable cu
       data: () => ({
         fullname: id,
         roles: ["user"],
+        countryCode: 'ZA',
+        gender: id === 'a@example.test' ? ' Non-binary ' : null,
+        apps: { cloudence: { enabled: true, lastSeenAt: '2026-11-22T10:00:00Z' } },
         privateValue: "must not be returned",
       }),
     }),
@@ -146,6 +149,11 @@ test("user pages join only the requested profiles to Auth and return a stable cu
     ["Active", "Suspended"],
   );
   assert.equal("privateValue" in first.users[0], false);
+  assert.equal(first.users[0].gender, 'Non-binary');
+  assert.equal(first.users[1].gender, null);
+  assert.deepEqual(first.users[0].country, { code: 'ZA', name: 'South Africa', source: 'profile' });
+  assert.equal(first.users[0].apps[0].name, 'Cloudence');
+  assert.equal(first.users[0].apps[0].lastSeenAt, '2026-11-22T10:00:00.000Z');
   assert.equal(maximum, 3, "only one extra cursor sentinel is read");
   assert.deepEqual(authLookups[0], ["a@example.test", "b@example.test"]);
   const second = await service.list({ limit: "2", cursor: first.nextCursor! });

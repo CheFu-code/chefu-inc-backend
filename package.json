@@ -9,7 +9,7 @@
     "multer": "^2.4.0"
   },
   "scripts": {
-    "test:user-management": "node --import tsx --test src/modules/user-management/user-management.spec.ts",
+    "test:user-management": "node --import tsx --test src/modules/user-management/*.spec.ts",
     "test:account-sessions": "node --import tsx --test src/modules/auth/account-sessions.spec.ts src/modules/auth/account-session-dedup.spec.ts",
     "migrate:shopyethu-product-identity-locks": "tsx --env-file-if-exists=.env scripts/migrate-shopyethu-product-identity-locks.ts",
     "test:phone-contact": "node --import tsx --test src/modules/auth/phone-contact.spec.ts",

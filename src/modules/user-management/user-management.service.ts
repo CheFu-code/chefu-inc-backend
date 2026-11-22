@@ -11,6 +11,9 @@ import { SecurityEventsService } from "../auth/security-events.service";
 import type { AuthenticatedUser } from "../auth/authenticated-user";
 import type { UpdateManagedUserDto } from "./user-management.dto";
 import { userManagementSummary } from "./user-management.summary";
+import { managedApps } from './managed-apps';
+import { managedCountry } from './managed-country';
+import { sharedGender } from '../auth/shared-profile';
 
 export function pageSize(value?: string) {
   if (value !== undefined && typeof value !== "string")
@@ -222,6 +225,9 @@ export class UserManagementService {
           ? profile.fullname
           : auth?.displayName || email,
       roles,
+      apps: managedApps(profile.apps),
+      country: managedCountry(profile),
+      gender: sharedGender(profile.gender) ?? null,
       verified: auth?.emailVerified ?? false,
       status: !auth
         ? "Unavailable"
