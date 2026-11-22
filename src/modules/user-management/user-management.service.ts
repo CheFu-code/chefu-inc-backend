@@ -50,6 +50,7 @@ export class UserManagementService {
       uid: actor.uid,
       email: actor.email,
       name: record.displayName || actor.email,
+      photoURL: record.photoURL || null,
       roles: actor.roles,
     };
   }
@@ -77,9 +78,11 @@ export class UserManagementService {
         .where(FieldPath.documentId(), ">=", search)
         .where(FieldPath.documentId(), "<=", `${search}\uf8ff`);
     const query = input.cursor ? base.startAfter(input.cursor) : base;
+    const totalQuery =
+      input.cursor || search ? Promise.resolve(null) : base.count().get();
     const [snapshot, total] = await Promise.all([
       query.limit(limit + 1).get(),
-      base.count().get(),
+      totalQuery,
     ]);
     const docs = snapshot.docs.slice(0, limit);
     const emails = docs.map((doc) => doc.id);
@@ -95,7 +98,7 @@ export class UserManagementService {
       ),
       nextCursor:
         snapshot.docs.length > limit ? docs[docs.length - 1].id : null,
-      total: total.data().count,
+      total: total ? total.data().count : null,
     };
   }
 

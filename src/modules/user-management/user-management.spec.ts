@@ -26,6 +26,31 @@ test("all management endpoints require authentication and fresh administrator ac
   );
 });
 
+test("admin session includes the profile photo or null when unavailable", async () => {
+  let photoURL: string | null = "https://example.test/admin.jpg";
+  const service = new UserManagementService(
+    {
+      auth: () => ({
+        getUser: async () => ({
+          displayName: "Admin",
+          photoURL,
+        }),
+      }),
+    } as unknown as FirebaseAdminService,
+    {} as SecurityEventsService,
+  );
+
+  assert.deepEqual(await service.session(actor), {
+    uid: actor.uid,
+    email: actor.email,
+    name: "Admin",
+    photoURL,
+    roles: actor.roles,
+  });
+  photoURL = null;
+  assert.equal((await service.session(actor)).photoURL, null);
+});
+
 test("guard ignores stale signed admin claims, disabled administrators, and anonymous callers", async () => {
   let roles = ["user"];
   let disabled = false;
@@ -99,6 +124,7 @@ test("user pages join only the requested profiles to Auth and return a stable cu
     }),
   );
   let maximum = 0;
+  let countCalls = 0;
   let after = "";
   const query = {
     orderBy: () => query,
@@ -110,9 +136,10 @@ test("user pages join only the requested profiles to Auth and return a stable cu
       maximum = value;
       return query;
     },
-    count: () => ({
-      get: async () => ({ data: () => ({ count: docs.length }) }),
-    }),
+    count: () => {
+      countCalls++;
+      return { get: async () => ({ data: () => ({ count: docs.length }) }) };
+    },
     get: async () => ({
       docs: docs.filter((doc) => doc.id > after).slice(0, maximum),
     }),
@@ -144,6 +171,7 @@ test("user pages join only the requested profiles to Auth and return a stable cu
   const first = await service.list({ limit: "2" });
   assert.equal(first.total, 3);
   assert.equal(first.nextCursor, "b@example.test");
+  assert.equal(countCalls, 1);
   assert.deepEqual(
     first.users.map((user) => user.status),
     ["Active", "Suspended"],
@@ -158,6 +186,8 @@ test("user pages join only the requested profiles to Auth and return a stable cu
   assert.deepEqual(authLookups[0], ["a@example.test", "b@example.test"]);
   const second = await service.list({ limit: "2", cursor: first.nextCursor! });
   assert.equal(second.nextCursor, null);
+  assert.equal(second.total, null);
+  assert.equal(countCalls, 1);
   assert.equal(second.users[0].status, "Unavailable");
   assert.equal(second.users[0].uid, null);
 });
