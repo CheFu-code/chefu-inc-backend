@@ -694,6 +694,11 @@ export class OAuthService {
       throw new BadRequestException('Unknown OAuth client.');
     }
 
+    if (await this.appsService.isConfidentialClient(body.client_id)) {
+      if (!body.client_secret || !(await this.appsService.verifyClientSecret(body.client_id, body.client_secret))) {
+        throw new UnauthorizedException('A valid client secret is required.');
+      }
+    }
     const refreshTokenHash = this.hash(body.refresh_token);
     const now = Date.now();
     const refreshRef = this.refreshTokens().doc(refreshTokenHash);

@@ -18,17 +18,17 @@ const allowedOrigins = ['https://myaccount.chefu.co.za'];
 @Module({})
 class HttpSecurityTestModule {}
 
-async function startTestServer(trustedProxyAddresses: string[] = [], origins = allowedOrigins) {
+async function startTestServer(trustedProxyAddresses: string[] = [], origins = allowedOrigins, dynamicOrigin?: (origin: string) => Promise<boolean>) {
   const app = await NestFactory.create<NestExpressApplication>(
     HttpSecurityTestModule,
     { bodyParser: false, logger: false },
   );
   app.set('trust proxy', trustedProxyAddresses);
-  configureCors(app, origins);
+  configureCors(app, origins, dynamicOrigin);
   app.use(express.json());
   app.use(cookieParser());
   app.use(createSecurityHeadersMiddleware());
-  app.use(createCookieCsrfMiddleware(origins));
+  app.use(createCookieCsrfMiddleware(origins, dynamicOrigin));
   app.use((request: Request, response: Response) => {
     response.json({
       ip: request.ip,
@@ -48,6 +48,25 @@ async function startTestServer(trustedProxyAddresses: string[] = [], origins = a
     baseUrl: `http://127.0.0.1:${address.port}`,
   };
 }
+
+void test('runtime origins immediately permit preflight and cookie mutations, and revocation fails closed', async () => {
+  let approved = true;
+  const origin = 'https://new-app.example.test';
+  const server = await startTestServer([], allowedOrigins, async candidate => approved && candidate === origin);
+  try {
+    const options = { method: 'OPTIONS', headers: { Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type,x-chefu-app' } };
+    const preflight = await fetch(`${server.baseUrl}/probe`, options);
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), origin);
+    const mutation = await fetch(`${server.baseUrl}/probe`, { method: 'POST', headers: { Origin: origin, Cookie: '__session=test', 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(mutation.status, 200);
+    approved = false;
+    const denied = await fetch(`${server.baseUrl}/probe`, options);
+    assert.equal(denied.headers.get('access-control-allow-origin'), null);
+    const deniedReferer = await fetch(`${server.baseUrl}/probe`, { method: 'POST', headers: { Referer: `${origin}/settings`, Cookie: '__session=test' } });
+    assert.equal(deniedReferer.status, 403);
+  } finally { await server.app.close(); }
+});
 
 void test('HTTP security middleware enforces CORS and cookie CSRF while preserving API clients', async () => {
   const server = await startTestServer();

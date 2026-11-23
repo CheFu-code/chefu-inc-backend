@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Header, HttpCode, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Inject, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { AppsService } from './apps.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { UserManagementGuard, AdminRequest } from '../user-management/user-management.guard';
@@ -7,7 +7,7 @@ import type { RegistrationInput } from './app-validation';
 @Controller('admin/apps')
 @UseGuards(AuthGuard, UserManagementGuard)
 export class AppsController {
-  constructor(private readonly apps: AppsService) {}
+  constructor(@Inject(AppsService) private readonly apps: AppsService) {}
 
   @Get()
   @Header('Cache-Control', 'private, no-store')
@@ -28,5 +28,5 @@ export class AppsController {
 
   @Post(':clientId/rotate-secret')
   @Header('Cache-Control', 'private, no-store')
-  rotate(@Param('clientId') id: string) { return this.apps.rotateClientSecret(id); }
+  rotate(@Param('clientId') id: string, @Req() request: AdminRequest) { return this.apps.rotateClientSecret(id, request.user.email); }
 }

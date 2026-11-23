@@ -29,7 +29,7 @@ export function validateRegistration(input: RegistrationInput) {
   }))];
   const redirectUris = [...new Set(input.redirectUris.map(uri => {
     const url = safeUrl(uri);
-    if (!webUrl(url) && (input.clientType === 'confidential' || !/^[a-z][a-z0-9+.-]*:$/.test(url.protocol) || ['http:', 'https:', 'javascript:', 'data:', 'file:', 'ftp:', 'about:', 'blob:'].includes(url.protocol))) throw new BadRequestException('Use an HTTPS callback or a native app callback for a public client.');
+    if (!webUrl(url) && (input.clientType === 'confidential' || !uri.startsWith(`${url.protocol}//`) || !/^[a-z][a-z0-9+.-]*:$/.test(url.protocol) || ['http:', 'https:', 'javascript:', 'data:', 'file:', 'ftp:', 'about:', 'blob:'].includes(url.protocol))) throw new BadRequestException('Use an HTTPS callback or a native app callback for a public client.');
     if (webUrl(url) && !origins.includes(url.origin)) throw new BadRequestException('Each web callback must belong to one of the registered origins.');
     return uri;
   }))];

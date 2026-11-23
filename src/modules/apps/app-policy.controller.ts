@@ -1,9 +1,9 @@
-import { Controller, Get, Header, NotFoundException, Param } from '@nestjs/common';
+import { Controller, Get, Header, Inject, NotFoundException, Param } from '@nestjs/common';
 import { AppsService } from './apps.service';
 
 @Controller('apps')
 export class AppPolicyController {
-  constructor(private readonly apps: AppsService) {}
+  constructor(@Inject(AppsService) private readonly apps: AppsService) {}
 
   @Get('policy/:appId')
   @Header('Cache-Control', 'no-store')

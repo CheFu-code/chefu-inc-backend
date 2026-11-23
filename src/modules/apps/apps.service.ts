@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import bcrypt from 'bcrypt';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
@@ -6,11 +6,11 @@ import { CHEFU_APPS, registeredAppOrigins, registeredOauthClients, resolveChefuA
 import type { ChefuApp, ChefuAppId, ChefuRegisteredAppRecord } from './app-registry.types';
 import { validateRegistration, type RegistrationInput } from './app-validation';
 
-type ManagedRecord = ChefuRegisteredAppRecord & { registry_version?: number };
+type ManagedRecord = ChefuRegisteredAppRecord & { registry_version?: number; active_secret_version?: string };
 
 @Injectable()
 export class AppsService {
-  constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
+  constructor(@Inject(FirebaseAdminService) private readonly firebaseAdmin: FirebaseAdminService) {}
 
   list(): ChefuApp[] { return CHEFU_APPS; }
   origins() { return registeredAppOrigins(); }
@@ -37,7 +37,7 @@ export class AppsService {
     const snapshot = await this.firebaseAdmin.db().collection('oauth_apps').orderBy('created_at', 'desc').limit(200).get();
     return { records: snapshot.docs.map(doc => {
       const record = doc.data() as ManagedRecord;
-      return { client_id: doc.id, app_id: record.app_id, name: record.name, owner: record.owner, client_type: record.client_type, status: record.status, origins: record.origins || [], redirect_uris: record.redirect_uris, allowed_scopes: record.allowed_scopes, created_at: record.created_at, registry_version: record.registry_version || 0 };
+      return { client_id: doc.id, app_id: record.app_id || doc.id, name: record.name || doc.id, owner: record.owner || '', client_type: record.client_type, status: record.status, origins: Array.isArray(record.origins) ? record.origins : [], redirect_uris: Array.isArray(record.redirect_uris) ? record.redirect_uris : [], allowed_scopes: Array.isArray(record.allowed_scopes) ? record.allowed_scopes : [], created_at: record.created_at, registry_version: record.registry_version || 0 };
     }), limit: 200 };
   }
 
@@ -76,6 +76,7 @@ export class AppsService {
       approved_at: status === 'approved' ? new Date().toISOString() : null, registry_version: 1,
     };
     const secret = type === 'confidential' ? await this.newSecret(clientId) : null;
+    if (secret) record.active_secret_version = secret.version;
     const db = this.firebaseAdmin.db();
     const batch = db.batch();
     batch.create(db.collection('oauth_apps').doc(clientId), record);
@@ -107,15 +108,25 @@ export class AppsService {
     await batch.commit();
   }
 
-  async rotateClientSecret(clientId: string) {
+  async rotateClientSecret(clientId: string, actor = 'system') {
     const app = await this.required(clientId);
     if (app.client_type !== 'confidential') throw new BadRequestException('Only confidential clients have a client secret.');
     const secret = await this.newSecret(clientId);
-    await this.firebaseAdmin.db().collection('oauth_app_secrets').doc(`${clientId}:${secret.version}`).create(secret.record);
+    const db = this.firebaseAdmin.db();
+    const batch = db.batch();
+    batch.create(db.collection('oauth_app_secrets').doc(`${clientId}:${secret.version}`), secret.record);
+    batch.update(db.collection('oauth_apps').doc(clientId), { active_secret_version: secret.version });
+    batch.create(db.collection('app_registry_audit').doc(), { actor, action: 'rotate-secret', clientId, createdAt: new Date().toISOString() });
+    await batch.commit();
     return { client_id: clientId, secret: secret.secret, secret_version: secret.version };
   }
 
   async verifyClientSecret(clientId: string, secret: string) {
+    const app = await this.getAppRecord(clientId);
+    if (app?.active_secret_version) {
+      const active = await this.firebaseAdmin.db().collection('oauth_app_secrets').doc(`${clientId}:${app.active_secret_version}`).get();
+      return active.exists && bcrypt.compare(secret, active.data()!.secret_hash);
+    }
     const snapshot = await this.firebaseAdmin.db().collection('oauth_app_secrets').where('client_id', '==', clientId).orderBy('created_at', 'desc').limit(1).get();
     return !snapshot.empty && bcrypt.compare(secret, snapshot.docs[0].data().secret_hash);
   }
