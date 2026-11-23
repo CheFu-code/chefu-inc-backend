@@ -652,10 +652,10 @@ export class AuthControllerBase {
         };
     }
 
-    protected resolveSessionAppId(
+    protected async resolveSessionAppId(
         chefuApp: string | undefined,
-    ): ChefuAppId {
-        const resolvedAppId = this.appsService.resolveId(chefuApp);
+    ): Promise<ChefuAppId> {
+        const resolvedAppId = await this.appsService.resolveId(chefuApp);
 
         if (chefuApp && !resolvedAppId) {
             throw new BadRequestException(`Unknown app "${chefuApp}".`);

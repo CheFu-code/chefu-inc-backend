@@ -28,6 +28,7 @@ export function isAllowedOrigin(origin: string | undefined, allowedOrigins: stri
 export function configureCors(
   app: NestExpressApplication,
   allowedOrigins: string[],
+  dynamicOrigin?: (origin: string) => Promise<boolean>,
 ) {
   app.enableCors({
     origin(
@@ -39,7 +40,9 @@ export function configureCors(
         return;
       }
 
-      callback(new Error(`Origin ${origin} is not allowed by CORS.`));
+      if (origin && dynamicOrigin) {
+        void dynamicOrigin(origin).then(allowed => callback(allowed ? null : new Error('Origin is not allowed by CORS.'), allowed)).catch(error => callback(error));
+      } else callback(new Error(`Origin ${origin} is not allowed by CORS.`));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -75,7 +78,7 @@ export function createSecurityHeadersMiddleware() {
   };
 }
 
-export function createCookieCsrfMiddleware(allowedOrigins: string[]) {
+export function createCookieCsrfMiddleware(allowedOrigins: string[], dynamicOrigin?: (origin: string) => Promise<boolean>) {
   return (request: Request, response: Response, next: NextFunction) => {
     const isStateChangingMethod = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(
       request.method,
@@ -92,6 +95,20 @@ export function createCookieCsrfMiddleware(allowedOrigins: string[]) {
         allowedOrigins,
       )
     ) {
+      if (dynamicOrigin) {
+        let candidate: string | undefined;
+        try {
+          const raw = request.headers.origin || (request.headers.referer ? new URL(request.headers.referer).origin : undefined);
+          if (raw && new URL(raw).origin === raw) candidate = raw;
+        } catch { /* Fail closed for malformed Origin/Referer. */ }
+        if (candidate) {
+          void dynamicOrigin(candidate).then(allowed => {
+            if (allowed) next();
+            else response.status(403).json({ message: 'A trusted Origin or Referer is required.' });
+          }).catch(() => response.status(503).json({ message: 'Application registry is unavailable.' }));
+          return;
+        }
+      }
       response.status(403).json({
         statusCode: 403,
         message: 'A trusted Origin or Referer is required for this request.',

@@ -367,7 +367,7 @@ export abstract class AuthOnboardingRoutes extends AuthSecurityRoutes {
         }
         const appId = body.appId?.trim().toLowerCase();
         const requestedAppId = appId
-            ? this.appsService.resolveId(appId)
+            ? await this.appsService.resolveId(appId)
             : null;
         if (appId && !requestedAppId && appId !== 'infinity') {
             throw new BadRequestException('Unknown application for email verification.');
@@ -525,7 +525,7 @@ export abstract class AuthOnboardingRoutes extends AuthSecurityRoutes {
         const requestedAppId = body.appId?.trim().toLowerCase();
         if (
             requestedAppId &&
-            !this.appsService.resolveId(requestedAppId) &&
+            !(await this.appsService.resolveId(requestedAppId)) &&
             requestedAppId !== 'infinity'
         ) {
             throw new BadRequestException('Unknown application for password reset.');
@@ -608,7 +608,7 @@ export abstract class AuthOnboardingRoutes extends AuthSecurityRoutes {
             throw new BadRequestException('Email address is required.');
         }
         const email = body.email.trim().toLowerCase();
-        const sessionAppId = this.resolveSessionAppId(chefuApp);
+        const sessionAppId = await this.resolveSessionAppId(chefuApp);
         const code = body.code?.trim() || '';
         const password = typeof body.password === 'string' ? body.password : '';
         const displayName = String(body.displayName || '').trim();

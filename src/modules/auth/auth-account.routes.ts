@@ -109,7 +109,7 @@ export abstract class AuthAccountRoutes extends AuthControllerBase {
         @Param('appId') appId: string,
         @Req() request: Request & { user?: AuthenticatedUser },
     ) {
-        const resolvedAppId = this.appsService.resolveId(appId);
+        const resolvedAppId = await this.appsService.resolveId(appId);
         if (!resolvedAppId) {
             throw new BadRequestException('Unknown connected app.');
         }

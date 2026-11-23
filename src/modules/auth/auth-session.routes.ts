@@ -31,7 +31,7 @@ export abstract class AuthSessionRoutes extends AuthPasswordSessionRoutes {
         if (!decoded.uid || !decoded.email || decoded.email_verified !== true) {
             return { authenticated: false };
         }
-        const appId = this.resolveSessionAppId(chefuApp);
+        const appId = await this.resolveSessionAppId(chefuApp);
         const profile = await this.getUserProfile(decoded.email);
         if (appId === 'admin') {
             if (!profile.roles.some(role => role.trim().toLowerCase() === ADMIN_ROLE)) {

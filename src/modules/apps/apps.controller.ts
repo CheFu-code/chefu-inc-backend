@@ -1,70 +1,32 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  Param,
-  Post,
-  Query,
-} from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Param, Post, Req, UseGuards } from '@nestjs/common';
 import { AppsService } from './apps.service';
+import { AuthGuard } from '../auth/auth.guard';
+import { UserManagementGuard, AdminRequest } from '../user-management/user-management.guard';
+import type { RegistrationInput } from './app-validation';
 
 @Controller('admin/apps')
+@UseGuards(AuthGuard, UserManagementGuard)
 export class AppsController {
-  constructor(private readonly appsService: AppsService) {}
+  constructor(private readonly apps: AppsService) {}
 
   @Get()
-  listApps(@Query('include') include?: string) {
-    if (include === 'dynamic') {
-      return this.appsService.listRegisteredApps();
-    }
-
-    return {
-      staticApps: this.appsService.list(),
-      dynamicApps: this.appsService.listRegisteredApps(),
-    };
-  }
+  @Header('Cache-Control', 'private, no-store')
+  async list() { return { staticApps: this.apps.list(), dynamicApps: await this.apps.listRegisteredApps() }; }
 
   @Post('register')
   @HttpCode(201)
-  async registerApp(
-    @Body()
-    body: {
-      appId: string;
-      clientId?: string;
-      name: string;
-      owner: string;
-      redirectUris: string[];
-      allowedScopes: string[];
-      grantTypes?: string[];
-      clientType?: 'public' | 'confidential';
-      status?: 'pending' | 'approved' | 'revoked';
-    },
-  ) {
-    return this.appsService.registerOauthClient(body);
-  }
+  @Header('Cache-Control', 'private, no-store')
+  register(@Body() body: RegistrationInput, @Req() request: AdminRequest) { return this.apps.registerOauthClient(body, request.user.email); }
 
   @Post(':clientId/approve')
-  async approveApp(
-    @Param('clientId') clientId: string,
-    @Body() body: { approvedBy: string },
-  ) {
-    return this.appsService.approveOauthClient(clientId, body.approvedBy);
-  }
-
-  @Post(':clientId/rotate-secret')
-  async rotateSecret(
-    @Param('clientId') clientId: string,
-    @Body() body: { secret?: string },
-  ) {
-    return this.appsService.rotateClientSecret(clientId, body.secret);
-  }
+  @Header('Cache-Control', 'private, no-store')
+  approve(@Param('clientId') id: string, @Req() request: AdminRequest) { return this.apps.approveOauthClient(id, request.user.email); }
 
   @Post(':clientId/revoke')
-  async revokeApp(
-    @Param('clientId') clientId: string,
-    @Body() body: { approvedBy: string },
-  ) {
-    return this.appsService.revokeOauthClient(clientId, body.approvedBy);
-  }
+  @Header('Cache-Control', 'private, no-store')
+  revoke(@Param('clientId') id: string, @Req() request: AdminRequest) { return this.apps.revokeOauthClient(id, request.user.email); }
+
+  @Post(':clientId/rotate-secret')
+  @Header('Cache-Control', 'private, no-store')
+  rotate(@Param('clientId') id: string) { return this.apps.rotateClientSecret(id); }
 }

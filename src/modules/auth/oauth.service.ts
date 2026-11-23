@@ -358,7 +358,7 @@ export class OAuthService {
   }
 
   async authorize(params: AuthorizeParams, request: Request) {
-    const client = this.validateAuthorizeParams(params);
+    const client = await this.validateAuthorizeParams(params);
     const codeChallenge = params.code_challenge;
     const redirectUri = params.redirect_uri;
 
@@ -470,7 +470,7 @@ export class OAuthService {
       );
     }
 
-    const client = this.appsService.resolveOauthClient(body.client_id);
+    const client = await this.appsService.resolveOauthClient(body.client_id);
     if (!client) {
       throw new BadRequestException('Unknown OAuth client.');
     }
@@ -689,7 +689,7 @@ export class OAuthService {
       throw new BadRequestException('client_id and refresh_token are required.');
     }
 
-    const client = this.appsService.resolveOauthClient(body.client_id);
+    const client = await this.appsService.resolveOauthClient(body.client_id);
     if (!client) {
       throw new BadRequestException('Unknown OAuth client.');
     }
@@ -908,12 +908,12 @@ export class OAuthService {
     };
   }
 
-  private validateAuthorizeParams(params: AuthorizeParams) {
+  private async validateAuthorizeParams(params: AuthorizeParams) {
     if (params.response_type !== 'code') {
       throw new BadRequestException('response_type must be code.');
     }
 
-    const client = this.appsService.resolveOauthClient(params.client_id);
+    const client = await this.appsService.resolveOauthClient(params.client_id);
     if (!client) {
       throw new BadRequestException('Unknown OAuth client.');
     }

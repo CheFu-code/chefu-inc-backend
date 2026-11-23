@@ -10,6 +10,7 @@ import { validateBackendEnv } from "./common/env";
 import { GlobalExceptionFilter } from "./common/global-exception.filter";
 import { ValidationPipe } from "@nestjs/common";
 import { registeredAppOrigins } from "./modules/apps/app-registry";
+import { AppsService } from './modules/apps/apps.service';
 import {
     configureCors,
     createCookieCsrfMiddleware,
@@ -81,9 +82,11 @@ async function bootstrap() {
         }),
     );
 
-    configureCors(app, allowedOrigins);
+    const appRegistry = app.get(AppsService);
+    const dynamicOrigin = (origin: string) => appRegistry.allowsOrigin(origin);
+    configureCors(app, allowedOrigins, dynamicOrigin);
     app.use(createSecurityHeadersMiddleware());
-    app.use(createCookieCsrfMiddleware(allowedOrigins));
+    app.use(createCookieCsrfMiddleware(allowedOrigins, dynamicOrigin));
     app.useGlobalFilters(new GlobalExceptionFilter());
 
     const port = Number(process.env.PORT || 4000);

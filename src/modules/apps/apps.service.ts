@@ -1,218 +1,143 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import bcrypt from 'bcrypt';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
-import {
-    CHEFU_APPS,
-    mapAppRecordToOauthClient,
-    registeredAppOrigins,
-    registeredOauthClients,
-    resolveChefuAppId,
-    resolveOauthClient,
-} from './app-registry';
+import { CHEFU_APPS, registeredAppOrigins, registeredOauthClients, resolveChefuAppId, resolveOauthClient } from './app-registry';
+import type { ChefuApp, ChefuAppId, ChefuRegisteredAppRecord } from './app-registry.types';
+import { validateRegistration, type RegistrationInput } from './app-validation';
 
-import type {
-    ChefuApp,
-    ChefuAppId,
-    ChefuAppSecretRecord,
-    ChefuOauthClient,
-    ChefuRegisteredAppRecord
-} from './app-registry.types';
+type ManagedRecord = ChefuRegisteredAppRecord & { registry_version?: number };
 
 @Injectable()
 export class AppsService {
-    constructor(
-        private readonly firebaseAdmin: FirebaseAdminService,
-    ) { }
+  constructor(private readonly firebaseAdmin: FirebaseAdminService) {}
 
-    list(): ChefuApp[] {
-        return CHEFU_APPS;
-    }
+  list(): ChefuApp[] { return CHEFU_APPS; }
+  origins() { return registeredAppOrigins(); }
+  oauthClients() { return registeredOauthClients(); }
 
-    origins() {
-        return registeredAppOrigins();
-    }
+  async resolveId(value?: string): Promise<ChefuAppId | null> {
+    const known = resolveChefuAppId(value);
+    if (known || !value) return known;
+    return (await this.policy(value))?.id || null;
+  }
 
-    resolveId(value?: string): ChefuAppId | null {
-        return resolveChefuAppId(value);
-    }
+  async resolveOauthClient(clientId?: string) {
+    if (!clientId) return null;
+    return resolveOauthClient(clientId) || this.resolveDynamicOauthClient(clientId);
+  }
 
-    oauthClients(): ChefuOauthClient[] {
-        return registeredOauthClients();
-    }
+  async getAppRecord(clientId: string): Promise<ManagedRecord | null> {
+    this.validId(clientId);
+    const snapshot = await this.firebaseAdmin.db().collection('oauth_apps').doc(clientId).get();
+    return snapshot.exists ? snapshot.data() as ManagedRecord : null;
+  }
 
-    resolveOauthClient(clientId?: string): ChefuOauthClient | null {
-        if (!clientId) return null;
+  async listRegisteredApps() {
+    const snapshot = await this.firebaseAdmin.db().collection('oauth_apps').orderBy('created_at', 'desc').limit(200).get();
+    return { records: snapshot.docs.map(doc => {
+      const record = doc.data() as ManagedRecord;
+      return { client_id: doc.id, app_id: record.app_id, name: record.name, owner: record.owner, client_type: record.client_type, status: record.status, origins: record.origins || [], redirect_uris: record.redirect_uris, allowed_scopes: record.allowed_scopes, created_at: record.created_at, registry_version: record.registry_version || 0 };
+    }), limit: 200 };
+  }
 
-        const staticClient = resolveOauthClient(clientId);
-        if (staticClient) return staticClient;
+  async policy(appId: string) {
+    const id = appId.trim().toLowerCase();
+    if (!/^[a-z][a-z0-9-]{1,63}$/.test(id)) return null;
+    const known = CHEFU_APPS.find(app => app.id === id);
+    if (known) return { ...known, clients: registeredOauthClients().filter(client => client.appId === id).map(client => ({ id: client.id, redirectUris: client.redirectUris, scopes: client.scopes })) };
+    const snapshot = await this.firebaseAdmin.db().collection('oauth_apps').where('app_id', '==', id).limit(100).get();
+    const records = snapshot.docs.map(doc => doc.data() as ManagedRecord).filter(record => record.registry_version === 1 && record.status === 'approved');
+    if (!records.length) return null;
+    return {
+      id, name: records[0].name,
+      origins: [...new Set(records.flatMap(record => record.origins || []))],
+      clients: records.map(record => ({ id: record.client_id, redirectUris: record.redirect_uris, scopes: record.allowed_scopes })),
+    };
+  }
 
-        return null;
-    }
+  async allowsOrigin(origin: string) {
+    // One indexed query, not a scan of every registration. Static origins are
+    // handled by HTTP middleware before reaching this fallback.
+    const snapshot = await this.firebaseAdmin.db().collection('oauth_apps').where('origins', 'array-contains', origin).limit(100).get();
+    return snapshot.docs.some(doc => { const record = doc.data(); return record.registry_version === 1 && record.status === 'approved'; });
+  }
 
-    async getAppRecord(clientId: string): Promise<ChefuRegisteredAppRecord | null> {
-        const snapshot = await this.firebaseAdmin.db().collection('oauth_apps').doc(clientId).get();
-        if (!snapshot.exists) return null;
-        return snapshot.data() as ChefuRegisteredAppRecord | null;
-    }
+  async registerOauthClient(input: RegistrationInput, actor: string) {
+    const data = validateRegistration(input);
+    const clientId = data.clientId || `${data.appId.slice(0, 45)}-${randomBytes(6).toString('hex')}`;
+    const type = data.clientType || 'public';
+    const status = data.status || 'approved';
+    const record: ManagedRecord = {
+      client_id: clientId, app_id: data.appId, name: data.name, owner: data.owner,
+      client_type: type, status, origins: data.origins, redirect_uris: data.redirectUris,
+      allowed_scopes: data.allowedScopes, grant_types: ['authorization_code'],
+      created_at: new Date().toISOString(), approved_by: actor,
+      approved_at: status === 'approved' ? new Date().toISOString() : null, registry_version: 1,
+    };
+    const secret = type === 'confidential' ? await this.newSecret(clientId) : null;
+    const db = this.firebaseAdmin.db();
+    const batch = db.batch();
+    batch.create(db.collection('oauth_apps').doc(clientId), record);
+    if (secret) batch.create(db.collection('oauth_app_secrets').doc(`${clientId}:${secret.version}`), secret.record);
+    batch.create(db.collection('app_registry_audit').doc(), { actor, action: 'register', clientId, createdAt: new Date().toISOString() });
+    try { await batch.commit(); }
+    catch (error) { if ((error as { code?: number }).code === 6) throw new ConflictException('This client ID is already registered.'); throw error; }
+    return { record, ...(secret ? { clientSecret: secret.secret } : {}) };
+  }
 
-    async listRegisteredApps() {
-        const snapshot = await this.firebaseAdmin.db().collection('oauth_apps').get();
-        return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    }
+  async approveOauthClient(clientId: string, actor: string) {
+    const record = await this.required(clientId);
+    validateRegistration({ appId: record.app_id || '', clientId, name: record.name, owner: record.owner, clientType: record.client_type, origins: record.origins || [], redirectUris: record.redirect_uris, allowedScopes: record.allowed_scopes });
+    await this.changeStatus(clientId, 'approved', actor);
+    return { client_id: clientId, status: 'approved' };
+  }
 
-    async registerOauthClient(input: {
-        appId: string;
-        clientId?: string;
-        name: string;
-        owner: string;
-        redirectUris: string[];
-        allowedScopes: string[];
-        grantTypes?: string[];
-        clientType?: 'public' | 'confidential';
-        status?: 'pending' | 'approved' | 'revoked';
-        clientSecret?: string;
-    }) {
-        const normalizedClientId = input.clientId || this.generateClientId(input.name);
-        const clientType = input.clientType || 'public';
-        const record: ChefuRegisteredAppRecord = {
-            client_id: normalizedClientId,
-            app_id: input.appId.trim(),
-            name: input.name,
-            owner: input.owner,
-            client_type: clientType,
-            status: input.status || 'pending',
-            redirect_uris: input.redirectUris,
-            allowed_scopes: input.allowedScopes,
-            grant_types: input.grantTypes || ['authorization_code'],
-            created_at: new Date().toISOString(),
-            approved_by: null,
-            approved_at: null,
-        };
+  async revokeOauthClient(clientId: string, actor: string) {
+    await this.required(clientId);
+    await this.changeStatus(clientId, 'revoked', actor);
+    return { client_id: clientId, status: 'revoked' };
+  }
 
-        await this.firebaseAdmin.db()
-            .collection('oauth_apps')
-            .doc(normalizedClientId)
-            .set(record, { merge: true });
+  private async changeStatus(clientId: string, status: 'approved' | 'revoked', actor: string) {
+    const db = this.firebaseAdmin.db();
+    const batch = db.batch();
+    batch.update(db.collection('oauth_apps').doc(clientId), { status, approved_by: actor, approved_at: new Date().toISOString(), registry_version: 1 });
+    batch.create(db.collection('app_registry_audit').doc(), { actor, action: status, clientId, createdAt: new Date().toISOString() });
+    await batch.commit();
+  }
 
-        const secretResult = clientType === 'confidential'
-            ? await this.rotateClientSecret(normalizedClientId, input.clientSecret)
-            : null;
+  async rotateClientSecret(clientId: string) {
+    const app = await this.required(clientId);
+    if (app.client_type !== 'confidential') throw new BadRequestException('Only confidential clients have a client secret.');
+    const secret = await this.newSecret(clientId);
+    await this.firebaseAdmin.db().collection('oauth_app_secrets').doc(`${clientId}:${secret.version}`).create(secret.record);
+    return { client_id: clientId, secret: secret.secret, secret_version: secret.version };
+  }
 
-        return {
-            record,
-            ...(secretResult ? { clientSecret: secretResult.secret, secret_version: secretResult.secret_version } : {}),
-        };
-    }
+  async verifyClientSecret(clientId: string, secret: string) {
+    const snapshot = await this.firebaseAdmin.db().collection('oauth_app_secrets').where('client_id', '==', clientId).orderBy('created_at', 'desc').limit(1).get();
+    return !snapshot.empty && bcrypt.compare(secret, snapshot.docs[0].data().secret_hash);
+  }
 
-    async approveOauthClient(clientId: string, approvedBy: string) {
-        const ref = this.firebaseAdmin.db().collection('oauth_apps').doc(clientId);
-        const snapshot = await ref.get();
-        if (!snapshot.exists) {
-            throw new Error(`OAuth app ${clientId} does not exist.`);
-        }
+  async isConfidentialClient(clientId: string) { return (await this.getAppRecord(clientId))?.client_type === 'confidential'; }
 
-        const app = snapshot.data() as ChefuRegisteredAppRecord;
-        await ref.set({
-            status: 'approved',
-            approved_by: approvedBy,
-            approved_at: new Date().toISOString(),
-        }, { merge: true });
+  async resolveDynamicOauthClient(clientId: string) {
+    const record = await this.getAppRecord(clientId);
+    if (!record || record.status !== 'approved' || record.registry_version !== 1 || !record.app_id) return null;
+    return { id: record.client_id, appId: record.app_id, name: record.name, redirectUris: record.redirect_uris, scopes: record.allowed_scopes };
+  }
 
-        if (app.client_type === 'confidential') {
-            const secret = await this.rotateClientSecret(clientId);
-            return { client_id: clientId, status: 'approved', approved_by: approvedBy, clientSecret: secret.secret, secret_version: secret.secret_version };
-        }
-
-        return { client_id: clientId, status: 'approved', approved_by: approvedBy };
-    }
-
-    async revokeOauthClient(clientId: string, approvedBy: string) {
-        const ref = this.firebaseAdmin.db().collection('oauth_apps').doc(clientId);
-        const snapshot = await ref.get();
-        if (!snapshot.exists) {
-            throw new Error(`OAuth app ${clientId} does not exist.`);
-        }
-
-        await ref.set({
-            status: 'revoked',
-            approved_by: approvedBy,
-            approved_at: new Date().toISOString(),
-        }, { merge: true });
-
-        return { client_id: clientId, status: 'revoked', approved_by: approvedBy };
-    }
-
-    async rotateClientSecret(clientId: string, providedSecret?: string) {
-        const app = await this.getAppRecord(clientId);
-        if (!app) {
-            throw new Error(`OAuth app ${clientId} does not exist.`);
-        }
-
-        if (app.client_type !== 'confidential') {
-            throw new Error(`Client ${clientId} is not a confidential OAuth client.`);
-        }
-
-        const secret = providedSecret || this.generateClientSecret();
-        const version = `v${Date.now()}`;
-        const hashed = await this.hashSecret(secret);
-        const secretRecord: ChefuAppSecretRecord = {
-            app_id: app.client_id,
-            client_id: clientId,
-            secret_hash: hashed,
-            secret_version: version,
-            expires_at: null,
-            rotated_at: new Date().toISOString(),
-            created_at: new Date().toISOString(),
-        };
-
-        await this.firebaseAdmin.db().collection('oauth_app_secrets').doc(`${clientId}:${version}`).set(secretRecord);
-        return { client_id: clientId, secret_version: version, secret };
-    }
-
-    async verifyClientSecret(clientId: string, secret: string) {
-        const snapshot = await this.firebaseAdmin.db()
-            .collection('oauth_app_secrets')
-            .where('client_id', '==', clientId)
-            .orderBy('created_at', 'desc')
-            .limit(1)
-            .get();
-
-        if (snapshot.empty) return false;
-
-        const record = snapshot.docs[0].data() as ChefuAppSecretRecord;
-        return bcrypt.compare(secret, record.secret_hash);
-    }
-
-    async isConfidentialClient(clientId: string) {
-        const dynamicRecord = await this.getAppRecord(clientId);
-        return dynamicRecord?.client_type === 'confidential';
-    }
-
-    async resolveDynamicOauthClient(clientId: string): Promise<ChefuOauthClient | null> {
-        const snapshot = await this.firebaseAdmin.db().collection('oauth_apps').doc(clientId).get();
-        if (!snapshot.exists) return null;
-
-        const record = snapshot.data() as ChefuRegisteredAppRecord | undefined;
-        if (!record || record.status !== 'approved') return null;
-        return mapAppRecordToOauthClient(record);
-    }
-
-    private async hashSecret(secret: string) {
-        return bcrypt.hash(secret, 12);
-    }
-
-    private generateClientSecret() {
-        return `chefu_${randomBytes(24).toString('hex')}`;
-    }
-
-    private generateClientId(name: string) {
-        const slug = name
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, '-')
-            .replace(/^-+|-+$/g, '')
-            .slice(0, 32);
-        const suffix = Math.random().toString(36).slice(2, 10);
-        return `${slug || 'chefu-app'}-${suffix}`;
-    }
+  private async required(clientId: string) {
+    if (resolveOauthClient(clientId)) throw new BadRequestException('Built-in clients are managed by the platform configuration.');
+    const record = await this.getAppRecord(clientId);
+    if (!record) throw new NotFoundException('Application not found.');
+    return record;
+  }
+  private validId(value: string) { if (!/^[a-zA-Z0-9_-]{2,128}$/.test(value)) throw new BadRequestException('Invalid client ID.'); }
+  private async newSecret(clientId: string) {
+    const secret = `chefu_${randomBytes(32).toString('hex')}`;
+    const version = `${Date.now()}-${randomUUID()}`;
+    return { secret, version, record: { client_id: clientId, app_id: clientId, secret_hash: await bcrypt.hash(secret, 12), secret_version: version, expires_at: null, created_at: new Date().toISOString(), rotated_at: new Date().toISOString() } };
+  }
 }

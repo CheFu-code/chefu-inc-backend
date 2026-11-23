@@ -5,7 +5,8 @@ export type ChefuAppId =
     | "cloudence"
     | "liftwise"
     | "shopyethu"
-    | "root";
+    | "root"
+    | (string & {});
     
 export type ChefuApp = {
     id: ChefuAppId;
@@ -34,6 +35,7 @@ export type ChefuRegisteredAppRecord = {
     redirect_uris: string[];
     allowed_scopes: string[];
     grant_types: string[];
+    origins?: string[];
     created_at?: string | number | Date;
     approved_by?: string | null;
     approved_at?: string | number | Date | null;

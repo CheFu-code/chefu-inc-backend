@@ -29,7 +29,7 @@ export abstract class AuthSessionCreationRoutes extends AuthAccountRoutes {
             throw new UnauthorizedException('Missing Firebase ID token.');
         }
 
-        const sessionAppId = this.resolveSessionAppId(chefuApp);
+        const sessionAppId = await this.resolveSessionAppId(chefuApp);
         const tokenPayload = decodeJwtPayload(idToken);
         this.logger.log(
             JSON.stringify({
