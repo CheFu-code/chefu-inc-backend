@@ -9,6 +9,42 @@ export type CloudinaryUploadResult = {
   resource_type?: string;
 };
 
+export class CloudinaryStorageCapacityError extends Error {
+  constructor() {
+    super('Cloudinary storage capacity has been reached.');
+    this.name = 'CloudinaryStorageCapacityError';
+  }
+}
+
+function errorRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object'
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+export function isCloudinaryStorageCapacityError(error: unknown): boolean {
+  const outer = errorRecord(error);
+  if (!outer) return false;
+  const nested = errorRecord(outer.error);
+  const records = nested ? [outer, nested] : [outer];
+  const storageCapacityPattern =
+    /\bstorage\b.{0,60}\b(?:full|limit|quota|exceed|reach)|\b(?:full|limit|quota|exceed|reach)\b.{0,60}\bstorage\b/i;
+  const storageCapacityCodePattern =
+    /(?:storage.*(?:full|limit|quota|exceed)|(?:full|limit|quota|exceed).*storage)/i;
+  return records.some((record) => {
+    const message = typeof record.message === 'string' ? record.message : '';
+    const name = typeof record.name === 'string' ? record.name : '';
+    const code = typeof record.code === 'string' ? record.code : '';
+    const errorCode = typeof record.error_code === 'string' ? record.error_code : '';
+    return (
+      storageCapacityPattern.test(message) ||
+      storageCapacityCodePattern.test(name) ||
+      storageCapacityCodePattern.test(code) ||
+      storageCapacityCodePattern.test(errorCode)
+    );
+  });
+}
+
 @Injectable()
 export class CloudinaryStorageService {
   constructor() {
@@ -24,7 +60,12 @@ export class CloudinaryStorageService {
     assertCloudinaryConfigured();
     return new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(options, (error, result) => {
-        if (error) return reject(new BadRequestException('File upload failed.'));
+        if (error) {
+          if (isCloudinaryStorageCapacityError(error)) {
+            return reject(new CloudinaryStorageCapacityError());
+          }
+          return reject(new BadRequestException('File upload failed.'));
+        }
         if (!result?.secure_url || !result.public_id) {
           return reject(new BadRequestException('File upload returned no asset.'));
         }

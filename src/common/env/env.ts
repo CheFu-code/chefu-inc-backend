@@ -147,6 +147,21 @@ export function validateCloudinaryEnv(
   return { service: 'Cloudinary Media Storage', missing };
 }
 
+export function validateCloudflareR2Env(
+  env: NodeJS.ProcessEnv = process.env,
+): ServiceEnvGroup {
+  const missing: MissingVariable[] = [];
+  for (const [name, description] of [
+    ['CLOUDFLARE_R2_ACCOUNT_ID', 'Cloudflare account ID for R2'],
+    ['CLOUDFLARE_R2_BUCKET', 'Private Cloudflare R2 bucket name'],
+    ['CLOUDFLARE_R2_ACCESS_KEY_ID', 'Bucket-scoped R2 access key ID'],
+    ['CLOUDFLARE_R2_SECRET_ACCESS_KEY', 'Bucket-scoped R2 secret access key'],
+  ]) {
+    if (!hasEnv(name, env)) missing.push({ name, description });
+  }
+  return { service: 'Cloudflare R2 Storage', missing };
+}
+
 export function validatePayFastEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): ServiceEnvGroup {
@@ -272,6 +287,11 @@ export function validateBackendEnv(
   if (firebaseGroup.missing.length > 0) {
     // In development or production, Firebase Admin is required for user auth and DB
     groups.push(firebaseGroup);
+  }
+
+  if (isProduction) {
+    const r2Group = validateCloudflareR2Env(env);
+    if (r2Group.missing.length) groups.push(r2Group);
   }
 
   const storeGroup = validateStoreEnv(env);

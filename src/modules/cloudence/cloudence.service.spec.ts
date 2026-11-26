@@ -3,12 +3,17 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { FieldValue } from 'firebase-admin/firestore';
 import { v2 as cloudinary } from 'cloudinary';
+import sharp from 'sharp';
 import { MAX_STORAGE_BYTES } from './cloudence.constants';
 import { CloudenceService } from './cloudence.service';
 import type { CloudenceFileDocument } from './cloudence.types';
 import type { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import type { RuntimeLimitService } from '../../common/runtime-limit.service';
-import type { CloudinaryStorageService } from '../../common/cloudinary-storage.service';
+import {
+  CloudinaryStorageCapacityError,
+  isCloudinaryStorageCapacityError,
+  type CloudinaryStorageService,
+} from '../../common/cloudinary-storage.service';
 
 const viewer = { uid: 'viewer', email: 'viewer@example.com', roles: ['user'] };
 
@@ -16,7 +21,8 @@ function file(id: string, uid = viewer.uid, email = viewer.email): CloudenceFile
   return {
     id, ownerId: uid, owner: { id: uid, email, fullName: email.split('@')[0] },
     name: `${id}.txt`, type: 'document', extension: 'txt', size: 10,
-    url: 'https://example.com/file.txt', publicId: '', resourceType: 'raw',
+    url: 'https://example.com/file.txt', publicId: `cloudence/${uid}/${id}`, resourceType: 'raw',
+    deliveryType: 'authenticated',
     users: [viewer.email, 'other@example.com'], isDeleted: false,
     createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
   };
@@ -114,15 +120,21 @@ function fixture(files: CloudenceFileDocument[] = []) {
   };
   const uploads: string[] = [];
   const deletions: string[] = [];
+  const r2Uploads: Array<{ key: string; contentType: string; sha256: string; buffer: Buffer }> = [];
+  const r2Deletions: string[] = [];
   const uploadOptions: unknown[] = [];
   const deletionTypes: unknown[] = [];
   let uploadHandler: (() => Promise<void>) | undefined;
+  let r2UploadHandler: (() => Promise<void>) | undefined;
+  let r2DeleteFailure: unknown;
+  let uploadFailure: unknown;
   const service = new CloudenceService(
     firebase as unknown as FirebaseAdminService,
     { reserve: async () => ({ limited: false }) } as unknown as RuntimeLimitService,
     {
       uploadBuffer: async (_buffer: Buffer, options: unknown) => {
         uploadOptions.push(options);
+        if (uploadFailure) throw uploadFailure;
         const id = `asset-${uploads.length}`;
         uploads.push(id);
         await uploadHandler?.();
@@ -130,8 +142,49 @@ function fixture(files: CloudenceFileDocument[] = []) {
       },
       delete: async (id: string, _resourceType: string, deliveryType: string) => { deletions.push(id); deletionTypes.push(deliveryType); },
     } as unknown as CloudinaryStorageService,
+    undefined,
+    undefined,
+    {
+      uploadBuffer: async (key: string, buffer: Buffer, contentType: string, sha256: string) => {
+        r2Uploads.push({ key, contentType, sha256, buffer });
+        await r2UploadHandler?.();
+      },
+      openContent: async (_key: string, options: { range?: string }) =>
+        new Response('r2-content', {
+          status: options.range ? 206 : 200,
+          headers: options.range ? { 'Content-Range': 'bytes 0-2/11' } : {},
+        }),
+      delete: async (key: string) => {
+        r2Deletions.push(key);
+        if (r2DeleteFailure) {
+          const error = r2DeleteFailure;
+          r2DeleteFailure = undefined;
+          throw error;
+        }
+      },
+    } as unknown as import('../../common/cloudflare-r2-storage.service').CloudflareR2StorageService,
   );
-  return { service, records, operations, transactionReads, authNames, authCalls, profileBatches, uploads, deletions, uploadOptions, deletionTypes, setUploadHandler: (handler: () => Promise<void>) => { uploadHandler = handler; }, failProfiles: () => { failProfiles = true; }, failTransactions: () => { failTransactions = true; } };
+  return {
+    service,
+    records,
+    operations,
+    transactionReads,
+    authNames,
+    authCalls,
+    profileBatches,
+    uploads,
+    deletions,
+    r2Uploads,
+    r2Deletions,
+    uploadOptions,
+    deletionTypes,
+    setUploadHandler: (handler: () => Promise<void>) => { uploadHandler = handler; },
+    setR2UploadHandler: (handler: () => Promise<void>) => { r2UploadHandler = handler; },
+    failR2Delete: (error: unknown) => { r2DeleteFailure = error; },
+    failCloudinaryUpload: (error: unknown) => { uploadFailure = error; },
+    failProfiles: () => { failProfiles = true; },
+    failTransactions: () => { failTransactions = true; },
+  };
 }
 
 test('existing owned and shared files use their own account names without exposing shared recipients', async () => {
@@ -253,7 +306,7 @@ test('concurrent deletes decrement quota once and edits cannot restore a deleted
     f.service.remove(viewer, 'owned'), f.service.remove(viewer, 'owned'),
     f.service.update(viewer, 'owned', { name: 'renamed.txt' }),
   ]);
-  assert.equal(results.slice(0, 2).filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(results.slice(0, 2).filter((result) => result.status === 'fulfilled').length, 2);
   assert.equal(f.records.get('cloudence_quotas/viewer')?.used, 0);
   assert.equal(f.records.get('cloudenceFiles/owned')?.isDeleted, true);
 });
@@ -333,7 +386,7 @@ test('warm uploads use only the authoritative quota read and write while enforci
   assert.equal(f.operations.quotaReads - before.quotaReads, 1);
   // Simulate another server taking the remaining space while this instance has a cached low total.
   f.records.set('cloudence_quotas/viewer', quota(MAX_STORAGE_BYTES));
-  await assert.rejects(f.service.upload(viewer, Buffer.from('content'), 'retry.txt', 'text/plain'), /quota/);
+  await assert.rejects(f.service.upload(viewer, Buffer.from('different'), 'retry.txt', 'text/plain'), /quota/);
   assert.equal(f.deletions.length, 1);
 }));
 
@@ -361,6 +414,120 @@ test('new uploads use protected storage and responses expose only authenticated 
   assert.match(result.url, /\/cloudence\/files\/[^/]+\/content$/);
   assert.doesNotMatch(result.url, /cloudinary/);
 }));
+
+void test('Cloudinary capacity errors upload privately to R2 and use the authenticated content endpoint', async () => withUploadConfig(async () => {
+  const f = fixture();
+  f.records.set('users/viewer@example.com', { fullname: 'Viewer' });
+  f.failCloudinaryUpload(new CloudinaryStorageCapacityError());
+  const result = await f.service.upload(viewer, Buffer.from('content'), 'fallback.txt', 'text/plain');
+  const stored = f.records.get(`cloudenceFiles/${result.id}`)!;
+  assert.equal(stored.storageProvider, 'r2');
+  assert.equal(stored.url, '');
+  assert.equal(f.r2Uploads.length, 1);
+  assert.match(f.r2Uploads[0].key, /^cloudence\/viewer\//);
+  assert.equal(f.r2Uploads[0].contentType, 'text/plain');
+  assert.match(f.r2Uploads[0].sha256, /^[a-f0-9]{64}$/);
+  assert.match(result.url, /\/cloudence\/files\/[^/]+\/content$/);
+  assert.equal('storageProvider' in result, false);
+  assert.equal('storageKey' in result, false);
+  const content = await f.service.openContent(viewer, result.id, { range: 'bytes=0-2' });
+  assert.equal(content.upstream.status, 206);
+  assert.equal(content.upstream.headers.get('content-range'), 'bytes 0-2/11');
+  assert.equal(await content.upstream.text(), 'r2-content');
+}));
+
+void test('non-capacity Cloudinary errors do not fall back to R2', async () => withUploadConfig(async () => {
+  const f = fixture();
+  f.failCloudinaryUpload(new Error('Invalid upload preset.'));
+  await assert.rejects(
+    f.service.upload(viewer, Buffer.from('content'), 'failure.txt', 'text/plain'),
+    /Invalid upload preset/,
+  );
+  assert.equal(f.r2Uploads.length, 0);
+}));
+
+void test('only Cloudinary storage-capacity messages are eligible for R2 fallback', () => {
+  assert.equal(isCloudinaryStorageCapacityError(new Error('Storage limit reached')), true);
+  assert.equal(isCloudinaryStorageCapacityError(new Error('Monthly storage quota exceeded')), true);
+  assert.equal(isCloudinaryStorageCapacityError({ name: 'StorageLimitExceeded', message: 'Upload failed' }), true);
+  assert.equal(isCloudinaryStorageCapacityError({ code: 'StorageLimitExceeded' }), true);
+  assert.equal(isCloudinaryStorageCapacityError({ error: { error_code: 'storage_quota_exceeded' } }), true);
+  assert.equal(isCloudinaryStorageCapacityError(new Error('Rate limit exceeded')), false);
+  assert.equal(isCloudinaryStorageCapacityError({ http_code: 420, message: 'Rate limit exceeded' }), false);
+  assert.equal(isCloudinaryStorageCapacityError(new Error('Invalid upload preset')), false);
+});
+
+void test('R2 fallback objects are removed if the file record cannot be committed', async () => withUploadConfig(async () => {
+  const f = fixture();
+  f.failCloudinaryUpload(new CloudinaryStorageCapacityError());
+  f.setR2UploadHandler(async () => f.failTransactions());
+  await assert.rejects(
+    f.service.upload(viewer, Buffer.from('content'), 'fallback.txt', 'text/plain'),
+    /Quota store unavailable/,
+  );
+  assert.equal(f.r2Uploads.length, 1);
+  assert.deepEqual(f.r2Deletions, [f.r2Uploads[0].key]);
+}));
+
+void test('image EXIF metadata is stripped before an R2 fallback upload', async () => withUploadConfig(async () => {
+  const image = await sharp({
+    create: { width: 8, height: 8, channels: 3, background: { r: 120, g: 40, b: 30 } },
+  })
+    .jpeg()
+    .withMetadata({ exif: { IFD0: { Artist: 'Private Photographer' } } })
+    .toBuffer();
+  assert.ok((await sharp(image).metadata()).exif);
+
+  const f = fixture();
+  f.failCloudinaryUpload(new CloudinaryStorageCapacityError());
+  await f.service.upload(viewer, image, 'private.jpg', 'image/jpeg');
+
+  const savedMetadata = await sharp(f.r2Uploads[0].buffer).metadata();
+  assert.equal(savedMetadata.exif, undefined);
+}));
+
+void test('script bytes renamed to PNG are rejected before reaching storage', async () => withUploadConfig(async () => {
+  const f = fixture();
+  await assert.rejects(
+    f.service.upload(viewer, Buffer.from('console.log("not an image")'), 'payload.png', 'image/png'),
+    /PNG signature/,
+  );
+  assert.equal(f.uploads.length, 0);
+  assert.equal(f.r2Uploads.length, 0);
+}));
+
+void test('script payload appended to a valid PNG is removed before fallback storage', async () => withUploadConfig(async () => {
+  const png = await sharp({
+    create: { width: 8, height: 8, channels: 3, background: { r: 120, g: 40, b: 30 } },
+  })
+    .png()
+    .toBuffer();
+  const script = Buffer.from('<script>run()</script>');
+  const f = fixture();
+  f.failCloudinaryUpload(new CloudinaryStorageCapacityError());
+
+  await f.service.upload(viewer, Buffer.concat([png, script]), 'polyglot.png', 'image/png');
+
+  assert.equal(f.r2Uploads[0].buffer.includes(script), false);
+}));
+
+void test('deleting an R2-backed file removes the object and retries pending cleanup safely', async () => {
+  const stored = {
+    ...file('r2-file'),
+    storageProvider: 'r2' as const,
+    storageKey: 'cloudence/viewer/private-file',
+  };
+  const f = fixture([stored]);
+  f.records.set('cloudence_quotas/viewer', quota(10));
+  f.failR2Delete(new Error('R2 temporarily unavailable'));
+  await assert.rejects(f.service.remove(viewer, stored.id), /cleanup is pending/);
+  assert.equal(f.records.get(`cloudenceFiles/${stored.id}`)?.storageDeletionStatus, 'pending');
+  assert.equal(f.records.get('cloudence_quotas/viewer')?.used, 0);
+  assert.deepEqual(await f.service.remove(viewer, stored.id), { status: 'success' });
+  assert.equal(f.records.get(`cloudenceFiles/${stored.id}`)?.storageDeletionStatus, 'complete');
+  assert.equal(f.r2Deletions.length, 2);
+  assert.equal(f.records.get('cloudence_quotas/viewer')?.used, 0);
+});
 
 test('owners and shared recipients can read protected files but revoked, expired, deleted, and legacy access fail closed', async (t) => {
   const protectedFile = { ...file('protected'), deliveryType: 'authenticated' as const, resourceType: 'image', type: 'image' as const, extension: 'png', publicId: 'chefu/cloudence/viewer/private-id' };

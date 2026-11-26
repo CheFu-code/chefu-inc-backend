@@ -17,7 +17,11 @@ import { CloudenceNotificationsService } from "./cloudence-notifications.service
 import { FieldValue, Transaction } from "firebase-admin/firestore";
 import { createHash, randomUUID } from "node:crypto";
 import sanitizeHtml from "sanitize-html";
-import { CloudinaryStorageService } from "../../common/cloudinary-storage.service";
+import {
+  CloudinaryStorageCapacityError,
+  CloudinaryStorageService,
+} from "../../common/cloudinary-storage.service";
+import { CloudflareR2StorageService } from "../../common/cloudflare-r2-storage.service";
 import { assertCloudinaryConfigured } from "../../common/env";
 import { RuntimeLimitService } from "../../common/runtime-limit.service";
 import { AuthenticatedUser } from "../auth/authenticated-user";
@@ -40,6 +44,7 @@ import {
 } from "./cloudence.constants";
 import { isSharingExpiredForUser } from "./cloudence-sharing";
 import { findOwnedDuplicatesByHash } from "./cloudence-deduplication";
+import { stripImageMetadata } from "./cloudence-image-sanitizer";
 
 type StorageQuota = Record<
   CloudenceFileType,
@@ -92,6 +97,7 @@ export class CloudenceService {
       firebaseAdmin,
     ),
     @Optional() private readonly notifications?: CloudenceNotificationsService,
+    @Optional() private readonly cloudflareR2Storage?: CloudflareR2StorageService,
   ) {}
 
   /**
@@ -139,9 +145,18 @@ export class CloudenceService {
       buffer = this.sanitizeSvgBuffer(buffer);
     }
 
+    const type = this.fileType(name, contentType);
+    if (type === "image" && ext !== "svg" && !contentType.includes("svg")) {
+      buffer = await stripImageMetadata(buffer, maxBytes);
+    }
+    if (buffer.length > maxBytes) {
+      throw new BadRequestException(
+        `File size exceeds allowed limit (${label}).`,
+      );
+    }
+
     // Compute cryptographic SHA-256 integrity checksum
     const sha256 = createHash("sha256").update(buffer).digest("hex");
-    const type = this.fileType(name, contentType);
     const extension = this.extension(name);
     const folderSettings = folderId ? await this.folders.read(user) : undefined;
     if (folderId) {
@@ -179,15 +194,44 @@ export class CloudenceService {
       );
     }
 
-    const result = await this.cloudinaryStorage.uploadBuffer(buffer, {
-      public_id: `chefu/cloudence/${user.uid}/${randomUUID()}`,
-      resource_type: "auto",
-      type: "authenticated",
-      overwrite: false,
-      flags: "strip_profile", // Strip EXIF GPS coordinates and camera metadata for physical privacy
-      tags: ["chefu", "cloudence", type, user.email],
-      context: { original_name: name, content_type: contentType, sha256 },
-    });
+    const publicId = `chefu/cloudence/${user.uid}/${randomUUID()}`;
+    let storageProvider: "cloudinary" | "r2" = "cloudinary";
+    let storageKey: string | undefined;
+    let storageUrl: string;
+    let storedPublicId: string;
+    let resourceType: string;
+    try {
+      const result = await this.cloudinaryStorage.uploadBuffer(buffer, {
+        public_id: publicId,
+        resource_type: "auto",
+        type: "authenticated",
+        overwrite: false,
+        flags: "strip_profile",
+        tags: ["chefu", "cloudence", type, user.email],
+        context: { original_name: name, content_type: contentType, sha256 },
+      });
+      storageUrl = result.secure_url;
+      storedPublicId = result.public_id;
+      resourceType = result.resource_type || "raw";
+    } catch (error) {
+      if (!(error instanceof CloudinaryStorageCapacityError)) throw error;
+      if (!this.cloudflareR2Storage) {
+        throw new ServiceUnavailableException(
+          "Cloudinary storage is full and Cloudflare R2 fallback is unavailable.",
+        );
+      }
+      storageProvider = "r2";
+      storageKey = `cloudence/${user.uid}/${randomUUID()}`;
+      await this.cloudflareR2Storage.uploadBuffer(
+        storageKey,
+        buffer,
+        contentType,
+        sha256,
+      );
+      storageUrl = "";
+      storedPublicId = "";
+      resourceType = "raw";
+    }
 
     const now = new Date().toISOString();
     const id = `cloudence_${randomUUID()}`;
@@ -204,13 +248,15 @@ export class CloudenceService {
       name,
       type,
       extension,
-      url: result.secure_url,
+      url: storageUrl,
       size: buffer.length,
       ownerId: user.uid,
       owner: ownerDetails.owner,
       users: [] as string[],
-      publicId: result.public_id,
-      resourceType: result.resource_type || "raw",
+      publicId: storedPublicId,
+      resourceType,
+      storageProvider,
+      ...(storageKey ? { storageKey } : {}),
       deliveryType: "authenticated" as const,
       createdAt: now,
       updatedAt: now,
@@ -264,12 +310,20 @@ export class CloudenceService {
       }
     } catch (error) {
       // A rejected commit must not leave an uploaded asset outside the file ledger.
-      await this.cloudinaryStorage
-        .delete(
-          result.public_id,
-          (result.resource_type || "raw") as "image" | "video" | "raw",
+      let cleanup: Promise<void>;
+      if (storageProvider === "cloudinary") {
+        cleanup = this.cloudinaryStorage.delete(
+          storedPublicId,
+          resourceType as "image" | "video" | "raw",
           "authenticated",
-        )
+        );
+      } else if (storageKey && this.cloudflareR2Storage) {
+        cleanup = this.cloudflareR2Storage.delete(storageKey);
+      } else {
+        this.logger.error("Upload cleanup failed: fallback storage is unavailable.");
+        throw error;
+      }
+      await cleanup
         .catch((cleanupError) =>
           this.logger.error(
             `Upload cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : cleanupError}`,
@@ -762,7 +816,13 @@ export class CloudenceService {
       .runTransaction(async (transaction) => {
         const current = (await transaction.get(ref)).data() as
           CloudenceFileDocument | undefined;
-        this.assertCanEdit(current, user, "delete");
+        if (!current) throw new NotFoundException("File was not found.");
+        if (current.ownerId !== user.uid) {
+          throw new ForbiddenException(
+            "You cannot delete this file because you are not its owner. Only the owner can delete it.",
+          );
+        }
+        if (current.isDeleted) return current;
         const quota = await this.readQuota(transaction, current.ownerId);
         const now = new Date().toISOString();
         quota.used = Math.max(0, quota.used - current.size);
@@ -776,6 +836,7 @@ export class CloudenceService {
           isDeleted: true,
           deletedAt: now,
           deletedBy: user.uid,
+          storageDeletionStatus: "pending",
           updatedAt: now,
         });
         transaction.set(
@@ -785,9 +846,27 @@ export class CloudenceService {
             .doc(current.ownerId),
           { ...quota, updatedAt: now },
         );
-        return current;
+        return { ...current, isDeleted: true, storageDeletionStatus: "pending" as const };
       });
     this.invalidateQuotaCache(file.ownerId);
+
+    if (file.storageDeletionStatus !== "complete") {
+      try {
+        await this.deleteStorageObject(file);
+        const storageDeletedAt = new Date().toISOString();
+        await ref.set(
+          { storageDeletionStatus: "complete", storageDeletedAt },
+          { merge: true },
+        );
+      } catch (error) {
+        this.logger.error(
+          `Storage cleanup failed for deleted file ${id}: ${error instanceof Error ? error.message : error}`,
+        );
+        throw new ServiceUnavailableException(
+          "The file is removed from Cloudence, but storage cleanup is pending. Retry deletion to complete cleanup.",
+        );
+      }
+    }
 
     // Fire-and-forget audit — observability, not transactional
     void this.logAudit(user, "file.deleted", id, {
@@ -802,6 +881,35 @@ export class CloudenceService {
     );
 
     return { status: "success" };
+  }
+
+  private deleteStorageObject(file: CloudenceFileDocument): Promise<void> {
+    if (file.storageProvider === "r2") {
+      if (!file.storageKey || !this.cloudflareR2Storage) {
+        throw new ServiceUnavailableException(
+          "Cloudflare R2 file storage is unavailable for cleanup.",
+        );
+      }
+      return this.cloudflareR2Storage.delete(file.storageKey);
+    }
+    if (!file.publicId) {
+      throw new ServiceUnavailableException(
+        "The file has no provider storage reference for cleanup.",
+      );
+    }
+    const resourceType =
+      file.resourceType === "image" ||
+      file.resourceType === "video" ||
+      file.resourceType === "raw"
+        ? file.resourceType
+        : "raw";
+    const deliveryType =
+      file.deliveryType === "authenticated" ? "authenticated" : "upload";
+    return this.cloudinaryStorage.delete(
+      file.publicId,
+      resourceType,
+      deliveryType,
+    );
   }
 
   private async readQuota(
@@ -965,6 +1073,21 @@ export class CloudenceService {
     const file = await this.readableFile(user, id);
     if (options.range && !/^bytes=(?:\d+-\d*|-\d+)$/.test(options.range))
       throw new BadRequestException("Only a single byte range is supported.");
+    if (file.storageProvider === "r2") {
+      if (!file.storageKey || !this.cloudflareR2Storage) {
+        throw new ServiceUnavailableException(
+          "Cloudflare R2 file storage is unavailable.",
+        );
+      }
+      if (options.preview && file.type !== "image") {
+        throw new NotFoundException("No image preview is available.");
+      }
+      const upstream = await this.cloudflareR2Storage.openContent(
+        file.storageKey,
+        { range: options.range, signal: options.signal },
+      );
+      return { file, upstream };
+    }
     const resourceType = file.resourceType as "image" | "video" | "raw";
     if (!["image", "video", "raw"].includes(resourceType))
       throw new ServiceUnavailableException("Unsupported storage resource.");

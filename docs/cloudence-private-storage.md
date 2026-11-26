@@ -13,6 +13,31 @@ Web middleware rejects Cloudence source URLs on `/_next/image`, including old
 public previews. Purge any previously cached file previews at the web hosting
 CDN as part of deployment if that CDN can serve them before middleware runs.
 
+When Cloudinary rejects an upload with a storage-capacity error, Cloudence
+retries that file in a private Cloudflare R2 bucket. Other Cloudinary errors do
+not trigger fallback. Configure `CLOUDFLARE_R2_ACCOUNT_ID`,
+`CLOUDFLARE_R2_BUCKET`, `CLOUDFLARE_R2_ACCESS_KEY_ID`, and
+`CLOUDFLARE_R2_SECRET_ACCESS_KEY` as backend secrets. R2 files remain private
+and are streamed through the same authenticated Cloudence content endpoint;
+no public bucket or client-side Cloudflare credentials are used. Existing
+Cloudinary files are not moved automatically.
+Raster images are decoded and re-encoded with embedded metadata removed before
+hashing or upload to either provider; inputs over the 40-megapixel processing
+limit are rejected. SVG files use the existing sanitizer.
+
+Production startup validates all four R2 settings. Create the bucket with
+public access disabled: do not enable its `r2.dev` URL or attach a public
+custom domain. Use an R2 API token scoped to this bucket with only the object
+read/write/delete permissions Cloudence needs. The application uses the
+private S3-compatible endpoint and never generates public R2 URLs, but
+Cloudflare's bucket-level public-access toggle must be enforced in the
+Cloudflare account configuration.
+
+Deleting a Cloudence file removes its provider object after the metadata and
+quota transaction. If provider deletion fails, the file remains inaccessible
+and marked for cleanup; repeating the delete retries cleanup without
+decrementing quota again.
+
 Fly.io deployments automatically run `npm run release:prod` in the release
 Machine using the application's production secrets. `npm run build` compiles
 the migration to `dist-migrations`, so production execution does not require

@@ -5,6 +5,7 @@ import {
   validateBackendEnv,
   validateFirebaseAdminEnv,
   validateCloudinaryEnv,
+  validateCloudflareR2Env,
   validatePayFastEnv,
   validateResendEnv,
   validateGeminiEnv,
@@ -32,6 +33,10 @@ const VALID_PROD_ENV: NodeJS.ProcessEnv = {
   FIREBASE_PROJECT_ID: 'chefu-prod-project',
   FIREBASE_CLIENT_EMAIL: 'prod@chefu-prod-project.iam.gserviceaccount.com',
   FIREBASE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC6\n-----END PRIVATE KEY-----',
+  CLOUDFLARE_R2_ACCOUNT_ID: 'test-account',
+  CLOUDFLARE_R2_BUCKET: 'private-cloudence',
+  CLOUDFLARE_R2_ACCESS_KEY_ID: 'test-r2-key',
+  CLOUDFLARE_R2_SECRET_ACCESS_KEY: 'test-r2-secret',
 };
 
 void test('validateBackendEnv passes when all required development variables are provided', () => {
@@ -143,6 +148,24 @@ void test('validateCloudinaryEnv and assertCloudinaryConfigured identify missing
     CLOUDINARY_API_SECRET: 'test_secret_key',
   };
   assert.doesNotThrow(() => assertCloudinaryConfigured(validCloudinaryEnv));
+});
+
+void test('production configuration requires all Cloudflare R2 fallback credentials', () => {
+  const group = validateCloudflareR2Env({});
+  assert.deepEqual(group.missing.map(({ name }) => name), [
+    'CLOUDFLARE_R2_ACCOUNT_ID',
+    'CLOUDFLARE_R2_BUCKET',
+    'CLOUDFLARE_R2_ACCESS_KEY_ID',
+    'CLOUDFLARE_R2_SECRET_ACCESS_KEY',
+  ]);
+  assert.equal(validateCloudflareR2Env(VALID_PROD_ENV).missing.length, 0);
+
+  const missing = validateBackendEnv({
+    ...VALID_PROD_ENV,
+    CLOUDFLARE_R2_BUCKET: '',
+  });
+  assert.equal(missing.isValid, false);
+  assert.ok(missing.allMissing.includes('CLOUDFLARE_R2_BUCKET'));
 });
 
 void test('validatePayFastEnv identifies missing keys including mandatory passphrase', () => {

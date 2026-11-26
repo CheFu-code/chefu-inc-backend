@@ -5,8 +5,12 @@ export type CloudenceFileDocument = {
   name: string;
   type: CloudenceFileType;
   extension: string;
-  /** Raw Cloudinary delivery URL (stored at upload time). */
+  /** Private provider URL, retained internally and never returned to clients. */
   url: string;
+  storageProvider?: 'cloudinary' | 'r2';
+  storageKey?: string;
+  storageDeletionStatus?: 'pending' | 'complete';
+  storageDeletedAt?: string;
   /** Legacy public URL, retained only for migration and never returned to clients. */
   signedUrl?: string;
   size: number;
