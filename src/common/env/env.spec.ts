@@ -173,7 +173,8 @@ void test('Google Play billing configuration is optional until enabled and then 
   assert.equal(validateGooglePlayBillingEnv({}).missing.length, 0);
   const valid = {
     GOOGLE_PLAY_BILLING_ENABLED: 'true',
-    GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: '{"client_email":"billing@example.com","private_key":"-----BEGIN PRIVATE KEY-----\\nkey\\n-----END PRIVATE KEY-----"}',
+    GOOGLE_PLAY_WIF_AUDIENCE: '//iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/fly-billing/providers/fly',
+    GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL: 'billing@chefu-technologies.iam.gserviceaccount.com',
     GOOGLE_PLAY_PACKAGE_NAME: 'za.co.chefu.cloudence',
     GOOGLE_PLAY_RTDN_AUDIENCE: 'https://api.example.com/cloudence/billing/google-play/notifications',
     GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL: 'pubsub@example.com',
@@ -183,10 +184,11 @@ void test('Google Play billing configuration is optional until enabled and then 
     validateGooglePlayBillingEnv({ GOOGLE_PLAY_BILLING_ENABLED: 'true' })
       .missing.map(({ name }) => name),
     [
-      'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON',
       'GOOGLE_PLAY_PACKAGE_NAME',
       'GOOGLE_PLAY_RTDN_AUDIENCE',
       'GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL',
+      'GOOGLE_PLAY_WIF_AUDIENCE',
+      'GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL',
     ],
   );
   assert.ok(
@@ -195,12 +197,14 @@ void test('Google Play billing configuration is optional until enabled and then 
       GOOGLE_PLAY_PACKAGE_NAME: 'another.package',
     }).missing.some(({ name }) => name === 'GOOGLE_PLAY_PACKAGE_NAME'),
   );
-  assert.ok(
-    validateGooglePlayBillingEnv({
-      ...valid,
-      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: '{"client_email":"billing@example.com"}',
-    }).missing.some(({ name }) => name === 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'),
-  );
+  for (const audience of ['https://evil.example/token', '//iam.googleapis.com/projects/chefu-technologies/locations/global/workloadIdentityPools/pool/providers/fly']) {
+    assert.ok(validateGooglePlayBillingEnv({ ...valid, GOOGLE_PLAY_WIF_AUDIENCE: audience })
+      .missing.some(({ name }) => name === 'GOOGLE_PLAY_WIF_AUDIENCE'));
+  }
+  assert.ok(validateGooglePlayBillingEnv({ ...valid, GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL: 'someone@example.com' })
+    .missing.some(({ name }) => name === 'GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL'));
+  const legacyOnly = { ...valid, GOOGLE_PLAY_WIF_AUDIENCE: '', GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: '{"private_key":"old-key"}' };
+  assert.ok(validateGooglePlayBillingEnv(legacyOnly).missing.some(({ name }) => name === 'GOOGLE_PLAY_WIF_AUDIENCE'));
   assert.ok(
     validateGooglePlayBillingEnv({
       GOOGLE_PLAY_BILLING_ENABLED: 'yes',

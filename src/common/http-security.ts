@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
+import { ForbiddenException } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { CHEFU_APP_HEADER } from '../modules/apps/app-registry';
 import { SESSION_COOKIE_NAME } from '../modules/auth/session.constants';
@@ -41,8 +42,11 @@ export function configureCors(
       }
 
       if (origin && dynamicOrigin) {
-        void dynamicOrigin(origin).then(allowed => callback(allowed ? null : new Error('Origin is not allowed by CORS.'), allowed)).catch(error => callback(error));
-      } else callback(new Error(`Origin ${origin} is not allowed by CORS.`));
+        void dynamicOrigin(origin).then(
+          allowed => callback(allowed ? null : new ForbiddenException('Origin is not allowed by CORS.'), allowed),
+          error => callback(error),
+        );
+      } else callback(new ForbiddenException('Origin is not allowed by CORS.'), false);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

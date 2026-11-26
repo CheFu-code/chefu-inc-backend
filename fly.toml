@@ -2,6 +2,9 @@
 app = "chefu-inc-backend"
 primary_region = "jnb"
 
+[env]
+  GOOGLE_PLAY_PACKAGE_NAME = "za.co.chefu.cloudence"
+
 [deploy]
   release_command = "npm run release:prod"
   release_command_timeout = "30m0s"

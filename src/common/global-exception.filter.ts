@@ -35,11 +35,13 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           ? (payload as { message?: unknown }).message
           : 'Request failed';
 
+    const auditContext = auditRequestContext(request);
     const logPayload = JSON.stringify({
       event: 'request_error',
       requestId: getRequestId(request),
       method: request.method,
-      path: auditRequestContext(request).path,
+      path: auditContext.path,
+      origin: auditContext.origin,
       statusCode: status,
       message,
     });

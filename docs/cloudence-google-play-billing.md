@@ -20,10 +20,11 @@ subscription group where supported so a customer cannot unintentionally hold
 both plans at once. The app displays the localized price returned by Google
 Play; the Play Console price is authoritative.
 
-Enable the Google Play Developer API. Create a dedicated service account and
-grant it the least Play Console permission that can read and acknowledge
-subscriptions. Store its service-account JSON in the backend secret manager;
-never put it in the mobile app or source control.
+Enable the Google Play Developer API. Grant the billing service account these
+Play Console permissions: **View financial data, orders, and cancellation survey
+responses** and **Manage orders and subscriptions**. Authenticate from Fly.io
+with Workload Identity Federation; no downloaded private key is required.
+Follow [the keyless setup and migration steps](cloudence-google-play-workload-identity.md).
 
 ## Backend configuration
 
@@ -32,10 +33,16 @@ Set these backend secrets after the products and API access are ready:
 ```text
 GOOGLE_PLAY_BILLING_ENABLED=true
 GOOGLE_PLAY_PACKAGE_NAME=za.co.chefu.cloudence
-GOOGLE_PLAY_SERVICE_ACCOUNT_JSON=<service-account JSON>
+GOOGLE_PLAY_WIF_AUDIENCE=//iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID
+GOOGLE_PLAY_SERVICE_ACCOUNT_EMAIL=<billing service account email>
 GOOGLE_PLAY_RTDN_AUDIENCE=<exact Pub/Sub push audience>
 GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL=<Pub/Sub OIDC service account email>
 ```
+
+`GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` is no longer used. The WIF audience identifies
+the Google provider and uses the **numeric project number**, not the project ID.
+The billing account email and RTDN push account email have separate purposes;
+they may refer to the same account if it has both sets of permissions.
 
 Configure Google Play Real-time Developer Notifications (RTDN) to publish to a
 Pub/Sub topic, then configure an authenticated push subscription to:

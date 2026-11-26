@@ -1,5 +1,6 @@
 import { validateStoreEnv } from '../../modules/store/store.config';
 import { GOOGLE_PLAY_PACKAGE_NAME } from '../../modules/cloudence/google-play-billing.constants';
+import { googlePlayFederationIssues } from '../../modules/cloudence/google-play-auth.config';
 
 export interface MissingVariable {
   name: string;
@@ -178,7 +179,6 @@ export function validateGooglePlayBillingEnv(
     return { service: 'Google Play Billing', missing };
   }
   for (const [name, description] of [
-    ['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON', 'Google Play Android Publisher service-account JSON'],
     ['GOOGLE_PLAY_PACKAGE_NAME', `Android package name (must be ${GOOGLE_PLAY_PACKAGE_NAME})`],
     ['GOOGLE_PLAY_RTDN_AUDIENCE', 'Expected audience for authenticated Pub/Sub push notifications'],
     ['GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL', 'Expected Pub/Sub push service-account email'],
@@ -194,36 +194,7 @@ export function validateGooglePlayBillingEnv(
       description: `Must exactly match ${GOOGLE_PLAY_PACKAGE_NAME}`,
     });
   }
-  try {
-    const credentials: unknown = JSON.parse(
-      getEnv('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON', env),
-    );
-    const clientEmail =
-      typeof credentials === 'object' && credentials !== null
-        ? Reflect.get(credentials, 'client_email')
-        : undefined;
-    const privateKey =
-      typeof credentials === 'object' && credentials !== null
-        ? Reflect.get(credentials, 'private_key')
-        : undefined;
-    if (
-      typeof clientEmail !== 'string' ||
-      typeof privateKey !== 'string' ||
-      !privateKey.includes('PRIVATE KEY')
-    ) {
-      missing.push({
-        name: 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON',
-        description: 'Must contain a valid service-account client_email and private_key',
-      });
-    }
-  } catch {
-    if (hasEnv('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON', env)) {
-      missing.push({
-        name: 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON',
-        description: 'Must be valid service-account JSON',
-      });
-    }
-  }
+  missing.push(...googlePlayFederationIssues(env));
   return { service: 'Google Play Billing', missing };
 }
 

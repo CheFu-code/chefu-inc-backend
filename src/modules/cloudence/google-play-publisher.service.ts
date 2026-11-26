@@ -4,28 +4,27 @@ import {
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { GoogleAuth, OAuth2Client, type JWTInput } from 'google-auth-library';
+import { OAuth2Client, type IdentityPoolClient } from 'google-auth-library';
+import { validateGooglePlayBillingEnv } from '../../common/env';
+import { readGooglePlayFederationConfig } from './google-play-auth.config';
+import { createGooglePlayFederatedClient } from './google-play-federation';
 import {
   GOOGLE_PLAY_PACKAGE_NAME,
   GooglePlaySubscriptionPurchase,
 } from './google-play-billing.constants';
 
-const ANDROID_PUBLISHER_SCOPE =
-  'https://www.googleapis.com/auth/androidpublisher';
 const ANDROID_PUBLISHER_URL =
   'https://androidpublisher.googleapis.com/androidpublisher/v3';
 
 @Injectable()
 export class GooglePlayPublisherService {
   private readonly logger = new Logger(GooglePlayPublisherService.name);
+  private client?: IdentityPoolClient;
 
   isConfigured() {
     return (
       process.env.GOOGLE_PLAY_BILLING_ENABLED === 'true' &&
-      process.env.GOOGLE_PLAY_PACKAGE_NAME === GOOGLE_PLAY_PACKAGE_NAME &&
-      Boolean(process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON?.trim()) &&
-      Boolean(process.env.GOOGLE_PLAY_RTDN_AUDIENCE?.trim()) &&
-      Boolean(process.env.GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL?.trim())
+      validateGooglePlayBillingEnv().missing.length === 0
     );
   }
 
@@ -75,11 +74,20 @@ export class GooglePlayPublisherService {
     method: 'GET' | 'POST',
     data?: Record<string, never>,
   ): Promise<T> {
-    const client = await this.publisherClient();
+    const client = this.publisherClient();
+    try {
+      await client.getAccessToken();
+    } catch {
+      // Auth responses can contain subject tokens. Do not log or return them.
+      throw new ServiceUnavailableException(
+        'Google Play workload identity authentication is unavailable.',
+      );
+    }
     try {
       const response = await client.request<T>({ url, method, data });
       return response.data;
     } catch (error) {
+      if (error instanceof ServiceUnavailableException) throw error;
       const response =
         typeof error === 'object' && error !== null
           ? Reflect.get(error, 'response')
@@ -102,42 +110,21 @@ export class GooglePlayPublisherService {
     }
   }
 
-  private async publisherClient() {
+  private publisherClient() {
     if (!this.isConfigured()) {
       throw new ServiceUnavailableException(
         'Google Play billing is not configured.',
       );
     }
 
-    let credentials: JWTInput;
-    try {
-      credentials = JSON.parse(
-        process.env.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON!,
-      ) as JWTInput;
-    } catch {
+    const config = readGooglePlayFederationConfig();
+    if (!config) {
       throw new ServiceUnavailableException(
-        'Google Play billing credentials are invalid.',
+        'Google Play workload identity is not configured.',
       );
     }
-    if (
-      typeof credentials.client_email !== 'string' ||
-      typeof credentials.private_key !== 'string'
-    ) {
-      throw new ServiceUnavailableException(
-        'Google Play billing credentials are invalid.',
-      );
-    }
-
-    try {
-      const auth = new GoogleAuth({
-        credentials,
-        scopes: [ANDROID_PUBLISHER_SCOPE],
-      });
-      return await auth.getClient();
-    } catch {
-      throw new ServiceUnavailableException(
-        'Google Play billing credentials are invalid.',
-      );
-    }
+    // Reuse Google's expiring credential cache and automatic refresh handling.
+    this.client ??= createGooglePlayFederatedClient(config);
+    return this.client;
   }
 }

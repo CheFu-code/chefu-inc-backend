@@ -62,6 +62,7 @@ void test('runtime origins immediately permit preflight and cookie mutations, an
     assert.equal(mutation.status, 200);
     approved = false;
     const denied = await fetch(`${server.baseUrl}/probe`, options);
+    assert.equal(denied.status, 403);
     assert.equal(denied.headers.get('access-control-allow-origin'), null);
     const deniedReferer = await fetch(`${server.baseUrl}/probe`, { method: 'POST', headers: { Referer: `${origin}/settings`, Cookie: '__session=test' } });
     assert.equal(deniedReferer.status, 403);
@@ -121,6 +122,7 @@ void test('HTTP security middleware enforces CORS and cookie CSRF while preservi
       },
       body: '{}',
     });
+    assert.equal(untrustedOrigin.status, 403);
     assert.equal(untrustedOrigin.headers.get('access-control-allow-origin'), null);
 
     const bearerClient = await fetch(`${server.baseUrl}/probe`, {
@@ -185,6 +187,7 @@ void test('deployed admin host passes credentialed preflights and cookie mutatio
       method: 'OPTIONS',
       headers: { Origin: 'https://admin.chefu.co.za.evil.example', 'Access-Control-Request-Method': 'GET' },
     });
+    assert.equal(untrusted.status, 403);
     assert.equal(untrusted.headers.get('access-control-allow-origin'), null);
   } finally {
     await server.app.close();
