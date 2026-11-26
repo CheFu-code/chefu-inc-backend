@@ -6,6 +6,8 @@ import { v2 as cloudinary } from 'cloudinary';
 import sharp from 'sharp';
 import { MAX_STORAGE_BYTES } from './cloudence.constants';
 import { CloudenceService } from './cloudence.service';
+import { CloudenceBillingService } from './cloudence-billing.service';
+import { GooglePlayPublisherService } from './google-play-publisher.service';
 import type { CloudenceFileDocument } from './cloudence.types';
 import type { FirebaseAdminService } from '../firebase-admin/firebase-admin.service';
 import type { RuntimeLimitService } from '../../common/runtime-limit.service';
@@ -28,7 +30,12 @@ function file(id: string, uid = viewer.uid, email = viewer.email): CloudenceFile
   };
 }
 
-function fixture(files: CloudenceFileDocument[] = []) {
+function fixture(
+  files: CloudenceFileDocument[] = [],
+  createBilling?: (
+    firebase: FirebaseAdminService,
+  ) => CloudenceBillingService,
+) {
   const records = new Map<string, Record<string, unknown>>(
     files.map((value) => [`cloudenceFiles/${value.id}`, value]),
   );
@@ -118,6 +125,8 @@ function fixture(files: CloudenceFileDocument[] = []) {
       return { displayName: authNames.get(uid) };
     } }),
   };
+  const firebaseAdmin = firebase as unknown as FirebaseAdminService;
+  const billing = createBilling?.(firebaseAdmin);
   const uploads: string[] = [];
   const deletions: string[] = [];
   const r2Uploads: Array<{ key: string; contentType: string; sha256: string; buffer: Buffer }> = [];
@@ -129,7 +138,7 @@ function fixture(files: CloudenceFileDocument[] = []) {
   let r2DeleteFailure: unknown;
   let uploadFailure: unknown;
   const service = new CloudenceService(
-    firebase as unknown as FirebaseAdminService,
+    firebaseAdmin,
     { reserve: async () => ({ limited: false }) } as unknown as RuntimeLimitService,
     {
       uploadBuffer: async (_buffer: Buffer, options: unknown) => {
@@ -163,6 +172,7 @@ function fixture(files: CloudenceFileDocument[] = []) {
         }
       },
     } as unknown as import('../../common/cloudflare-r2-storage.service').CloudflareR2StorageService,
+    billing,
   );
   return {
     service,
@@ -284,6 +294,30 @@ test('concurrent uploads cannot exceed quota and rejected assets are cleaned up'
   assert.equal(f.records.get('cloudence_quotas/viewer')?.used, MAX_STORAGE_BYTES - 4);
   assert.equal([...f.records.keys()].filter((key) => key.startsWith('cloudenceFiles/')).length, 1);
   assert.equal(f.deletions.length, 1);
+}));
+
+test('verified 50 GB subscriptions are enforced in the upload transaction', async () => withUploadConfig(async () => {
+  const paid = fixture([], (firebase) =>
+    new CloudenceBillingService(
+      firebase,
+      {} as GooglePlayPublisherService,
+    ),
+  );
+  paid.records.set('users/viewer@example.com', { fullname: 'Viewer' });
+  paid.records.set('cloudence_quotas/viewer', quota(MAX_STORAGE_BYTES - 1));
+  paid.records.set('cloudence_subscriptions/viewer', {
+    subscriptions: {
+      cloudence_pro_monthly: {
+        tokenHash: 'stored-hash',
+        status: 'SUBSCRIPTION_STATE_ACTIVE',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    },
+  });
+
+  await paid.service.upload(viewer, Buffer.from('x'), 'one.txt', 'text/plain');
+  assert.equal(paid.records.get('cloudence_quotas/viewer')?.used, MAX_STORAGE_BYTES);
+  assert.equal((await paid.service.usage(viewer)).all, 50 * 1024 * 1024 * 1024);
 }));
 
 test('concurrent uploads retain the exact total and cold quota initialization includes legacy files', async () => withUploadConfig(async () => {

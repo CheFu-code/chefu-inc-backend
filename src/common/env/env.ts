@@ -1,4 +1,5 @@
 import { validateStoreEnv } from '../../modules/store/store.config';
+import { GOOGLE_PLAY_PACKAGE_NAME } from '../../modules/cloudence/google-play-billing.constants';
 
 export interface MissingVariable {
   name: string;
@@ -162,6 +163,70 @@ export function validateCloudflareR2Env(
   return { service: 'Cloudflare R2 Storage', missing };
 }
 
+export function validateGooglePlayBillingEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): ServiceEnvGroup {
+  const missing: MissingVariable[] = [];
+  const enabled = getEnv('GOOGLE_PLAY_BILLING_ENABLED', env);
+  if (enabled && enabled !== 'true' && enabled !== 'false') {
+    missing.push({
+      name: 'GOOGLE_PLAY_BILLING_ENABLED',
+      description: 'Must be either true or false',
+    });
+  }
+  if (enabled !== 'true') {
+    return { service: 'Google Play Billing', missing };
+  }
+  for (const [name, description] of [
+    ['GOOGLE_PLAY_SERVICE_ACCOUNT_JSON', 'Google Play Android Publisher service-account JSON'],
+    ['GOOGLE_PLAY_PACKAGE_NAME', `Android package name (must be ${GOOGLE_PLAY_PACKAGE_NAME})`],
+    ['GOOGLE_PLAY_RTDN_AUDIENCE', 'Expected audience for authenticated Pub/Sub push notifications'],
+    ['GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL', 'Expected Pub/Sub push service-account email'],
+  ]) {
+    if (!hasEnv(name, env)) missing.push({ name, description });
+  }
+  if (
+    hasEnv('GOOGLE_PLAY_PACKAGE_NAME', env) &&
+    getEnv('GOOGLE_PLAY_PACKAGE_NAME', env) !== GOOGLE_PLAY_PACKAGE_NAME
+  ) {
+    missing.push({
+      name: 'GOOGLE_PLAY_PACKAGE_NAME',
+      description: `Must exactly match ${GOOGLE_PLAY_PACKAGE_NAME}`,
+    });
+  }
+  try {
+    const credentials: unknown = JSON.parse(
+      getEnv('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON', env),
+    );
+    const clientEmail =
+      typeof credentials === 'object' && credentials !== null
+        ? Reflect.get(credentials, 'client_email')
+        : undefined;
+    const privateKey =
+      typeof credentials === 'object' && credentials !== null
+        ? Reflect.get(credentials, 'private_key')
+        : undefined;
+    if (
+      typeof clientEmail !== 'string' ||
+      typeof privateKey !== 'string' ||
+      !privateKey.includes('PRIVATE KEY')
+    ) {
+      missing.push({
+        name: 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON',
+        description: 'Must contain a valid service-account client_email and private_key',
+      });
+    }
+  } catch {
+    if (hasEnv('GOOGLE_PLAY_SERVICE_ACCOUNT_JSON', env)) {
+      missing.push({
+        name: 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON',
+        description: 'Must be valid service-account JSON',
+      });
+    }
+  }
+  return { service: 'Google Play Billing', missing };
+}
+
 export function validatePayFastEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): ServiceEnvGroup {
@@ -293,6 +358,9 @@ export function validateBackendEnv(
     const r2Group = validateCloudflareR2Env(env);
     if (r2Group.missing.length) groups.push(r2Group);
   }
+
+  const googlePlayGroup = validateGooglePlayBillingEnv(env);
+  if (googlePlayGroup.missing.length) groups.push(googlePlayGroup);
 
   const storeGroup = validateStoreEnv(env);
   if (storeGroup.missing.length) groups.push(storeGroup);

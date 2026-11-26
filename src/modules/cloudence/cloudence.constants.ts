@@ -2,6 +2,9 @@ export const COLLECTION = 'cloudenceFiles';
 export const AUDIT_COLLECTION = 'cloudence_audit_logs';
 export const QUOTA_COLLECTION = 'cloudence_quotas';
 export const MAX_STORAGE_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB quota per user
+export const MAX_SUBSCRIBED_STORAGE_BYTES = 50 * 1024 * 1024 * 1024;
+export const SUBSCRIPTION_COLLECTION = 'cloudence_subscriptions';
+export const SUBSCRIPTION_TOKEN_COLLECTION = 'cloudence_subscription_tokens';
 export const MAX_SHARE_RECIPIENTS = 25; // Anti-phishing / anti-spam share cap
 export const ALLOWED_TYPES = new Set(['document', 'image', 'video', 'audio', 'other']);
 

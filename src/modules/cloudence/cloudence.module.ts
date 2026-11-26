@@ -9,6 +9,10 @@ import { CloudenceUploadGuard } from "./cloudence-upload.guard";
 import { CloudenceFoldersService } from "./cloudence-folders.service";
 import { CloudenceNotificationsController } from "./cloudence-notifications.controller";
 import { CloudenceNotificationsService } from "./cloudence-notifications.service";
+import { CloudenceBillingController } from "./cloudence-billing.controller";
+import { CloudenceBillingService } from "./cloudence-billing.service";
+import { GooglePlayPublisherService } from "./google-play-publisher.service";
+import { GooglePlayRtdnController } from "./google-play-rtdn.controller";
 
 @Module({
   imports: [
@@ -17,12 +21,19 @@ import { CloudenceNotificationsService } from "./cloudence-notifications.service
     CloudinaryStorageModule,
     CloudflareR2StorageModule,
   ],
-  controllers: [CloudenceController, CloudenceNotificationsController],
+  controllers: [
+    CloudenceController,
+    CloudenceNotificationsController,
+    CloudenceBillingController,
+    GooglePlayRtdnController,
+  ],
   providers: [
     CloudenceService,
     CloudenceUploadGuard,
     CloudenceFoldersService,
     CloudenceNotificationsService,
+    CloudenceBillingService,
+    GooglePlayPublisherService,
   ],
 })
 export class CloudenceModule {}

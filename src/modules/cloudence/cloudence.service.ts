@@ -45,6 +45,7 @@ import {
 import { isSharingExpiredForUser } from "./cloudence-sharing";
 import { findOwnedDuplicatesByHash } from "./cloudence-deduplication";
 import { stripImageMetadata } from "./cloudence-image-sanitizer";
+import { CloudenceBillingService } from "./cloudence-billing.service";
 
 type StorageQuota = Record<
   CloudenceFileType,
@@ -98,6 +99,7 @@ export class CloudenceService {
     ),
     @Optional() private readonly notifications?: CloudenceNotificationsService,
     @Optional() private readonly cloudflareR2Storage?: CloudflareR2StorageService,
+    @Optional() private readonly billing?: CloudenceBillingService,
   ) {}
 
   /**
@@ -181,16 +183,19 @@ export class CloudenceService {
       };
     }
 
-    // Enforce 2GB user storage quota before upload
+    const entitlement = this.billing
+      ? await this.billing.getEntitlement(user.uid)
+      : { all: MAX_STORAGE_BYTES, plan: "free" as const, expiresAt: null };
+    const storageLimit = entitlement.all;
     let currentUsage = await this.getOwnedStorageBytes(user.uid);
     // A stale display cache must not reject an upload after another instance frees space.
-    if (currentUsage + buffer.length > MAX_STORAGE_BYTES)
+    if (currentUsage + buffer.length > storageLimit)
       currentUsage = (await this.loadQuota(user.uid)).used;
-    if (currentUsage + buffer.length > MAX_STORAGE_BYTES) {
+    if (currentUsage + buffer.length > storageLimit) {
       const usedMb = (currentUsage / (1024 * 1024)).toFixed(1);
       const fileMb = (buffer.length / (1024 * 1024)).toFixed(1);
       throw new BadRequestException(
-        `Storage quota of 2 GB exceeded. Current usage is ${usedMb} MB and this file is ${fileMb} MB.`,
+        `Storage quota of ${storageLimit / (1024 * 1024 * 1024)} GB exceeded. Current usage is ${usedMb} MB and this file is ${fileMb} MB.`,
       );
     }
 
@@ -267,12 +272,22 @@ export class CloudenceService {
 
     const db = this.firebaseAdmin.db();
     try {
-      const { quota: committedQuota, previousUsed } = await db.runTransaction(
+      const {
+        quota: committedQuota,
+        previousUsed,
+        transactionEntitlement,
+      } = await db.runTransaction(
         async (transaction) => {
+          const transactionEntitlement = this.billing
+            ? await this.billing.getEntitlement(user.uid, transaction)
+            : { all: MAX_STORAGE_BYTES, plan: "free" as const, expiresAt: null };
+          const transactionStorageLimit = transactionEntitlement.all;
           const quota = await this.readQuota(transaction, user.uid);
           const previousUsed = quota.used;
-          if (quota.used + document.size > MAX_STORAGE_BYTES) {
-            throw new BadRequestException("Storage quota of 2 GB exceeded.");
+          if (quota.used + document.size > transactionStorageLimit) {
+            throw new BadRequestException(
+              `Storage quota of ${transactionStorageLimit / (1024 * 1024 * 1024)} GB exceeded.`,
+            );
           }
           quota.used += document.size;
           quota[type] = {
@@ -292,20 +307,20 @@ export class CloudenceService {
             ...quota,
             updatedAt: now,
           });
-          return { quota, previousUsed };
+          return { quota, previousUsed, transactionEntitlement };
         },
       );
       this.setCachedQuota(user.uid, {
         ...committedQuota,
-        all: MAX_STORAGE_BYTES,
+        ...transactionEntitlement,
       });
       if (
-        previousUsed / MAX_STORAGE_BYTES < 0.8 &&
-        committedQuota.used / MAX_STORAGE_BYTES >= 0.8
+        previousUsed / transactionEntitlement.all < 0.8 &&
+        committedQuota.used / transactionEntitlement.all >= 0.8
       ) {
         void this.notifications?.notifyQuotaReached(
           user.uid,
-          (committedQuota.used / MAX_STORAGE_BYTES) * 100,
+          (committedQuota.used / transactionEntitlement.all) * 100,
         );
       }
     } catch (error) {
@@ -996,10 +1011,13 @@ export class CloudenceService {
 
   async usage(user: AuthenticatedUser) {
     const cached = this.getCachedQuota(user.uid);
-    if (cached) return cached;
+    const entitlement = this.billing
+      ? await this.billing.getEntitlement(user.uid)
+      : { all: MAX_STORAGE_BYTES, plan: "free" as const, expiresAt: null };
+    if (cached) return { ...cached, ...entitlement };
     const result = {
       ...(await this.loadQuota(user.uid)),
-      all: MAX_STORAGE_BYTES,
+      ...entitlement,
     };
     this.setCachedQuota(user.uid, result);
     return result;

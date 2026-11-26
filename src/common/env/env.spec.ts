@@ -6,6 +6,7 @@ import {
   validateFirebaseAdminEnv,
   validateCloudinaryEnv,
   validateCloudflareR2Env,
+  validateGooglePlayBillingEnv,
   validatePayFastEnv,
   validateResendEnv,
   validateGeminiEnv,
@@ -166,6 +167,45 @@ void test('production configuration requires all Cloudflare R2 fallback credenti
   });
   assert.equal(missing.isValid, false);
   assert.ok(missing.allMissing.includes('CLOUDFLARE_R2_BUCKET'));
+});
+
+void test('Google Play billing configuration is optional until enabled and then validated', () => {
+  assert.equal(validateGooglePlayBillingEnv({}).missing.length, 0);
+  const valid = {
+    GOOGLE_PLAY_BILLING_ENABLED: 'true',
+    GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: '{"client_email":"billing@example.com","private_key":"-----BEGIN PRIVATE KEY-----\\nkey\\n-----END PRIVATE KEY-----"}',
+    GOOGLE_PLAY_PACKAGE_NAME: 'za.co.chefu.cloudence',
+    GOOGLE_PLAY_RTDN_AUDIENCE: 'https://api.example.com/cloudence/billing/google-play/notifications',
+    GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL: 'pubsub@example.com',
+  };
+  assert.equal(validateGooglePlayBillingEnv(valid).missing.length, 0);
+  assert.deepEqual(
+    validateGooglePlayBillingEnv({ GOOGLE_PLAY_BILLING_ENABLED: 'true' })
+      .missing.map(({ name }) => name),
+    [
+      'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON',
+      'GOOGLE_PLAY_PACKAGE_NAME',
+      'GOOGLE_PLAY_RTDN_AUDIENCE',
+      'GOOGLE_PLAY_RTDN_SERVICE_ACCOUNT_EMAIL',
+    ],
+  );
+  assert.ok(
+    validateGooglePlayBillingEnv({
+      ...valid,
+      GOOGLE_PLAY_PACKAGE_NAME: 'another.package',
+    }).missing.some(({ name }) => name === 'GOOGLE_PLAY_PACKAGE_NAME'),
+  );
+  assert.ok(
+    validateGooglePlayBillingEnv({
+      ...valid,
+      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: '{"client_email":"billing@example.com"}',
+    }).missing.some(({ name }) => name === 'GOOGLE_PLAY_SERVICE_ACCOUNT_JSON'),
+  );
+  assert.ok(
+    validateGooglePlayBillingEnv({
+      GOOGLE_PLAY_BILLING_ENABLED: 'yes',
+    }).missing.some(({ name }) => name === 'GOOGLE_PLAY_BILLING_ENABLED'),
+  );
 });
 
 void test('validatePayFastEnv identifies missing keys including mandatory passphrase', () => {
