@@ -13,6 +13,7 @@ import { CloudenceBillingController } from "./cloudence-billing.controller";
 import { CloudenceBillingService } from "./cloudence-billing.service";
 import { GooglePlayPublisherService } from "./google-play-publisher.service";
 import { GooglePlayRtdnController } from "./google-play-rtdn.controller";
+import { StorageHealthController, StorageHealthService } from "./storage-health.controller";
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { GooglePlayRtdnController } from "./google-play-rtdn.controller";
     CloudenceNotificationsController,
     CloudenceBillingController,
     GooglePlayRtdnController,
+    StorageHealthController,
   ],
   providers: [
     CloudenceService,
@@ -34,6 +36,7 @@ import { GooglePlayRtdnController } from "./google-play-rtdn.controller";
     CloudenceNotificationsService,
     CloudenceBillingService,
     GooglePlayPublisherService,
+    StorageHealthService,
   ],
 })
 export class CloudenceModule {}
