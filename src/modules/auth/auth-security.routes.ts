@@ -827,7 +827,10 @@ export abstract class AuthSecurityRoutes extends AuthSessionRoutes {
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ idToken: reauth.idToken }),
+                body: JSON.stringify({
+                    idToken: reauth.idToken,
+                    totpEnrollmentInfo: {},
+                }),
             },
         );
         const result = (await response.json().catch(() => ({}))) as {
