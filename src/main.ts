@@ -57,7 +57,9 @@ async function bootstrap() {
     );
     app.set('trust proxy', trustedProxyAddresses);
     configureCountryDetection(
-        app.getHttpAdapter().getInstance(), process.env.COUNTRY_HEADER_PROVIDER,
+        app.getHttpAdapter().getInstance(),
+        process.env.COUNTRY_HEADER_PROVIDER,
+        process.env.COUNTRY_PROXY_SHARED_SECRET,
     );
 
     // Compress all JSON responses with gzip/brotli.

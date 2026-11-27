@@ -54,6 +54,7 @@ Set these on the backend host:
 
 - `FRONTEND_ORIGIN=https://chefu.co.za`
 - `TRUSTED_PROXY_IPS=<comma-separated IPs/CIDRs of the immediate trusted reverse proxies>` only when the API is behind a proxy; omitted by default, so forwarded IP/protocol headers are not trusted
+- `COUNTRY_HEADER_PROVIDER=cloudflare` and `COUNTRY_PROXY_SHARED_SECRET=<random 32+ byte value>` when Cloudflare proxies the API; set the same secret in a Cloudflare request-header rule. See [country detection](docs/country-detection.md).
 - `AUTH_COOKIE_DOMAIN=.chefu.co.za`
 - `AUTH_SESSION_SECRET=<long random secret>`
 - `CHEFU_ACCOUNT_URL=https://chefu.co.za`
@@ -78,7 +79,8 @@ listed.
 
 Country detection is disabled unless `COUNTRY_HEADER_PROVIDER` selects one
 provider (`cloudflare`, `vercel`, `cloudfront`, `appengine` or `proxy`). It also
-requires explicit `TRUSTED_PROXY_IPS`. See [country detection](docs/country-detection.md)
+requires explicit `TRUSTED_PROXY_IPS`; Cloudflare additionally requires
+`COUNTRY_PROXY_SHARED_SECRET`. See [country detection](docs/country-detection.md)
 for the required proxy configuration and validation rules.
 
 On the frontend host, set:

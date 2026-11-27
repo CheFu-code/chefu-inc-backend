@@ -26,6 +26,15 @@ hops, enforce this throughout the chain; do not trust arbitrary traffic from a
 shared hosting network. Restrict origin access to the controlled proxy where
 possible. Do not enable a provider solely because a request contains its header.
 
+For Cloudflare, also set `COUNTRY_PROXY_SHARED_SECRET` to a random value of at
+least 32 bytes. Configure a Cloudflare request-header transform rule scoped to
+`api.chefu.co.za` to set (overwrite) `X-Chefu-Country-Proxy-Secret` to the same
+value. Store the value only in Fly secrets and the Cloudflare rule; do not log it
+or expose it to clients. Cloudflare requests without this header, direct Fly
+hostname requests, duplicate secret headers, or mismatched values are treated
+as having no country. This verifies Cloudflare for country metadata; it does not
+block direct access to the API.
+
 The backend checks the actual TCP peer against Express's configured trust
 function. `X-Forwarded-For`, provider-looking headers and the browser's origin
 cannot establish country-header trust. IPv4, IPv6 and mapped IPv4 addresses use

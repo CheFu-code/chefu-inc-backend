@@ -7,10 +7,17 @@ import {
     configureCountryDetection, detectRequestCountry, normalizeDetectedCountryCode,
 } from './country-detection';
 
-function configuredApp(provider?: string, addresses = ['192.0.2.0/24', '2001:db8::/32']) {
+const cloudflareSecret = 'test-secret-with-more-than-thirty-two-bytes';
+const cloudflareSecretHeader = 'x-chefu-country-proxy-secret';
+
+function configuredApp(
+    provider?: string,
+    addresses = ['192.0.2.0/24', '2001:db8::/32'],
+    sharedSecret?: string,
+) {
     const app = express();
     app.set('trust proxy', addresses);
-    configureCountryDetection(app, provider);
+    configureCountryDetection(app, provider, sharedSecret);
     return app;
 }
 
@@ -32,13 +39,15 @@ void test('detection defaults off even when a trusted connection includes provid
 
 void test('enabled detection requires a known provider and explicit bounded proxy trust', () => {
     for (const provider of ['auto', '*', '__proto__', 'cloudflare,vercel']) {
-        assert.throws(() => configuredApp(provider), /COUNTRY_HEADER_PROVIDER/);
+        assert.throws(() => configuredApp(provider, undefined, cloudflareSecret), /COUNTRY_HEADER_PROVIDER/);
     }
+    assert.throws(() => configuredApp('cloudflare'), /COUNTRY_PROXY_SHARED_SECRET/);
+    assert.throws(() => configuredApp('cloudflare', undefined, 'too-short'), /COUNTRY_PROXY_SHARED_SECRET/);
     for (const setting of [true, 1, [], ['loopback'], ['0.0.0.0/0'], ['::/0']]) {
         const app = express();
         assert.throws(() => {
             app.set('trust proxy', setting);
-            configureCountryDetection(app, 'cloudflare');
+            configureCountryDetection(app, 'cloudflare', cloudflareSecret);
         }, /TRUSTED_PROXY_IPS|invalid range/);
     }
 });
@@ -54,9 +63,10 @@ void test('country codes must be assigned ISO alpha-2 codes, never provider sent
 });
 
 void test('only the actual trusted TCP peer establishes country-header trust', () => {
-    const app = configuredApp('cloudflare');
+    const app = configuredApp('cloudflare', undefined, cloudflareSecret);
+    const trustedHeaders = ['CF-IPCountry', 'za', cloudflareSecretHeader, cloudflareSecret];
     for (const peer of ['192.0.2.7', '2001:db8::7', '::ffff:192.0.2.7']) {
-        assert.deepEqual(detectRequestCountry(incoming(app, peer, ['CF-IPCountry', 'za'])), {
+        assert.deepEqual(detectRequestCountry(incoming(app, peer, trustedHeaders)), {
             code: 'ZA', source: 'cloudflare',
         });
     }
@@ -64,6 +74,7 @@ void test('only the actual trusted TCP peer establishes country-header trust', (
         assert.equal(detectRequestCountry(incoming(app, peer, [
             'cf-ipcountry', 'ZA', 'x-forwarded-for', '192.0.2.7',
             'cf-connecting-ip', '192.0.2.7', 'x-vercel-ip-country', 'ZA',
+            cloudflareSecretHeader, cloudflareSecret,
         ])), null);
     }
 });
@@ -74,33 +85,57 @@ void test('all supported providers work independently with no fallback to other 
         ['cloudfront', 'cloudfront-viewer-country'], ['appengine', 'x-appengine-country'],
         ['proxy', 'x-country-code'],
     ]) {
-        const app = configuredApp(source);
-        assert.deepEqual(detectRequestCountry(incoming(app, '192.0.2.7', [header, 'ZA'])), {
+        const app = configuredApp(
+            source,
+            undefined,
+            source === 'cloudflare' ? cloudflareSecret : undefined,
+        );
+        const acceptedHeaders = source === 'cloudflare'
+            ? [header, 'ZA', cloudflareSecretHeader, cloudflareSecret]
+            : [header, 'ZA'];
+        assert.deepEqual(detectRequestCountry(incoming(app, '192.0.2.7', acceptedHeaders)), {
             code: 'ZA', source,
         });
         const otherHeader = source === 'cloudflare' ? 'x-country-code' : 'cf-ipcountry';
-        for (const raw of [[otherHeader, 'US'], [header, 'ZZ', otherHeader, 'US']]) {
+        for (const raw of [
+            source === 'cloudflare'
+                ? [otherHeader, 'US', cloudflareSecretHeader, cloudflareSecret]
+                : [otherHeader, 'US'],
+            source === 'cloudflare'
+                ? [header, 'ZZ', otherHeader, 'US', cloudflareSecretHeader, cloudflareSecret]
+                : [header, 'ZZ', otherHeader, 'US'],
+        ]) {
             assert.equal(detectRequestCountry(incoming(app, '192.0.2.7', raw)), null);
         }
     }
 });
 
 void test('duplicate headers, arrays and combined country values are rejected', () => {
-    const app = configuredApp('cloudflare');
+    const app = configuredApp('cloudflare', undefined, cloudflareSecret);
     for (const raw of [
-        ['cf-ipcountry', 'ZA', 'CF-IPCountry', 'US'],
-        ['cf-ipcountry', 'ZA', 'cf-ipcountry', 'ZA'],
-        ['cf-ipcountry', 'ZA, US'], ['cf-ipcountry', ''],
+        ['cf-ipcountry', 'ZA', 'CF-IPCountry', 'US', cloudflareSecretHeader, cloudflareSecret],
+        ['cf-ipcountry', 'ZA', 'cf-ipcountry', 'ZA', cloudflareSecretHeader, cloudflareSecret],
+        ['cf-ipcountry', 'ZA, US', cloudflareSecretHeader, cloudflareSecret],
+        ['cf-ipcountry', '', cloudflareSecretHeader, cloudflareSecret],
+        ['cf-ipcountry', 'ZA'],
+        ['cf-ipcountry', 'ZA', cloudflareSecretHeader, 'wrong-secret-value-long-enough-to-pass-size'],
+        [
+            'cf-ipcountry', 'ZA',
+            cloudflareSecretHeader, cloudflareSecret,
+            'X-Chefu-Country-Proxy-Secret', cloudflareSecret,
+        ],
     ]) {
         assert.equal(detectRequestCountry(incoming(app, '192.0.2.7', raw)), null);
     }
-    const arrayHeader = incoming(app, '192.0.2.7', ['cf-ipcountry', 'ZA']);
+    const arrayHeader = incoming(app, '192.0.2.7', [
+        'cf-ipcountry', 'ZA', cloudflareSecretHeader, cloudflareSecret,
+    ]);
     arrayHeader.headers['cf-ipcountry'] = ['ZA'];
     assert.equal(detectRequestCountry(arrayHeader), null);
 });
 
 void test('real HTTP requests reject spoofed forwarding and duplicate headers', async t => {
-    const app = configuredApp('cloudflare', ['127.0.0.1']);
+    const app = configuredApp('cloudflare', ['127.0.0.1'], cloudflareSecret);
     app.get('/country', (req, res) => { res.json(detectRequestCountry(req)); });
     const server = app.listen(0, '127.0.0.1');
     t.after(() => new Promise<void>((resolve, reject) => {
@@ -125,11 +160,20 @@ void test('real HTTP requests reject spoofed forwarding and duplicate headers', 
         request.on('error', reject);
         request.end();
     });
-    assert.deepEqual(await send(['cf-ipcountry', 'ZA']), { code: 'ZA', source: 'cloudflare' });
-    assert.equal(await send(['cf-ipcountry', 'ZA', 'CF-IPCountry', 'US']), null);
-    assert.equal(await send(['cf-ipcountry', 'XX', 'x-country-code', 'ZA']), null);
+    assert.deepEqual(await send([
+        'cf-ipcountry', 'ZA', cloudflareSecretHeader, cloudflareSecret,
+    ]), { code: 'ZA', source: 'cloudflare' });
+    assert.equal(await send([
+        'cf-ipcountry', 'ZA', 'CF-IPCountry', 'US',
+        cloudflareSecretHeader, cloudflareSecret,
+    ]), null);
+    assert.equal(await send([
+        'cf-ipcountry', 'XX', 'x-country-code', 'ZA',
+        cloudflareSecretHeader, cloudflareSecret,
+    ]), null);
+    assert.equal(await send(['cf-ipcountry', 'ZA']), null);
     // The same headers over a real connection outside the allowlist are rejected.
     app.set('trust proxy', ['192.0.2.7']);
-    configureCountryDetection(app, 'cloudflare');
+    configureCountryDetection(app, 'cloudflare', cloudflareSecret);
     assert.equal(await send(['cf-ipcountry', 'ZA', 'x-forwarded-for', '192.0.2.7']), null);
 });
