@@ -1,7 +1,6 @@
 export const GOOGLE_PLAY_PACKAGE_NAME = 'za.co.chefu.cloudence';
 export const GOOGLE_PLAY_PRODUCT_IDS = [
   'cloudence_pro_monthly',
-  'cloudence_storage_50gb_monthly',
 ] as const;
 
 export type GooglePlayProductId = (typeof GOOGLE_PLAY_PRODUCT_IDS)[number];

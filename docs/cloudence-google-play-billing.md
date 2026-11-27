@@ -4,20 +4,18 @@ Cloudence supports Android monthly subscriptions for **50 GiB total storage**
 (not an additional 50 GiB), priced at **R69.99/month** in Google Play. The
 backend remains authoritative: the app sends a purchase token, the backend
 checks it with the Android Publisher API, and only then records the entitlement.
-Cloudence Pro and the standalone 50 GB product grant the same quota; they never
-stack. Purchase requests include a one-way hash of the signed-in Cloudence
+Cloudence Pro grants this quota without stacking. Purchase requests include a
+one-way hash of the signed-in Cloudence
 account, which the backend requires to match Google's verified purchase record.
 
 ## Google Play Console
 
-Create these subscription products for package `za.co.chefu.cloudence`:
+Use this subscription product for package `za.co.chefu.cloudence`:
 
 - `cloudence_pro_monthly`
-- `cloudence_storage_50gb_monthly`
 
-Configure each with a monthly base plan at ZAR 69.99. Add both to the same
-subscription group where supported so a customer cannot unintentionally hold
-both plans at once. The app displays the localized price returned by Google
+Configure it with a monthly base plan at ZAR 69.99.
+The app displays the localized price returned by Google
 Play; the Play Console price is authoritative.
 
 Enable the Google Play Developer API. Grant the billing service account these

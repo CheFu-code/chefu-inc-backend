@@ -124,14 +124,14 @@ void test('verifies active Play purchase and persists only a token hash', async 
   assert.ok(f.records.has(`${SUBSCRIPTION_TOKEN_COLLECTION}/${tokenHash}`));
 });
 
-void test('equivalent Pro and storage products grant one non-stacking 50 GB quota', async () => {
+void test('multiple Pro purchases grant one non-stacking 50 GB quota', async () => {
   const f = fixture();
-  const [proProduct, storageProduct] = GOOGLE_PLAY_PRODUCT_IDS;
+  const [proProduct] = GOOGLE_PLAY_PRODUCT_IDS;
   f.purchases.set('pro-token', activeSubscription(proProduct));
   f.purchases.set(
     'storage-token',
     activeSubscription(
-      storageProduct,
+      proProduct,
       new Date(Date.now() + 172_800_000).toISOString(),
     ),
   );
@@ -139,12 +139,12 @@ void test('equivalent Pro and storage products grant one non-stacking 50 GB quot
   await f.service.verifyPurchase('user-1', proProduct, 'pro-token');
   const result = await f.service.verifyPurchase(
     'user-1',
-    storageProduct,
+    proProduct,
     'storage-token',
   );
 
   assert.equal(result.all, MAX_SUBSCRIBED_STORAGE_BYTES);
-  assert.equal(result.productId, storageProduct);
+  assert.equal(result.productId, proProduct);
   assert.equal(result.plan, '50gb');
 });
 
